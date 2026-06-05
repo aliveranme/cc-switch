@@ -1359,6 +1359,17 @@ impl RequestForwarder {
             mapped_body
         };
 
+        // 对直通 /chat/completions 请求注入推理参数（reasoning_effort / thinking 等）
+        // Responses → Chat 转换路径（codex_responses_to_chat）和 Claude 格式转换路径
+        // （needs_transform）已各自处理推理参数，无需重复注入。
+        let mut request_body = request_body;
+        if !codex_responses_to_chat
+            && !needs_transform
+            && effective_endpoint.contains("/chat/completions")
+        {
+            super::reasoning_injector::inject_chat_reasoning(&mut request_body, provider);
+        }
+
         // 过滤私有参数（以 `_` 开头的字段），防止内部信息泄露到上游
         // 默认使用空白名单，过滤所有 _ 前缀字段
         let filtered_body = prepare_upstream_request_body(request_body);

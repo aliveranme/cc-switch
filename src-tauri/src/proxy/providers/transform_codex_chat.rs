@@ -460,7 +460,7 @@ fn reasoning_requested(body: &Value) -> Option<bool> {
     body.get("reasoning").map(|value| !value.is_null())
 }
 
-fn map_reasoning_effort(effort: &str, mode: Option<&str>) -> Option<&'static str> {
+pub(crate) fn map_reasoning_effort(effort: &str, mode: Option<&str>) -> Option<&'static str> {
     let effort = effort.trim().to_ascii_lowercase();
     if matches!(effort.as_str(), "none" | "off" | "disabled") {
         return None;

@@ -22,6 +22,7 @@ pub mod log_codes;
 pub mod media_sanitizer;
 pub mod model_mapper;
 pub mod provider_router;
+pub mod reasoning_injector;
 pub mod providers;
 pub mod response_handler;
 pub mod response_processor;
