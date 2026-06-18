@@ -68,6 +68,17 @@ pub fn supports_reasoning_effort(model: &str) -> bool {
             .is_some_and(|c| c.is_ascii_digit() && c >= '5')
 }
 
+/// Detect DeepSeek reasoning models (deepseek-chat, deepseek-reasoner,
+/// deepseek-v4-*, etc.).
+///
+/// DeepSeek supports `reasoning_effort` but only accepts `"high"` and `"max"`
+/// — any other value causes a 400 error. This detection enables the Claude
+/// Code → OpenAI Chat conversion path to inject the correct effort.
+pub fn is_deepseek_reasoning_model(model: &str) -> bool {
+    let lower = model.to_lowercase();
+    lower.contains("deepseek")
+}
+
 /// Resolve the appropriate OpenAI `reasoning_effort` from an Anthropic request body.
 ///
 /// Priority:
@@ -197,6 +208,18 @@ pub fn anthropic_to_openai_with_reasoning_content(
     if supports_reasoning_effort(model) {
         if let Some(effort) = resolve_reasoning_effort(&body) {
             result["reasoning_effort"] = json!(effort);
+        }
+    } else if is_deepseek_reasoning_model(model) {
+        // DeepSeek only accepts "high" and "max" for reasoning_effort.
+        // Map: xhigh (from adaptive/max) → "max", everything else → "high".
+        // This mirrors the Codex path's `effort_value_mode: "deepseek"` logic
+        // in codex.rs → map_reasoning_effort().
+        if let Some(effort) = resolve_reasoning_effort(&body) {
+            let mapped = match effort {
+                "xhigh" => "max",
+                _ => "high",
+            };
+            result["reasoning_effort"] = json!(mapped);
         }
     }
 
@@ -1481,6 +1504,66 @@ mod tests {
         assert!(supports_reasoning_effort("gpt-5-codex"));
         assert!(!supports_reasoning_effort("gpt-4o"));
         assert!(!supports_reasoning_effort("claude-sonnet-4-6"));
+    }
+
+    // ── is_deepseek_reasoning_model unit tests ──
+
+    #[test]
+    fn test_is_deepseek_reasoning_model() {
+        assert!(is_deepseek_reasoning_model("deepseek-chat"));
+        assert!(is_deepseek_reasoning_model("deepseek-reasoner"));
+        assert!(is_deepseek_reasoning_model("deepseek-v4-pro"));
+        assert!(is_deepseek_reasoning_model("DeepSeek-V4-Flash"));
+        assert!(!is_deepseek_reasoning_model("gpt-5"));
+        assert!(!is_deepseek_reasoning_model("glm-5.2"));
+    }
+
+    #[test]
+    fn test_deepseek_thinking_enabled_maps_to_high() {
+        // Claude Code sends thinking.enabled with budget_tokens.
+        // DeepSeek only accepts "high" and "max" — budget <16k should map to "high".
+        let input = json!({
+            "model": "deepseek-chat",
+            "max_tokens": 1024,
+            "thinking": {"type": "enabled", "budget_tokens": 8000}
+        });
+        let result = anthropic_to_openai(input).unwrap();
+        assert_eq!(result["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn test_deepseek_thinking_adaptive_maps_to_max() {
+        // Claude Code sends thinking.adaptive → resolve_reasoning_effort returns "xhigh"
+        // → DeepSeek maps "xhigh" to "max".
+        let input = json!({
+            "model": "deepseek-reasoner",
+            "max_tokens": 4096,
+            "thinking": {"type": "adaptive"}
+        });
+        let result = anthropic_to_openai(input).unwrap();
+        assert_eq!(result["reasoning_effort"], "max");
+    }
+
+    #[test]
+    fn test_deepseek_output_config_max_maps_to_max() {
+        let input = json!({
+            "model": "deepseek-v4-pro",
+            "max_tokens": 4096,
+            "output_config": {"effort": "max"}
+        });
+        let result = anthropic_to_openai(input).unwrap();
+        assert_eq!(result["reasoning_effort"], "max");
+    }
+
+    #[test]
+    fn test_deepseek_no_thinking_no_effort() {
+        // When thinking is disabled/absent, no reasoning_effort should be injected.
+        let input = json!({
+            "model": "deepseek-chat",
+            "max_tokens": 1024
+        });
+        let result = anthropic_to_openai(input).unwrap();
+        assert!(result.get("reasoning_effort").is_none());
     }
 
     // ── resolve_reasoning_effort unit tests ──

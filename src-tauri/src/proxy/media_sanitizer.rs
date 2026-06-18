@@ -250,6 +250,7 @@ fn known_text_only_model(model: &str) -> bool {
         "deepseek-v4-flash",
         "deepseek-v4-pro",
         "glm-5.1",
+        "glm-5.2",
         "kat-coder",
         "kat-coder-pro",
         "kat-coder-pro v1",
