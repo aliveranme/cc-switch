@@ -54,18 +54,23 @@ pub fn is_openai_o_series(model: &str) -> bool {
         && model.as_bytes().get(1).is_some_and(|b| b.is_ascii_digit())
 }
 
-/// Detect OpenAI models that support reasoning_effort.
+/// Detect models that support `reasoning_effort`.
 ///
 /// Supported families:
 /// - o-series: o1, o3, o4-mini, etc.
 /// - GPT-5+: gpt-5, gpt-5.1, gpt-5.4, gpt-5-codex, etc.
+/// - GLM: glm-5+, glm-4.6+ (via CF Workers AI, Z.AI, etc.)
+///   CF Workers AI exposes `reasoning_effort` as a supported parameter
+///   for GLM-5.2; Z.AI official API may use `thinking` instead, but the
+///   extra field is harmless (CF accepts `string | null`).
 pub fn supports_reasoning_effort(model: &str) -> bool {
+    let lower = model.to_lowercase();
     is_openai_o_series(model)
-        || model
-            .to_lowercase()
+        || lower
             .strip_prefix("gpt-")
             .and_then(|rest| rest.chars().next())
             .is_some_and(|c| c.is_ascii_digit() && c >= '5')
+        || lower.contains("glm")
 }
 
 /// Detect DeepSeek reasoning models (deepseek-chat, deepseek-reasoner,
@@ -1504,6 +1509,12 @@ mod tests {
         assert!(supports_reasoning_effort("gpt-5-codex"));
         assert!(!supports_reasoning_effort("gpt-4o"));
         assert!(!supports_reasoning_effort("claude-sonnet-4-6"));
+        // GLM models (CF Workers AI, Z.AI)
+        assert!(supports_reasoning_effort("glm-5.2"));
+        assert!(supports_reasoning_effort("glm-5.1"));
+        assert!(supports_reasoning_effort("glm-5"));
+        assert!(supports_reasoning_effort("glm-4.7"));
+        assert!(supports_reasoning_effort("@cf/zai-org/glm-5.2"));
     }
 
     // ── is_deepseek_reasoning_model unit tests ──
@@ -1560,6 +1571,44 @@ mod tests {
         // When thinking is disabled/absent, no reasoning_effort should be injected.
         let input = json!({
             "model": "deepseek-chat",
+            "max_tokens": 1024
+        });
+        let result = anthropic_to_openai(input).unwrap();
+        assert!(result.get("reasoning_effort").is_none());
+    }
+
+    // ── GLM reasoning_effort injection tests (Claude Code → OpenAI Chat path) ──
+
+    #[test]
+    fn test_glm_thinking_enabled_injects_reasoning_effort() {
+        // Claude Code sends thinking.enabled with budget_tokens.
+        // GLM uses standard OpenAI reasoning_effort values (passthrough).
+        let input = json!({
+            "model": "@cf/zai-org/glm-5.2",
+            "max_tokens": 1024,
+            "thinking": {"type": "enabled", "budget_tokens": 8000}
+        });
+        let result = anthropic_to_openai(input).unwrap();
+        assert_eq!(result["reasoning_effort"], "medium");
+    }
+
+    #[test]
+    fn test_glm_thinking_adaptive_injects_xhigh() {
+        // Claude Code sends thinking.adaptive → resolve_reasoning_effort returns "xhigh".
+        // GLM on CF Workers AI accepts standard OpenAI values.
+        let input = json!({
+            "model": "glm-5.2",
+            "max_tokens": 4096,
+            "thinking": {"type": "adaptive"}
+        });
+        let result = anthropic_to_openai(input).unwrap();
+        assert_eq!(result["reasoning_effort"], "xhigh");
+    }
+
+    #[test]
+    fn test_glm_no_thinking_no_effort() {
+        let input = json!({
+            "model": "glm-5.2",
             "max_tokens": 1024
         });
         let result = anthropic_to_openai(input).unwrap();
