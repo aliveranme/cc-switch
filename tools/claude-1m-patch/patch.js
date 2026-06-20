@@ -3,30 +3,19 @@
  * Claude Desktop 1M Context Patcher
  * ==================================
  *
- * Enables 1M context window for 3P gateway mode by patching the `tgA`
- * function in Claude Desktop's app.asar. The `tgA` function controls
- * whether the `[1m]` suffix is appended to model names. In 3P mode,
- * GrowthBook remote features suppress this — this patch removes the
- * remote check so `[1m]` is always added for locally-configured models.
+ * Patches Claude Desktop's model suffix logic (`tgA` / `RsA` function) to
+ * always add `[1m]` for selected models, bypassing GrowthBook remote checks.
  *
- * Safe: only modifies model name handling, does NOT touch GrowthBook
- * feature initialization.
+ * v1.13576.4: function tgA(A){return/\[1m\]/i.test(A)||!kLt().some(...) }
+ * v1.14271.0: function RsA(A){return/\[1m\]/i.test(A)||!WDt().some(...) }
  *
- * Usage:
- *   node patch.js              Interactive patch
- *   node patch.js --status     Check current state only
- *   node patch.js --dry-run    Show what would change without applying
- *   node patch.js --force      Skip confirmations
- *   node patch.js --restore    Restore from most recent backup
- *   node patch.js --list       List available backups
- *   node patch.js --asar <p>   Use custom asar path
+ * Safe: modifies only model name handling, NOT GrowthBook initialization.
  */
 
 'use strict';
 
 const PKG = require('./package.json');
 
-// ANSI color codes
 const C = {
   reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
   red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m',
@@ -36,15 +25,34 @@ const C = {
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawnSync, execSync } = require('child_process');
 const os = require('os');
 
 const BACKUP_DIR = path.join(os.homedir(), '.claude-1m-patch', 'backups');
 const WORK_DIR = path.join(os.tmpdir(), 'claude-1m-patch-work');
 
-// Target: tgA function — controls [1m] suffix injection
-const TARGET_ORIGINAL = 'function tgA(A){return/\\[1m\\]/i.test(A)||!kLt().some(t=>A.includes(t))?A:`${A}[1m]`}';
-const TARGET_PATCHED  = 'function tgA(A){return/\\[1m\\]/i.test(A)?A:`${A}[1m]`}';
+// ============================================================
+// Target patterns (version-agnostic)
+// ============================================================
+
+// RsA = new name for tgA in v1.14271+
+// tgA = original name in v1.13576
+const PATCHES = [
+  {
+    // v1.14271+ pattern
+    name: 'RsA',
+    orig: 'function RsA(A){return/\\[1m\\]/i.test(A)||!WDt().some(t=>A.includes(t))?A:`${A}[1m]`}',
+    patched: 'function RsA(A){return/\\[1m\\]/i.test(A)?A:`${A}[1m]`}',
+    verifyKlt: 'WDt',
+  },
+  {
+    // v1.13576 pattern (legacy)
+    name: 'tgA',
+    orig: 'function tgA(A){return/\\[1m\\]/i.test(A)||!kLt().some(t=>A.includes(t))?A:`${A}[1m]`}',
+    patched: 'function tgA(A){return/\\[1m\\]/i.test(A)?A:`${A}[1m]`}',
+    verifyKlt: 'kLt',
+  },
+];
 
 // ============================================================
 // Utilities
@@ -73,31 +81,59 @@ function run(cmd, opts = {}) {
 }
 
 // ============================================================
-// Asar Detection & Operations
+// Asar Detection
 // ============================================================
 
 function findAsar() {
   const results = [];
 
-  // 1) Store installs
+  // 1) PowerShell Get-AppxPackage (admin-free, works without directory listing)
+  try {
+    const psOut = execSync(
+      'powershell -Command "Get-AppxPackage -Name \'*Claude*\' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty InstallLocation"',
+      { encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] }
+    ).trim();
+    if (psOut) {
+      const lines = psOut.split(/\r?\n/).filter(l => l.trim());
+      for (const loc of lines) {
+        const asar = path.join(loc.trim(), 'app', 'resources', 'app.asar');
+        if (fs.existsSync(asar)) results.push({ path: asar, type: 'asar', source: 'appx' });
+      }
+    }
+  } catch (e) { /* PowerShell failed, try other methods */ }
+
+  // 2) Fallback: try known version patterns
   const storeBase = 'C:\\Program Files\\WindowsApps';
-  if (fs.existsSync(storeBase)) {
+  if (fs.existsSync(storeBase) && results.length === 0) {
     let entries = [];
     try { entries = fs.readdirSync(storeBase).filter(d => /^Claude_\d/.test(d)).sort().reverse(); }
     catch (e) {
-      for (const ver of ['1.13576.4','1.13576.3','1.13576','1.13575','1.13574','1.13573','1.13560']) {
+      // Can't list directory - try broad version patterns
+      for (const ver of [
+        '1.14271.0.0','1.14270.0.0','1.14260.0.0','1.14250.0.0','1.14200.0.0',
+        '1.13576.4','1.13576.3','1.13576','1.13575','1.13574','1.13573','1.13560'
+      ]) {
         const d = `Claude_${ver}.0_x64__pzs8sxrjxfjjc`;
-        const a = path.join(storeBase, d, 'app', 'resources', 'app.asar');
-        if (fs.existsSync(a)) { entries.push(d); break; }
+        const a = path.join(storeBase, d.replace('.0.0.0','').replace('.0.0',''), 'app', 'resources', 'app.asar');
+        // Try multiple suffix patterns
+        for (const suffix of [
+          `Claude_${ver}_x64__pzs8sxrjxfjjc`,
+          `Claude_${ver}.0_x64__pzs8sxrjxfjjc`,
+          `Claude_${ver}.0.0_x64__pzs8sxrjxfjjc`,
+        ]) {
+          const a = path.join(storeBase, suffix, 'app', 'resources', 'app.asar');
+          if (fs.existsSync(a)) { results.push({ path: a, type: 'asar', source: 'store' }); break; }
+        }
+        if (results.length > 0) break;
       }
     }
     for (const d of entries) {
       const a = path.join(storeBase, d, 'app', 'resources', 'app.asar');
-      if (fs.existsSync(a)) results.push({ path: a, type: 'asar' });
+      if (fs.existsSync(a)) results.push({ path: a, type: 'asar', source: 'store' });
     }
   }
 
-  // 2) Non-Store installs
+  // 3) Non-Store installs
   for (const base of [process.env.LOCALAPPDATA, path.join(os.homedir(),'AppData','Local')]) {
     if (!base) continue;
     for (const appDir of ['Claude','Claude-3p','Claude-Desktop'].map(d => path.join(base,d))) {
@@ -106,36 +142,35 @@ function findAsar() {
       try { entries = fs.readdirSync(appDir).filter(e => /^app-/.test(e)).sort().reverse(); } catch (e) { continue; }
       for (const e of entries) {
         const a = path.join(appDir, e, 'resources', 'app.asar');
-        if (fs.existsSync(a)) results.push({ path: a, type: 'asar' });
+        if (fs.existsSync(a)) results.push({ path: a, type: 'asar', source: 'local' });
       }
     }
   }
 
-  // 3) Extracted directory fallback
+  // 4) Extracted directory fallback
   for (const dir of [
     path.join(process.env.TEMP||'C:\\tmp', 'claude-asar-test'),
-    path.join(process.env.TEMP||'C:\\tmp', 'claude-asar-extracted'),
   ]) {
     if (fs.existsSync(path.join(dir, '.vite', 'build', 'index.js')))
-      results.push({ path: dir, type: 'dir' });
+      results.push({ path: dir, type: 'dir', source: 'extracted' });
   }
 
   return results.find(r => r.type === 'asar') || results[0] || null;
 }
 
 function detectAsar() {
-  const asarArgIdx = process.argv.indexOf('--asar');
-  if (asarArgIdx >= 0 && asarArgIdx + 1 < process.argv.length) {
-    const custom = process.argv[asarArgIdx + 1];
-    if (fs.existsSync(custom)) {
-      if (fs.statSync(custom).isDirectory()) {
-        if (!fs.existsSync(path.join(custom, '.vite', 'build', 'index.js')))
-          fail(`Extracted directory missing .vite/build/index.js: ${custom}`);
-        return { path: custom, type: 'dir' };
+  const idx = process.argv.indexOf('--asar');
+  if (idx >= 0 && idx + 1 < process.argv.length) {
+    const c = process.argv[idx + 1];
+    if (fs.existsSync(c)) {
+      if (fs.statSync(c).isDirectory()) {
+        if (!fs.existsSync(path.join(c, '.vite', 'build', 'index.js')))
+          fail(`Missing .vite/build/index.js in: ${c}`);
+        return { path: c, type: 'dir' };
       }
-      return { path: custom, type: 'asar' };
+      return { path: c, type: 'asar' };
     }
-    fail(`Custom path not found: ${custom}`);
+    fail(`Custom path not found: ${c}`);
   }
   return findAsar();
 }
@@ -154,6 +189,10 @@ function getAsarVersion(asarPath) {
     return 'unknown';
   }
 }
+
+// ============================================================
+// Asar Operations
+// ============================================================
 
 function extractAsar(asarPath, destDir) {
   fs.mkdirSync(destDir, { recursive: true });
@@ -192,14 +231,14 @@ function installAsar(patchAsar, targetAsar, version) {
     divider();
     console.log(`\n ${C.bold}${C.yellow}Manual install required:${C.reset}`);
     console.log(`\n  1. Open PowerShell as Administrator`);
-    console.log(`  2. Run:\n`);
-    console.log(`     ${C.cyan}Copy-Item -Path "${patchAsar}" -Destination "${targetAsar}" -Force${C.reset}\n`);
+    console.log(`  2. Run:`);
+    console.log(`\n     ${C.cyan}Copy-Item -Path "${patchAsar}" -Destination "${targetAsar}" -Force${C.reset}\n`);
     return false;
   }
 }
 
 // ============================================================
-// Backup Management
+// Backup
 // ============================================================
 
 function createBackup(sourcePath, label, version) {
@@ -242,49 +281,59 @@ function restoreLatest() {
 // Patch Application
 // ============================================================
 
-function checkAndApplyPatch(code) {
+function detectAndPatch(code) {
   section('Analysis');
 
-  // Check current state
-  const origIdx = code.indexOf(TARGET_ORIGINAL);
-  const patchedIdx = code.indexOf(TARGET_PATCHED);
+  for (const patch of PATCHES) {
+    const origIdx = code.indexOf(patch.orig);
+    const patchedIdx = code.indexOf(patch.patched);
 
-  if (patchedIdx >= 0) {
-    ok('tgA already patched — [1m] will always be added');
-    return { patched: true, code: null };
+    if (patchedIdx >= 0) {
+      ok(`Already patched (${patch.name}) — [1m] will always be added`);
+      return { patched: true, code: null, patch };
+    }
+
+    if (origIdx >= 0) {
+      ok(`found ${patch.name} at offset ${origIdx} — applying patch…`);
+      const patched = code.substring(0, origIdx) + patch.patched + code.substring(origIdx + patch.orig.length);
+
+      section('Verification');
+      if (patched.includes(patch.patched) && !patched.includes('||!' + patch.verifyKlt + '()')) {
+        ok(`removed ${patch.verifyKlt} remote check from ${patch.name}`);
+      } else {
+        warn('patch verification ambiguous');
+      }
+
+      return { patched: false, code: patched, patch };
+    }
   }
 
-  if (origIdx < 0) {
-    warn('tgA function not found in expected format');
-    // Try to find tgA with flexible matching
-    const flexRe = /function\s+tgA\s*\(\s*A\s*\)\s*\{/;
+  // Check if there's a flexible match
+  for (const name of ['RsA', 'tgA']) {
+    const flexRe = new RegExp(`function\\s+${name}\\s*\\(\\s*[A-Z]\\s*\\)\\s*\\{`);
     const fm = code.match(flexRe);
     if (fm) {
-      warn(`found tgA at offset ${fm.index} but in different format`);
-      return { patched: false, code: null, offset: fm.index, flex: true };
+      const snippet = code.substring(fm.index, fm.index + 200);
+      if (snippet.includes('kLt') || snippet.includes('WDt')) {
+        warn(`Found ${name} at ${fm.index} but in different format: ${snippet.substring(0, 80)}`);
+        warn('This version needs a manual patch — please report your Claude Desktop version.');
+        return { patched: false, code: null, patch: null, flex: true };
+      }
+      // Already doesn't have GrowthBook check
+      ok(`${name} found but already without GrowthBook dependency — no patch needed`);
+      return { patched: true, code: null, patch: null };
     }
-    return { patched: false, code: null, offset: -1, flex: false };
   }
 
-  ok(`found tgA at offset ${origIdx} — applying patch…`);
-
-  // Apply: remove the `||!kLt().some(t=>A.includes(t))` part
-  const before = code.substring(0, origIdx);
-  const after = code.substring(origIdx + TARGET_ORIGINAL.length);
-  const patched = before + TARGET_PATCHED + after;
-
-  section('Verification');
-  if (patched.includes(TARGET_PATCHED) && !patched.includes('||!kLt()')) {
-    ok('tgA patch applied: removed GrowthBook remote check');
-  } else {
-    warn('patch verification ambiguous — please check manually');
-  }
-
-  return { patched: false, code: patched };
+  fail(
+    'Could not find [1m] suffix function (RsA or tgA) in index.js.\n' +
+    'This version likely handles context differently.\n' +
+    'Please report your Claude Desktop version.'
+  );
 }
 
 // ============================================================
-// Main Patch Flow
+// Main Flow
 // ============================================================
 
 function runPatchFlow(options) {
@@ -314,7 +363,7 @@ function runPatchFlow(options) {
   info('version', version);
   divider();
 
-  // Read index.js
+  // Read
   let code, indexJsPath;
   if (asar.type === 'asar') {
     fs.rmSync(WORK_DIR, { recursive: true, force: true });
@@ -326,32 +375,24 @@ function runPatchFlow(options) {
     code = fs.readFileSync(indexJsPath, 'utf8');
   }
 
-  // Check and apply
-  const result = checkAndApplyPatch(code);
+  // Detect and patch
+  const result = detectAndPatch(code);
 
   if (result.patched) {
     ok('Patch already applied — no action needed.');
-    // Cleanup if we extracted
     if (asar.type === 'asar') try { fs.rmSync(WORK_DIR, { recursive: true, force: true }); } catch(e) {}
     return { status: 'already_patched', version };
   }
 
-  if (result.offset < 0) {
-    fail('Could not locate tgA function in index.js. This version may differ.');
+  if (result.flex || !result.patch) {
+    return { status: 'failed', version };
   }
 
-  if (result.flex) {
-    fail(
-      'tgA function found but in a different format than expected.\n' +
-      '  Expected: function tgA(A){return/\\[1m\\]/...||!kLt()...}\n' +
-      '  This version likely needs a different patch approach.'
-    );
-  }
-
+  // Apply
   section('Patching');
   if (dryRun) {
     warn('DRY RUN — no changes applied');
-    info('would patch', 'tgA() → remove GrowthBook remote check (||!kLt().some(...))');
+    info('would patch', `${result.patch.name}() → remove ${result.patch.verifyKlt} check`);
     return { status: 'dry_run', version };
   }
 
@@ -361,81 +402,43 @@ function runPatchFlow(options) {
     return { status: 'cancelled', version };
   }
 
-  // Write
   fs.writeFileSync(indexJsPath, result.code, 'utf8');
-  ok('tgA patched in index.js');
+  ok(`${result.patch.name} patched in index.js`);
 
   // Verify
-  const checkCode = fs.readFileSync(indexJsPath, 'utf8');
-  if (checkCode.includes(TARGET_PATCHED) && !checkCode.includes('||!kLt()')) {
-    ok('verified: kLt remote check removed from tgA');
-  } else {
-    warn('verification: could not confirm patch — please check manually');
+  const check = fs.readFileSync(indexJsPath, 'utf8');
+  if (check.includes(result.patch.patched) && !check.includes('||!' + result.patch.verifyKlt + '()')) {
+    ok('verified: remote check removed');
   }
 
-  // Pack and install
+  // Pack & install
   if (asar.type === 'asar') {
     section('Pack & Install');
-    const patchedAsarPath = path.join(path.dirname(WORK_DIR), 'app-patched.asar');
-    packAsar(WORK_DIR, patchedAsarPath);
+    const out = path.join(path.dirname(WORK_DIR), 'app-patched.asar');
+    packAsar(WORK_DIR, out);
     createBackup(asar.path, 'pre-patch', version);
-    installAsar(patchedAsarPath, asar.path, version);
+    installAsar(out, asar.path, version);
     try { fs.rmSync(WORK_DIR, { recursive: true, force: true }); } catch(e) {}
   } else {
     section('Result');
     ok(`Modified in-place: ${indexJsPath}`);
-    warn('Working with extracted directory — no asar operations performed');
+    warn('Working with extracted directory');
   }
 
   divider();
-  ok(`tgA patch applied to ${version}`);
+  ok(`Patch applied to ${version}`);
   return { status: 'patched', version };
 }
 
 // ============================================================
-// CLI & Entry
+// CLI
 // ============================================================
 
 function printHeader() {
   console.log(`\n ${C.bold}${C.blue}╔══════════════════════════════════════════════════╗${C.reset}`);
   console.log(` ${C.bold}${C.blue}║${C.reset}   ${C.bold}Claude Desktop 1M Context Patcher${C.reset}         ${C.bold}${C.blue}║${C.reset}`);
-  console.log(` ${C.bold}${C.blue}║${C.reset}   ${C.dim}v${PKG.version} (tgA patch)${C.reset}                    ${C.bold}${C.blue}║${C.reset}`);
+  console.log(` ${C.bold}${C.blue}║${C.reset}   ${C.dim}v${PKG.version} (tgA/RsA patch)${C.reset}                ${C.bold}${C.blue}║${C.reset}`);
   console.log(` ${C.bold}${C.blue}╚══════════════════════════════════════════════════╝${C.reset}\n`);
-}
-
-function printUsage() {
-  console.log(` Usage:
-   ${C.cyan}node patch.js${C.reset}               Interactive
-   ${C.cyan}node patch.js --status${C.reset}       Check status
-   ${C.cyan}node patch.js --dry-run${C.reset}      Preview
-   ${C.cyan}node patch.js --force${C.reset}         Apply without prompts
-   ${C.cyan}node patch.js --restore${C.reset}      Restore from backup
-   ${C.cyan}node patch.js --list${C.reset}          List backups
-   ${C.cyan}node patch.js --asar <path>${C.reset}  Target custom path\n`);
-}
-
-function printSummary(result) {
-  divider();
-  switch (result.status) {
-    case 'patched':
-      ok(`${C.bold}Patch applied successfully${C.reset}`);
-      warn('Restart Claude Desktop for changes to take effect');
-      console.log(`  Undo: ${C.cyan}node patch.js --restore${C.reset}`);
-      break;
-    case 'already_patched':
-      ok(`${C.bold}Already patched${C.reset}`);
-      break;
-    case 'dry_run':
-      ok(`${C.bold}Dry run complete${C.reset}`);
-      console.log(`  Run ${C.cyan}node patch.js${C.reset} to apply`);
-      break;
-    case 'cancelled':
-      warn(`${C.bold}Operation cancelled${C.reset}`);
-      break;
-    default:
-      warn(`Result: ${result.status}`);
-  }
-  console.log('');
 }
 
 function main() {
@@ -453,7 +456,7 @@ function main() {
   };
 
   try {
-    if (opts.list) {
+    if (opts.list) { /* ... list backups ... */
       const backups = listBackups();
       if (!backups.length) { console.log(' No backups found.\n'); return; }
       section('Available Backups');
@@ -473,7 +476,24 @@ function main() {
     }
 
     const result = runPatchFlow(opts);
-    printSummary(result);
+    divider();
+    switch (result.status) {
+      case 'patched':
+        ok(`${C.bold}Patch applied successfully${C.reset}`);
+        warn('Restart Claude Desktop for changes to take effect');
+        console.log(`  Undo: ${C.cyan}node patch.js --restore${C.reset}`);
+        break;
+      case 'already_patched':
+        ok(`${C.bold}Already patched${C.reset}`); break;
+      case 'dry_run':
+        ok(`${C.bold}Dry run complete${C.reset}`);
+        console.log(`  Run ${C.cyan}node patch.js${C.reset} to apply`); break;
+      case 'cancelled':
+        warn(`${C.bold}Operation cancelled${C.reset}`); break;
+      default:
+        warn(`Result: ${result.status}`);
+    }
+    console.log('');
   } catch (e) {
     console.error(`\n${C.bgRed} UNEXPECTED ERROR ${C.reset}`);
     console.error(` ${C.red}${e.message}${C.reset}`);
