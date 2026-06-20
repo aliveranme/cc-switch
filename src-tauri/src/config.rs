@@ -270,12 +270,45 @@ fn sort_json_keys(value: &Value) -> Value {
     }
 }
 
+/// 确保给定目录存在，对已存在的符号链接/目录保持容忍。
+///
+/// 标准库 `fs::create_dir_all` 在 Windows 上对路径中的符号链接存在一个边缘缺陷：
+/// 它先尝试 `mkdir`，失败后用 `path.is_dir()`（跟随 symlink 查询目标）来判断是否
+/// "已存在则成功"。当 symlink 目标位于其它卷且此刻临时不可达（被占用、IO 抖动、
+/// 目标瞬时缺失）时，`is_dir()` 返回 `false`，于是 `ERROR_ALREADY_EXISTS (183)` 被
+/// 原样抛出，导致配置写入失败。
+///
+/// 此函数在 `create_dir_all` 因 `AlreadyExists` 失败时，改用 `symlink_metadata`
+/// （不跟随 symlink）判断路径名字本身是否已存在——只要该名字已存在（无论是真实
+/// 目录还是指向目录的 symlink），就视为成功。这样既修复了 183，又完整保留了用户
+/// 把配置目录符号链接到其它盘的能力（从不删除或替换 symlink）。
+fn ensure_dir(path: &Path) -> Result<(), AppError> {
+    match fs::create_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // 路径名字已存在（可能是 symlink 或目录）。用 symlink_metadata
+            // 不跟随 symlink 判断，避免目标临时不可达时误判为不存在。
+            if fs::symlink_metadata(path).is_ok() {
+                Ok(())
+            } else {
+                Err(AppError::io(path, e))
+            }
+        }
+        Err(e) => Err(AppError::io(path, e)),
+    }
+}
+
+/// 确保文件路径的父目录存在（对符号链接友好）。
+pub fn ensure_parent_dir(path: &Path) -> Result<(), AppError> {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => ensure_dir(parent),
+        _ => Ok(()),
+    }
+}
+
 /// 写入 JSON 配置文件（键按字母排序，确保确定性输出）
 pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
-    // 确保目录存在
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
+    ensure_parent_dir(path)?;
 
     let value = serde_json::to_value(data).map_err(|e| AppError::JsonSerialize { source: e })?;
     let sorted_value = sort_json_keys(&value);
@@ -287,17 +320,13 @@ pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppErr
 
 /// 原子写入文本文件（用于 TOML/纯文本）
 pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
+    ensure_parent_dir(path)?;
     atomic_write(path, data.as_bytes())
 }
 
 /// 原子写入：写入临时文件后 rename 替换，避免半写状态
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
+    ensure_parent_dir(path)?;
 
     let parent = path
         .parent()
@@ -519,6 +548,72 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&sorted_a).unwrap(),
             serde_json::to_string(&sorted_b).unwrap(),
+        );
+    }
+
+    #[test]
+    fn ensure_dir_tolerates_existing_directory() {
+        // 对已存在的目录再次 ensure 必须成功（对应 create_dir_all 在 Windows 上对
+        // 已存在路径可能抛 ERROR_ALREADY_EXISTS 183 的场景，ensure_dir 应容忍）。
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dir = temp.path().join("already-exists");
+        fs::create_dir_all(&dir).expect("seed dir");
+
+        ensure_dir(&dir).expect("ensure on existing dir should succeed");
+        // 幂等：再调一次仍成功
+        ensure_dir(&dir).expect("ensure should be idempotent");
+    }
+
+    #[test]
+    fn ensure_parent_dir_creates_nested_dirs_and_is_idempotent() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let file = temp.path().join("a").join("b").join("config.json");
+
+        ensure_parent_dir(&file).expect("should create nested parents");
+        assert!(file.parent().unwrap().is_dir());
+
+        // 再次调用（父目录已存在）不应报错
+        ensure_parent_dir(&file).expect("should be idempotent on existing parents");
+    }
+
+    #[test]
+    fn ensure_dir_tolerates_symlink_to_directory() {
+        // 用户可能把配置目录符号链接到其它盘（如 Claude-3p -> D:\Exchange\...）。
+        // ensure_dir 对指向目录的 symlink 必须容忍，不得报 183，也不得删除/替换 symlink。
+        // 无 symlink 权限的环境（部分 CI / 非开发者模式 Windows）跳过该用例。
+        let temp = tempfile::tempdir().expect("tempdir");
+        let target = temp.path().join("real-target");
+        fs::create_dir_all(&target).expect("seed target");
+        let link = temp.path().join("link-to-dir");
+
+        let created = {
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&target, &link).is_ok()
+            }
+            #[cfg(windows)]
+            {
+                std::os::windows::fs::symlink_dir(&target, &link).is_ok()
+            }
+        };
+        if !created {
+            eprintln!("skip symlink test: cannot create symlink on this environment");
+            return;
+        }
+        assert!(
+            fs::symlink_metadata(&link)
+                .expect("symlink_metadata")
+                .is_symlink(),
+            "link should be a symlink"
+        );
+
+        ensure_dir(&link).expect("ensure on symlink-to-dir should succeed");
+        // symlink 必须被保留（未被替换成真实目录）
+        assert!(
+            fs::symlink_metadata(&link)
+                .expect("symlink_metadata")
+                .is_symlink(),
+            "symlink must be preserved, not replaced"
         );
     }
 }
