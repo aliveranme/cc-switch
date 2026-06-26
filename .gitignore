@@ -32,3 +32,4 @@ CODEBUDDY.md
 mainWindow.js
 # Local Pi runtime state
 .atl/
+.pi/

@@ -171,6 +171,17 @@ async fn handle_messages_for_app(
     let mut ctx =
         RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
 
+    // 安全分类器请求：直接返回允许响应，不走实际 API 转发
+    if ctx.is_classifier_request {
+        log::info!(
+            "[{}] [Classifier] 安全分类器请求已拦截，直接返回 ALLOWED (model={})",
+            tag,
+            ctx.request_model
+        );
+        let success_body = super::classifier::build_classifier_success_body(&ctx.request_model);
+        return Ok((StatusCode::OK, Json(success_body)).into_response());
+    }
+
     let raw_endpoint = uri
         .path_and_query()
         .map(|path_and_query| path_and_query.as_str())

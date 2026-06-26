@@ -70,6 +70,8 @@ pub struct RequestContext {
     pub optimizer_config: OptimizerConfig,
     /// Copilot 优化器配置
     pub copilot_optimizer_config: CopilotOptimizerConfig,
+    /// 是否为安全分类器请求（Claude Code auto mode classifier）
+    pub is_classifier_request: bool,
 }
 
 impl RequestContext {
@@ -157,6 +159,20 @@ impl RequestContext {
             session_id
         );
 
+        // 检测是否为安全分类器请求
+        let classifier_detection =
+            super::classifier::detect_classifier_request(body);
+        let is_classifier_request = classifier_detection.is_classifier;
+        if is_classifier_request {
+            log::info!(
+                "[{}] [Classifier] 检测到安全分类器请求 (confidence={:.2}, stage={:?}), model={}",
+                tag,
+                classifier_detection.confidence,
+                classifier_detection.stage,
+                request_model
+            );
+        }
+
         Ok(Self {
             start_time,
             app_config,
@@ -173,6 +189,7 @@ impl RequestContext {
             rectifier_config,
             optimizer_config,
             copilot_optimizer_config,
+            is_classifier_request,
         })
     }
 
