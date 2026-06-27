@@ -229,7 +229,7 @@ export const codexProviderPresets: CodexProviderPreset[] = [
   {
     name: "SubRouter",
     websiteUrl: "https://subrouter.ai",
-    apiKeyUrl: "https://subrouter.ai/console/token",
+    apiKeyUrl: "https://subrouter.ai/register?aff=l3ri",
     category: "aggregator",
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig(
@@ -798,6 +798,39 @@ requires_openai_auth = true`,
     category: "aggregator",
     icon: "nvidia",
     iconColor: "#000000",
+  },
+  {
+    name: "OpenCode Go",
+    websiteUrl: "https://opencode.ai/go",
+    apiKeyUrl: "https://opencode.ai/go?ref=2YTRG2NGTX",
+    partnerPromotionKey: "opencode_go",
+    auth: generateThirdPartyAuth(""),
+    config: generateThirdPartyConfig(
+      "opencode_go",
+      "https://opencode.ai/zen/go/v1",
+      "glm-5.2",
+    ),
+    endpointCandidates: ["https://opencode.ai/zen/go/v1"],
+    apiFormat: "openai_chat",
+    modelCatalog: modelCatalog([
+      { model: "glm-5.2", displayName: "GLM 5.2", contextWindow: 204800 },
+      { model: "glm-5.1", displayName: "GLM 5.1", contextWindow: 204800 },
+      {
+        model: "kimi-k2.7-code",
+        displayName: "Kimi K2.7 Code",
+        contextWindow: 262144,
+      },
+      { model: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro" },
+      { model: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash" },
+      {
+        model: "mimo-v2.5-pro",
+        displayName: "MiMo V2.5 Pro",
+        contextWindow: 1048576,
+      },
+    ]),
+    category: "third_party",
+    icon: "opencode",
+    iconColor: "#211E1E",
   },
   {
     name: "AiHubMix",
