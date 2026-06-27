@@ -222,14 +222,54 @@ async fn handle_messages_for_app(
         ctx.outbound_model = result.outbound_model.take();
         ctx.provider = result.provider;
 
-        // 3. 读取上游响应体
-        let (mut resp_headers, _status, body_bytes) = read_decoded_body(
+        // 3. 读取上游响应体（失败时兜底放行，不阻塞用户）
+        let body_result = read_decoded_body(
             result.response,
             ctx.tag,
             std::time::Duration::ZERO,
         )
-        .await?;
+        .await;
+
+        let (mut resp_headers, _status, body_bytes) = match body_result {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!(
+                    "[{}] [Classifier] 读取上游响应失败, fallback 到 ALLOWED: {}",
+                    tag,
+                    e
+                );
+                let fallback =
+                    super::classifier::build_classifier_success_body(&ctx.request_model);
+                return Ok((StatusCode::OK, Json(fallback)).into_response());
+            }
+        };
         strip_hop_by_hop_response_headers(&mut resp_headers);
+
+        // 记录上游用量（如可用）
+        if usage_logging_enabled(&state) {
+            if let Ok(upstream_json) = serde_json::from_slice::<Value>(&body_bytes) {
+                let usage = super::classifier::parse_classifier_usage(&upstream_json);
+                let model = ctx
+                    .outbound_model
+                    .as_deref()
+                    .unwrap_or(&ctx.request_model);
+                log_usage(
+                    &state,
+                    &ctx.provider.id,
+                    ctx.app_type_str,
+                    model,
+                    &ctx.request_model,
+                    model,
+                    usage,
+                    0,
+                    None,
+                    false,
+                    _status.as_u16(),
+                    Some(ctx.session_id.clone()),
+                )
+                .await;
+            }
+        }
 
         // 4. 转回分类器兼容格式
         let classifier_body = match serde_json::from_slice::<Value>(&body_bytes) {

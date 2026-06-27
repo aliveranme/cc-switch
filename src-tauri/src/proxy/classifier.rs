@@ -189,6 +189,38 @@ pub fn transform_classifier_request(body: &Value) -> Value {
     new_body
 }
 
+/// 从上游响应中提取 Token 用量
+///
+/// 同时支持 Claude Messages API 和 OpenAI Chat Completions 两种响应格式的 usage 字段。
+/// 返回 `crate::proxy::usage::parser::TokenUsage`，若无法提取则返回默认值（无用量）。
+pub fn parse_classifier_usage(body: &Value) -> crate::proxy::usage::parser::TokenUsage {
+    // Claude Messages: usage.input_tokens, usage.output_tokens
+    if let Some(usage) = body.get("usage") {
+        let input = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let output = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        if input > 0 || output > 0 {
+            return crate::proxy::usage::parser::TokenUsage {
+                input_tokens: input as u32,
+                output_tokens: output as u32,
+                ..Default::default()
+            };
+        }
+    }
+    // OpenAI Chat: usage.prompt_tokens, usage.completion_tokens
+    if let Some(usage) = body.get("usage") {
+        let input = usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let output = usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        if input > 0 || output > 0 {
+            return crate::proxy::usage::parser::TokenUsage {
+                input_tokens: input as u32,
+                output_tokens: output as u32,
+                ..Default::default()
+            };
+        }
+    }
+    crate::proxy::usage::parser::TokenUsage::default()
+}
+
 /// 从上游响应中提取分类文本
 ///
 /// 同时支持 Claude Messages API 和 OpenAI Chat Completions 两种响应格式。
@@ -216,52 +248,52 @@ fn extract_response_text(body: &Value) -> Option<String> {
 
 /// 从上游响应中提取分类结果
 ///
-/// 解析 <block>yes|no</block> 标签（Claude Code 分类器原生格式），
-/// 无标签时根据文本内容启发式判断。
+/// 解析 `<block>yes|no</block>` 标签（Claude Code 分类器原生格式），
+/// 无标签时根据文本内容保守判断：检测到 unsafe 信号时返回 `"yes"`，
+/// 否则兜底放行返回 `"no"`。
 ///
-/// 返回 (block_content, reason_text)：
+/// 返回 (verdict, reason_text)：
 /// - `("no", reason)` — 判定为安全
 /// - `("yes", reason)` — 判定为需拦截
-/// - `("no", "")` — 兜底放行
 fn determine_classification_result(text: &str) -> (&str, &str) {
     let lower = text.to_lowercase();
 
     // 优先精确匹配 <block> 标签（Claude Code 原生格式）
-    // 正则等效: /<block>(yes|no)\b(<\/block>)?/gi
+    // 等效的正则: /<block>(yes|no)\b(<\/block>)?/gi
+    // 使用 is_word_char 匹配 \w（含下划线），对齐正则 \b 语义
     if let Some(start) = lower.find("<block>") {
         let after_tag = &lower[start + 7..].trim_start();
-        if let Some(end) = after_tag.find(|c: char| !c.is_alphanumeric()) {
-            let content = &after_tag[..end];
-            if content == "no" {
-                ("no", "The action has been classified as safe.")
-            } else if content == "yes" {
-                ("yes", "The action has been classified as potentially unsafe.")
-            } else {
-                ("no", "The action could not be confidently classified.")
-            }
-        } else {
-            ("no", "The action could not be confidently classified.")
+        let end = after_tag.find(|c: char| !is_word_char(c)).unwrap_or(after_tag.len());
+        let content = &after_tag[..end];
+        if content == "no" {
+            return ("no", "The action has been classified as safe.");
+        } else if content == "yes" {
+            return ("yes", "The action has been classified as potentially unsafe.");
         }
-    } else {
-        // 无 <block> 标签：使用保守启发式
-        let has_unsafe_signal = lower.contains("not safe")
-            || lower.contains("unsafe")
-            || lower.contains("block")
-            || lower.contains("blocked")
-            || lower.contains("malicious")
-            || lower.contains("harmful");
-
-        let has_safe_signal = lower.contains("safe")
-            && !lower.contains("unsafe")
-            && !lower.contains("not safe");
-
-        if has_safe_signal && !has_unsafe_signal {
-            ("no", "The action has been classified as safe.")
-        } else {
-            // 包括不安全信号、模糊或矛盾，保守 BLOCK（返回 no 放行，避免误拦截）
-            ("no", "The action could not be confidently classified.")
-        }
+        // <block> 内容不可识别，保守拦截
+        return ("yes", "The action could not be confidently classified.");
     }
+
+    // 无 <block> 标签：保守启发式
+    // 检测到不安全信号 → 拦截
+    let has_unsafe_signal = lower.contains("not safe")
+        || lower.contains("unsafe")
+        || lower.contains("block")
+        || lower.contains("blocked")
+        || lower.contains("malicious")
+        || lower.contains("harmful");
+
+    if has_unsafe_signal {
+        ("yes", "The action has been flagged as potentially unsafe by heuristic analysis.")
+    } else {
+        // 无明确不安全信号 → 放行（避免误拦截）
+        ("no", "The action appears safe based on heuristic analysis.")
+    }
+}
+
+/// `\w` 字符判断：字母数字 + 下划线，与正则 `\b` 语义对齐
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
 /// 将上游响应转换为分类器兼容的 Messages API 格式
@@ -274,15 +306,14 @@ pub fn transform_classifier_response(
     request_model: &str,
 ) -> Value {
     let upstream_text = extract_response_text(upstream_body).unwrap_or_default();
-    let (_block, _summary) = determine_classification_result(&upstream_text);
 
     // 构建含 <block> 标签的响应文本（分类器只认这个格式）
     let response_text = if upstream_text.is_empty() {
         "<block>no</block>\n<reason>No upstream classification available, allowing by default.</reason>".to_string()
     } else {
+        let (block, summary) = determine_classification_result(&upstream_text);
         format!(
-            "<block>{}</block>\n<reason>{}</reason>\n\nUpstream analysis:\n{}",
-            _block, _summary, upstream_text
+            "<block>{block}</block>\n<reason>{summary}</reason>\n\nUpstream analysis:\n{upstream_text}"
         )
     };
 
@@ -652,21 +683,27 @@ mod tests {
     }
 
     #[test]
-    fn test_determine_classification_result_not_safe_is_block() {
+    fn test_determine_classification_result_not_safe_is_yes() {
         let (result, _summary) = determine_classification_result("This is not safe because it deletes files");
-        assert_eq!(result, "no", "'not safe' 应兜底放行而非判定为 BLOCK");
+        assert_eq!(result, "yes", "'not safe' 应判定为 BLOCK");
     }
 
     #[test]
-    fn test_determine_classification_result_unsafe_is_block() {
+    fn test_determine_classification_result_unsafe_is_yes() {
         let (result, _summary) = determine_classification_result("This is unsafe");
-        assert_eq!(result, "no", "'unsafe' 应兜底放行");
+        assert_eq!(result, "yes", "'unsafe' 应判定为 BLOCK");
     }
 
     #[test]
-    fn test_determine_classification_result_ambiguous_is_block() {
+    fn test_determine_classification_result_ambiguous_is_no() {
         let (result, _summary) = determine_classification_result("The command reads some files");
         assert_eq!(result, "no", "无明确信号时应兜底放行");
+    }
+
+    #[test]
+    fn test_determine_classification_result_blocked_is_yes() {
+        let (result, _summary) = determine_classification_result("This command modifies /etc/passwd and should be blocked");
+        assert_eq!(result, "yes", "文本含 'blocked' 时应判定为 BLOCK");
     }
 
     #[test]
@@ -698,12 +735,10 @@ mod tests {
         let response = transform_classifier_response(&upstream, "claude-opus-4-8");
 
         assert_eq!(response["type"], "message");
+        let text = response["content"][0]["text"].as_str().unwrap();
         assert!(
-            response["content"][0]["text"]
-                .as_str()
-                .unwrap()
-                .contains("<block>"),
-            "响应应包含 <block> 标签"
+            text.contains("<block>yes</block>"),
+            "上游返回 <block>yes</block> 时应透传 yes 标签"
         );
     }
 
@@ -723,7 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn test_transform_classifier_request_upstream_returns_block_yes() {
+    fn test_transform_classifier_response_upstream_returns_block_yes() {
         let upstream = json!({
             "content": [{"type": "text", "text": "This modifies system files <block>yes</block>"}]
         });
@@ -732,5 +767,18 @@ mod tests {
         let text = response["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("<block>yes</block>"), "上游返回 BLOCK 信号时应透传 <block>yes</block>");
         assert!(text.contains("Upstream analysis"), "应保留上游原始文本");
+    }
+
+    #[test]
+    fn test_determine_classification_result_no_prefix_no_false_positive() {
+        // <block> 后面跟着非 "no"/"yes" 的内容应被识别为不可识别 → 返回 "yes"
+        let (result, _) = determine_classification_result("<block>no_worries</block>");
+        assert_eq!(result, "yes", "no_worries 不是精确的 \"no\"，不应判定为 ALLOW");
+
+        let (result, _) = determine_classification_result("<block>noway</block>");
+        assert_eq!(result, "yes", "noway 不是精确的 \"no\"");
+
+        let (result, _) = determine_classification_result("<block>nope</block>");
+        assert_eq!(result, "yes", "nope 不是精确的 \"no\"");
     }
 }
