@@ -10,6 +10,9 @@
     image: rust:1.95-bookworm
   env:
     DEBIAN_FRONTEND: noninteractive
+  lock:
+    key: ci-$CNB_EVENT-$CNB_BRANCH
+    cancel-in-progress: true
   stages:
     - name: 安装依赖
       script: |
