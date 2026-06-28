@@ -262,7 +262,8 @@ jobs:
           mkdir -p release-assets
           VERSION="${TAG}"
 
-          TAR_GZ=""; APP_PATH=""
+          # 查找 Tauri 构建产物
+          TAR_GZ=""; APP_PATH=""; DMG_PATH=""
           for path in \
             "src-tauri/target/universal-apple-darwin/release/bundle/macos" \
             "src-tauri/target/aarch64-apple-darwin/release/bundle/macos" \
@@ -273,6 +274,15 @@ jobs:
               [ -z "$APP_PATH" ] && APP_PATH=$(find "$path" -maxdepth 1 -name "*.app" -type d | head -1 || true)
             fi
           done
+          # 查找 DMG（可能在 dmg 目录或 macos 目录）
+          for path in \
+            "src-tauri/target/universal-apple-darwin/release/bundle/dmg" \
+            "src-tauri/target/universal-apple-darwin/release/bundle/macos"; do
+            if [ -d "$path" ]; then
+              [ -z "$DMG_PATH" ] && DMG_PATH=$(find "$path" -maxdepth 1 -name "*.dmg" -type f | head -1 || true)
+            fi
+          done
+
           if [ -z "$TAR_GZ" ]; then echo "⚠️ No macOS .tar.gz found"; fi
           if [ -z "$APP_PATH" ]; then echo "⚠️ No .app found"; fi
 
@@ -287,6 +297,25 @@ jobs:
           if [ -f "$APP_PATH" ]; then
             NEW_ZIP="CC-Switch-${VERSION}-macOS.zip"
             ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "release-assets/$NEW_ZIP"
+          fi
+
+          # 3) DMG（Tauri 生成或用 hdiutil 创建）
+          if [ -n "$DMG_PATH" ]; then
+            NEW_DMG="CC-Switch-${VERSION}-macOS.dmg"
+            cp "$DMG_PATH" "release-assets/$NEW_DMG"
+            echo "✅ DMG copied from Tauri bundle"
+          elif [ -f "$APP_PATH" ]; then
+            # Tauri 未生成 DMG（可能因无签名），用 hdiutil 创建
+            NEW_DMG="CC-Switch-${VERSION}-macOS.dmg"
+            DMG_STAGE_DIR="$RUNNER_TEMP/dmg-stage"
+            rm -rf "$DMG_STAGE_DIR" && mkdir -p "$DMG_STAGE_DIR/CC Switch.app" && \
+              ditto "$APP_PATH" "$DMG_STAGE_DIR/CC Switch.app"
+            hdiutil create -volname "CC Switch" \
+              -srcfolder "$DMG_STAGE_DIR" \
+              -ov -format UDZO \
+              "release-assets/$NEW_DMG"
+            rm -rf "$DMG_STAGE_DIR"
+            echo "✅ DMG created with hdiutil (unsigned)"
           fi
 
       - name: Notarize macOS DMG (optional)
