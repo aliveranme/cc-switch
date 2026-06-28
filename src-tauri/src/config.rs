@@ -288,10 +288,20 @@ fn ensure_dir(path: &Path) -> Result<(), AppError> {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             // 路径名字已存在（可能是 symlink 或目录）。用 symlink_metadata
             // 不跟随 symlink 判断，避免目标临时不可达时误判为不存在。
-            if fs::symlink_metadata(path).is_ok() {
-                Ok(())
-            } else {
-                Err(AppError::io(path, e))
+            match fs::symlink_metadata(path) {
+                Ok(meta) => {
+                    if meta.is_dir() || meta.is_symlink() {
+                        // 已存在的目录或指向目录的符号链接 → 视为成功
+                        Ok(())
+                    } else {
+                        // 路径存在但既不是目录也不是符号链接（例如是一个普通文件）
+                        Err(AppError::io(path, std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!("路径已存在但不是目录: {}", path.display()),
+                        )))
+                    }
+                }
+                Err(_) => Err(AppError::io(path, e)),
             }
         }
         Err(e) => Err(AppError::io(path, e)),
@@ -348,6 +358,9 @@ fn is_transient_reparse_error(_err: &std::io::Error) -> bool {
 }
 
 /// 对穿过符号链接的瞬时 IO 错误做有限次退避重试。
+///
+/// 注意：此函数使用 `std::thread::sleep` 阻塞当前线程，不应在异步任务
+/// 的热路径中直接调用。调用方应确保从 `spawn_blocking` 或专用线程调用。
 fn retry_transient_io<F>(mut op: F) -> Result<(), std::io::Error>
 where
     F: FnMut() -> Result<(), std::io::Error>,
@@ -358,13 +371,14 @@ where
         match op() {
             Ok(()) => return Ok(()),
             Err(e) if is_transient_reparse_error(&e) && attempt + 1 < MAX_ATTEMPTS => {
+                // 仅在还有重试机会时退避
                 std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                 delay_ms = delay_ms.saturating_mul(2);
             }
             Err(e) => return Err(e),
         }
     }
-    op()
+    unreachable!("循环体保证返回，不应执行到此处")
 }
 
 /// 原子写入：写入临时文件后 rename 替换，避免半写状态

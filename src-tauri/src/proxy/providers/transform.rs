@@ -72,8 +72,11 @@ pub fn supports_reasoning_effort(model: &str) -> bool {
             .strip_prefix("gpt-")
             .and_then(|rest| rest.chars().next())
             .is_some_and(|c| c.is_ascii_digit() && c >= '5')
-        || lower.contains("glm")
-        || lower.contains("kimi")
+        // GLM 系列：glm-4.6+, glm-5+（含 CF Workers AI 前缀如 @cf/zai-org/glm-5.2）
+        || lower.contains("glm-")
+        // Kimi 系列：kimi-k2+（含 Moonshot API 前缀如 moonshot/kimi-k2）
+        || lower.contains("kimi-k2")
+        // Moonshot 自有模型（不含 kimi 前缀）
         || lower.contains("moonshot")
 }
 

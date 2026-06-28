@@ -1635,24 +1635,23 @@ impl RequestForwarder {
         // 预计算 anthropic-beta 值（仅 Claude）
         // 注入 claude-code + 1M context beta，让所有 proxy 请求自动获得
         // 上下文窗口扩展能力。1M context 的最终生效仍受上游 API 控制。
+        // 从客户端已有的 beta 值追加缺失项，避免重复。
         let anthropic_beta_value = if should_send_anthropic_headers {
-            const BASE_BETAS: &str = "claude-code-20250219,context-1m-2025-08-07";
+            const BASE_BETAS: [&str; 2] = ["claude-code-20250219", "context-1m-2025-08-07"];
             Some(if let Some(beta) = headers.get("anthropic-beta") {
                 if let Ok(beta_str) = beta.to_str() {
-                    if beta_str.contains("claude-code-20250219") {
-                        if beta_str.contains("context-1m-2025-08-07") {
-                            beta_str.to_string()
-                        } else {
-                            format!("{},{beta_str}", BASE_BETAS)
+                    let mut parts: Vec<&str> = beta_str.split(',').collect();
+                    for required in &BASE_BETAS {
+                        if !parts.iter().any(|p| p.trim() == *required) {
+                            parts.push(required);
                         }
-                    } else {
-                        format!("{},{beta_str}", BASE_BETAS)
                     }
+                    parts.join(",")
                 } else {
-                    BASE_BETAS.to_string()
+                    BASE_BETAS.join(",")
                 }
             } else {
-                BASE_BETAS.to_string()
+                BASE_BETAS.join(",")
             })
         } else {
             None

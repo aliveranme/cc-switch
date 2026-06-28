@@ -74,6 +74,17 @@ pub enum ClassifierStage {
 /// 弱特征（非流式+thinking、非流式+小max_tokens、block+action等）
 /// 不作为判定依据，仅用于阶段推理（区分 Fast/Thinking stage）。
 pub fn detect_classifier_request(body: &Value) -> ClassifierDetection {
+    // 快速短路：流式请求绝不可能是分类器（分类器永远是非流式 side-query）。
+    // 这必须在任何分配（extract_system_text / to_lowercase）之前检查，
+    // 避免让 80-90% 的流量付出无用开销。
+    if body.get("stream").and_then(|s| s.as_bool()) == Some(true) {
+        return ClassifierDetection {
+            is_classifier: false,
+            stage: None,
+            confidence: 0.0,
+        };
+    }
+
     // 强特征 1: stop_sequences 包含 "</block>" — 分类器特有标签
     let has_block_tag = body
         .get("stop_sequences")
@@ -192,33 +203,11 @@ pub fn transform_classifier_request(body: &Value) -> Value {
 /// 从上游响应中提取 Token 用量
 ///
 /// 同时支持 Claude Messages API 和 OpenAI Chat Completions 两种响应格式的 usage 字段。
-/// 返回 `crate::proxy::usage::parser::TokenUsage`，若无法提取则返回默认值（无用量）。
+/// 复用 `crate::proxy::usage::parser::TokenUsage` 已有的解析方法。
 pub fn parse_classifier_usage(body: &Value) -> crate::proxy::usage::parser::TokenUsage {
-    // Claude Messages: usage.input_tokens, usage.output_tokens
-    if let Some(usage) = body.get("usage") {
-        let input = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let output = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        if input > 0 || output > 0 {
-            return crate::proxy::usage::parser::TokenUsage {
-                input_tokens: input as u32,
-                output_tokens: output as u32,
-                ..Default::default()
-            };
-        }
-    }
-    // OpenAI Chat: usage.prompt_tokens, usage.completion_tokens
-    if let Some(usage) = body.get("usage") {
-        let input = usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let output = usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        if input > 0 || output > 0 {
-            return crate::proxy::usage::parser::TokenUsage {
-                input_tokens: input as u32,
-                output_tokens: output as u32,
-                ..Default::default()
-            };
-        }
-    }
-    crate::proxy::usage::parser::TokenUsage::default()
+    crate::proxy::usage::parser::TokenUsage::from_claude_response(body)
+        .or_else(|| crate::proxy::usage::parser::TokenUsage::from_openai_response(body))
+        .unwrap_or_default()
 }
 
 /// 从上游响应中提取分类文本
@@ -259,9 +248,9 @@ fn determine_classification_result(text: &str) -> (&str, &str) {
     let lower = text.to_lowercase();
 
     // 优先精确匹配 <block> 标签（Claude Code 原生格式）
-    // 等效的正则: /<block>(yes|no)\b(<\/block>)?/gi
-    // 使用 is_word_char 匹配 \w（含下划线），对齐正则 \b 语义
-    if let Some(start) = lower.find("<block>") {
+    // 使用 rfind 匹配最后出现的 <block> 标签（这是分类结果，而非上游模型
+    // 在解释输出格式时提到的示例），避免第一个 <block> 标签被上游文本误匹配。
+    if let Some(start) = lower.rfind("<block>") {
         let after_tag = &lower[start + 7..].trim_start();
         let end = after_tag.find(|c: char| !is_word_char(c)).unwrap_or(after_tag.len());
         let content = &after_tag[..end];
@@ -276,12 +265,18 @@ fn determine_classification_result(text: &str) -> (&str, &str) {
 
     // 无 <block> 标签：保守启发式
     // 检测到不安全信号 → 拦截
+    // 使用 is_word_char 做词边界检查，避免 false positive：
+    // - "block" 仅作为独立词匹配（b"block" 不是 "blocked" 的子串，
+    //   但 "block this action" 是独立词 → 匹配）
+    // - "blocked" 单独保留，因为这是极强的安全信号，几乎不会出现在
+    //   良性描述中（如 "the operation should be blocked" → BLOCK 正确）
+    // - "not safe"、"unsafe"、"malicious"、"harmful" 直接用 contains
     let has_unsafe_signal = lower.contains("not safe")
         || lower.contains("unsafe")
-        || lower.contains("block")
         || lower.contains("blocked")
         || lower.contains("malicious")
-        || lower.contains("harmful");
+        || lower.contains("harmful")
+        || is_word_boundary_contain(&lower, "block");
 
     if has_unsafe_signal {
         ("yes", "The action has been flagged as potentially unsafe by heuristic analysis.")
@@ -296,6 +291,34 @@ fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
+/// 检查 `text` 是否包含 `keyword` 且前后为词边界（\b 语义）。
+/// 避免 `contains("block")` 在 "a block of code" 中误匹配。
+fn is_word_boundary_contain(text: &str, keyword: &str) -> bool {
+    let kw_len = keyword.len();
+    if kw_len == 0 || text.len() < kw_len {
+        return false;
+    }
+    // 在 text 中每找到一次 keyword 出现位置就检查边界
+    let mut start = 0;
+    while let Some(pos) = text[start..].find(keyword) {
+        let abs_pos = start + pos;
+        // 前一个字符（不在开头）必须是词边界
+        let prev_ok = abs_pos == 0 || !is_word_char(text.as_bytes()[abs_pos - 1] as char);
+        // 后一个字符（不在结尾）必须是词边界
+        let next_ok = abs_pos + kw_len >= text.len()
+            || !is_word_char(text.as_bytes()[abs_pos + kw_len] as char);
+        if prev_ok && next_ok {
+            return true;
+        }
+        // 不是边界匹配，从 keyword 内偏移一位继续搜索，避免死循环
+        start = abs_pos + 1;
+        if start >= text.len() {
+            break;
+        }
+    }
+    false
+}
+
 /// 将上游响应转换为分类器兼容的 Messages API 格式
 ///
 /// 响应中必须包含 `<block>no</block>` 或 `<block>yes</block>` 标签，
@@ -306,6 +329,14 @@ pub fn transform_classifier_response(
     request_model: &str,
 ) -> Value {
     let upstream_text = extract_response_text(upstream_body).unwrap_or_default();
+
+    // 从上游响应中提取真实用量（如果用不到则兜底为默认值）
+    let usage = parse_classifier_usage(upstream_body);
+    let (input_tokens, output_tokens) = if usage.input_tokens > 0 || usage.output_tokens > 0 {
+        (usage.input_tokens, usage.output_tokens)
+    } else {
+        (1u32, 10u32)
+    };
 
     // 构建含 <block> 标签的响应文本（分类器只认这个格式）
     let response_text = if upstream_text.is_empty() {
@@ -331,8 +362,8 @@ pub fn transform_classifier_response(
         "stop_reason": "end_turn",
         "stop_sequence": null,
         "usage": {
-            "input_tokens": 1,
-            "output_tokens": 10
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens
         }
     })
 }
