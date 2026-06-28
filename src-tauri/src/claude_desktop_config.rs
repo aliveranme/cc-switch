@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 #[cfg(any(target_os = "macos", windows))]
 use crate::config::get_home_dir;
-use crate::config::{atomic_write, delete_file, ensure_parent_dir, read_json_file, write_json_file};
+use crate::config::{
+    atomic_write, delete_file, ensure_parent_dir, read_json_file, write_json_file,
+};
 use crate::database::Database;
 use crate::database::CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID;
 use crate::error::AppError;

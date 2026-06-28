@@ -160,8 +160,7 @@ impl RequestContext {
         );
 
         // 检测是否为安全分类器请求
-        let classifier_detection =
-            super::classifier::detect_classifier_request(body);
+        let classifier_detection = super::classifier::detect_classifier_request(body);
         let is_classifier_request = classifier_detection.is_classifier;
         if is_classifier_request {
             log::info!(

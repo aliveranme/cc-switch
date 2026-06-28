@@ -295,10 +295,13 @@ fn ensure_dir(path: &Path) -> Result<(), AppError> {
                         Ok(())
                     } else {
                         // 路径存在但既不是目录也不是符号链接（例如是一个普通文件）
-                        Err(AppError::io(path, std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            format!("路径已存在但不是目录: {}", path.display()),
-                        )))
+                        Err(AppError::io(
+                            path,
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                format!("路径已存在但不是目录: {}", path.display()),
+                            ),
+                        ))
                     }
                 }
                 Err(_) => Err(AppError::io(path, e)),
@@ -348,7 +351,7 @@ fn is_transient_reparse_error(err: &std::io::Error) -> bool {
         err.raw_os_error(),
         Some(448)  // ERROR_UNTRUSTED_MOUNT_POINT
             | Some(183) // ERROR_ALREADY_EXISTS
-            | Some(32)  // ERROR_SHARING_VIOLATION
+            | Some(32) // ERROR_SHARING_VIOLATION
     )
 }
 

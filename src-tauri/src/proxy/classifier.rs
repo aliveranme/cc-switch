@@ -189,7 +189,10 @@ pub fn transform_classifier_request(body: &Value) -> Value {
     let mut new_body = body.clone();
     if let Some(obj) = new_body.as_object_mut() {
         // 替换为通用分类器 prompt
-        obj.insert("system".into(), serde_json::json!(UPSTREAM_CLASSIFIER_PROMPT));
+        obj.insert(
+            "system".into(),
+            serde_json::json!(UPSTREAM_CLASSIFIER_PROMPT),
+        );
         // 移除上游不支持的 stop_sequences（如 </block>）
         obj.remove("stop_sequences");
         // 移除 thinking 参数（分类器使用小 max_tokens）
@@ -252,12 +255,17 @@ fn determine_classification_result(text: &str) -> (&str, &str) {
     // 在解释输出格式时提到的示例），避免第一个 <block> 标签被上游文本误匹配。
     if let Some(start) = lower.rfind("<block>") {
         let after_tag = &lower[start + 7..].trim_start();
-        let end = after_tag.find(|c: char| !is_word_char(c)).unwrap_or(after_tag.len());
+        let end = after_tag
+            .find(|c: char| !is_word_char(c))
+            .unwrap_or(after_tag.len());
         let content = &after_tag[..end];
         if content == "no" {
             return ("no", "The action has been classified as safe.");
         } else if content == "yes" {
-            return ("yes", "The action has been classified as potentially unsafe.");
+            return (
+                "yes",
+                "The action has been classified as potentially unsafe.",
+            );
         }
         // <block> 内容不可识别，保守拦截
         return ("yes", "The action could not be confidently classified.");
@@ -279,7 +287,10 @@ fn determine_classification_result(text: &str) -> (&str, &str) {
         || is_word_boundary_contain(&lower, "block");
 
     if has_unsafe_signal {
-        ("yes", "The action has been flagged as potentially unsafe by heuristic analysis.")
+        (
+            "yes",
+            "The action has been flagged as potentially unsafe by heuristic analysis.",
+        )
     } else {
         // 无明确不安全信号 → 放行（避免误拦截）
         ("no", "The action appears safe based on heuristic analysis.")
@@ -324,10 +335,7 @@ fn is_word_boundary_contain(text: &str, keyword: &str) -> bool {
 /// 响应中必须包含 `<block>no</block>` 或 `<block>yes</block>` 标签，
 /// 这是 Claude Code auto-mode 分类器投票系统解析的唯一识别格式。
 /// 同时保留上游原始文本作为分析依据。
-pub fn transform_classifier_response(
-    upstream_body: &Value,
-    request_model: &str,
-) -> Value {
+pub fn transform_classifier_response(upstream_body: &Value, request_model: &str) -> Value {
     let upstream_text = extract_response_text(upstream_body).unwrap_or_default();
 
     // 从上游响应中提取真实用量（如果用不到则兜底为默认值）
@@ -479,9 +487,11 @@ mod tests {
         });
 
         let detection = detect_classifier_request(&body);
-        assert!(!detection.is_classifier,
+        assert!(
+            !detection.is_classifier,
             "非流式+thinking+max_tokens=4096 不应被归类为分类器 (confidence={:.2})",
-            detection.confidence);
+            detection.confidence
+        );
     }
 
     /// 普通非流式短请求 + max_tokens=200 → S4 单独触发
@@ -496,9 +506,11 @@ mod tests {
         });
 
         let detection = detect_classifier_request(&body);
-        assert!(!detection.is_classifier,
+        assert!(
+            !detection.is_classifier,
             "普通非流式短请求不应被归类为分类器 (confidence={:.2})",
-            detection.confidence);
+            detection.confidence
+        );
     }
 
     /// 流式请求 + thinking + 小 max_tokens → S3 需要非流式
@@ -514,9 +526,11 @@ mod tests {
         });
 
         let detection = detect_classifier_request(&body);
-        assert!(!detection.is_classifier,
+        assert!(
+            !detection.is_classifier,
             "流式请求不应被归类为分类器 (confidence={:.2})",
-            detection.confidence);
+            detection.confidence
+        );
     }
 
     /// 非流式 + thinking + "block"+"action" 但缺少分类器特有关键词
@@ -538,9 +552,11 @@ mod tests {
         // stop_sequences 有 </div> 但无 </block>
         // 没有强特征 → 不是分类器
         let detection = detect_classifier_request(&body);
-        assert!(!detection.is_classifier,
+        assert!(
+            !detection.is_classifier,
             "无强特征时不应归类为分类器 (confidence={:.2})",
-            detection.confidence);
+            detection.confidence
+        );
     }
 
     /// 仅 S5（block+action）单独触发 → 权重 0.3 < 0.65，不应归类
@@ -556,9 +572,11 @@ mod tests {
 
         // 只触发 S5(0.3)，combined = 0.3 < 0.65
         let detection = detect_classifier_request(&body);
-        assert!(!detection.is_classifier,
+        assert!(
+            !detection.is_classifier,
             "仅\"block\"+\"action\"不应归类 (confidence={:.2})",
-            detection.confidence);
+            detection.confidence
+        );
     }
 
     /// 非流式 + max_tokens=200 + system 包含"action"但非"block" → 不应归类
@@ -575,9 +593,11 @@ mod tests {
         // S4(0.5) 单独触发，0.5 < 0.65
         // 没有 S5，因为 system 包含"action"但不包含"block"
         let detection = detect_classifier_request(&body);
-        assert!(!detection.is_classifier,
+        assert!(
+            !detection.is_classifier,
             "非流式+max_tokens=200+system含action但无block不应归类 (confidence={:.2})",
-            detection.confidence);
+            detection.confidence
+        );
     }
 
     /// Gemini 普通请求 → 应不被归类
@@ -588,9 +608,11 @@ mod tests {
         });
 
         let detection = detect_classifier_request(&body);
-        assert!(!detection.is_classifier,
+        assert!(
+            !detection.is_classifier,
             "Gemini 请求不应归类 (confidence={:.2})",
-            detection.confidence);
+            detection.confidence
+        );
     }
 
     /// 空的 system prompt + 非流式 + 小 max_tokens → S4 单独，0.5 < 0.65
@@ -604,9 +626,11 @@ mod tests {
         });
 
         let detection = detect_classifier_request(&body);
-        assert!(!detection.is_classifier,
+        assert!(
+            !detection.is_classifier,
             "system为空+非流式短请求不应归类 (confidence={:.2})",
-            detection.confidence);
+            detection.confidence
+        );
     }
 
     /// Claude Desktop 典型请求：非流式 + 大 max_tokens + 无 thinking
@@ -623,9 +647,11 @@ mod tests {
         // 非流式但无 thinking → S3 不触发
         // max_tokens=8192 → S4 不触发 (>256)
         let detection = detect_classifier_request(&body);
-        assert!(!detection.is_classifier,
+        assert!(
+            !detection.is_classifier,
             "Claude Desktop 典型请求不应归类 (confidence={:.2})",
-            detection.confidence);
+            detection.confidence
+        );
     }
 
     // ========================================================================
@@ -672,7 +698,10 @@ mod tests {
 
         let transformed = transform_classifier_request(&body);
 
-        assert!(transformed.get("stop_sequences").is_none(), "应移除 stop_sequences");
+        assert!(
+            transformed.get("stop_sequences").is_none(),
+            "应移除 stop_sequences"
+        );
         assert!(transformed.get("thinking").is_none(), "应移除 thinking");
         assert_eq!(
             transformed.get("stream").and_then(|v| v.as_bool()),
@@ -708,14 +737,17 @@ mod tests {
 
     #[test]
     fn test_determine_classification_result_block_tag() {
-        let (result, summary) = determine_classification_result("<block>yes</block>\n<reason>deletes system files</reason>");
+        let (result, summary) = determine_classification_result(
+            "<block>yes</block>\n<reason>deletes system files</reason>",
+        );
         assert_eq!(result, "yes");
         assert!(summary.contains("unsafe"));
     }
 
     #[test]
     fn test_determine_classification_result_not_safe_is_yes() {
-        let (result, _summary) = determine_classification_result("This is not safe because it deletes files");
+        let (result, _summary) =
+            determine_classification_result("This is not safe because it deletes files");
         assert_eq!(result, "yes", "'not safe' 应判定为 BLOCK");
     }
 
@@ -733,7 +765,9 @@ mod tests {
 
     #[test]
     fn test_determine_classification_result_blocked_is_yes() {
-        let (result, _summary) = determine_classification_result("This command modifies /etc/passwd and should be blocked");
+        let (result, _summary) = determine_classification_result(
+            "This command modifies /etc/passwd and should be blocked",
+        );
         assert_eq!(result, "yes", "文本含 'blocked' 时应判定为 BLOCK");
     }
 
@@ -796,7 +830,10 @@ mod tests {
         let response = transform_classifier_response(&upstream, "claude-sonnet-4-6");
 
         let text = response["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("<block>yes</block>"), "上游返回 BLOCK 信号时应透传 <block>yes</block>");
+        assert!(
+            text.contains("<block>yes</block>"),
+            "上游返回 BLOCK 信号时应透传 <block>yes</block>"
+        );
         assert!(text.contains("Upstream analysis"), "应保留上游原始文本");
     }
 
@@ -804,7 +841,10 @@ mod tests {
     fn test_determine_classification_result_no_prefix_no_false_positive() {
         // <block> 后面跟着非 "no"/"yes" 的内容应被识别为不可识别 → 返回 "yes"
         let (result, _) = determine_classification_result("<block>no_worries</block>");
-        assert_eq!(result, "yes", "no_worries 不是精确的 \"no\"，不应判定为 ALLOW");
+        assert_eq!(
+            result, "yes",
+            "no_worries 不是精确的 \"no\"，不应判定为 ALLOW"
+        );
 
         let (result, _) = determine_classification_result("<block>noway</block>");
         assert_eq!(result, "yes", "noway 不是精确的 \"no\"");

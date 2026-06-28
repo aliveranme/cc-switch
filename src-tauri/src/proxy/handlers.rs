@@ -213,8 +213,7 @@ async fn handle_messages_for_app(
                     err.error
                 );
                 // 上游不可用时兜底放行，避免阻塞用户操作
-                let fallback =
-                    super::classifier::build_classifier_success_body(&ctx.request_model);
+                let fallback = super::classifier::build_classifier_success_body(&ctx.request_model);
                 return Ok((StatusCode::OK, Json(fallback)).into_response());
             }
         };
@@ -223,12 +222,8 @@ async fn handle_messages_for_app(
         ctx.provider = result.provider;
 
         // 3. 读取上游响应体（失败时兜底放行，不阻塞用户）
-        let body_result = read_decoded_body(
-            result.response,
-            ctx.tag,
-            std::time::Duration::ZERO,
-        )
-        .await;
+        let body_result =
+            read_decoded_body(result.response, ctx.tag, std::time::Duration::ZERO).await;
 
         let (mut resp_headers, _status, body_bytes) = match body_result {
             Ok(v) => v,
@@ -238,8 +233,7 @@ async fn handle_messages_for_app(
                     tag,
                     e
                 );
-                let fallback =
-                    super::classifier::build_classifier_success_body(&ctx.request_model);
+                let fallback = super::classifier::build_classifier_success_body(&ctx.request_model);
                 return Ok((StatusCode::OK, Json(fallback)).into_response());
             }
         };
@@ -249,10 +243,7 @@ async fn handle_messages_for_app(
         if usage_logging_enabled(&state) {
             if let Ok(upstream_json) = serde_json::from_slice::<Value>(&body_bytes) {
                 let usage = super::classifier::parse_classifier_usage(&upstream_json);
-                let model = ctx
-                    .outbound_model
-                    .as_deref()
-                    .unwrap_or(&ctx.request_model);
+                let model = ctx.outbound_model.as_deref().unwrap_or(&ctx.request_model);
                 log_usage(
                     &state,
                     &ctx.provider.id,
@@ -273,9 +264,7 @@ async fn handle_messages_for_app(
 
         // 4. 转回分类器兼容格式
         let classifier_body = match serde_json::from_slice::<Value>(&body_bytes) {
-            Ok(json) => {
-                super::classifier::transform_classifier_response(&json, &ctx.request_model)
-            }
+            Ok(json) => super::classifier::transform_classifier_response(&json, &ctx.request_model),
             Err(_) => {
                 log::warn!(
                     "[{}] [Classifier] 无法解析上游响应 JSON, 使用 ALLOWED 兜底",
@@ -285,16 +274,11 @@ async fn handle_messages_for_app(
             }
         };
 
-        let response_bytes =
-            serde_json::to_vec(&classifier_body).map_err(|e| {
-                ProxyError::Internal(format!("序列化分类器响应失败: {e}"))
-            })?;
+        let response_bytes = serde_json::to_vec(&classifier_body)
+            .map_err(|e| ProxyError::Internal(format!("序列化分类器响应失败: {e}")))?;
 
         let mut builder = axum::response::Response::builder().status(StatusCode::OK);
-        builder = builder.header(
-            axum::http::header::CONTENT_TYPE,
-            "application/json",
-        );
+        builder = builder.header(axum::http::header::CONTENT_TYPE, "application/json");
         return builder
             .body(axum::body::Body::from(response_bytes))
             .map_err(|e| ProxyError::Internal(format!("构建分类器响应失败: {e}")));
