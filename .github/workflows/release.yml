@@ -472,7 +472,7 @@ jobs:
           name: CC Switch ${{ needs.resolve-version.outputs.tag }}
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || true }}
           fail_on_unmatched_files: false
-          overwrite: true
+          overwrite_files: true
           generate_release_notes: true
           body: |
             ## CC Switch ${{ needs.resolve-version.outputs.tag }}
