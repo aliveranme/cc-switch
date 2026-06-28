@@ -240,12 +240,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:WINDOWS_RELEASE_ARCH -eq 'arm64') {
-            pnpm tauri build --target aarch64-pc-windows-msvc --bundles msi
+            pnpm tauri build --target aarch64-pc-windows-msvc --bundles msi 2>&1 | Out-Host
           } else {
             pnpm tauri build 2>&1 | Out-Host
-            if ($LASTEXITCODE -ne 0) {
-              Write-Warning "tauri build exit code: $LASTEXITCODE（签名步骤报错可忽略，安装包已生成）"
-            }
+          }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "tauri build exit code: $LASTEXITCODE（签名步骤报错可忽略，安装包已生成）"
           }
 
       - name: Build Tauri App (Linux)
