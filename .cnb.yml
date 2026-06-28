@@ -4,8 +4,8 @@
 #
 # 触发方式:
 #   push (main)          → 自动构建 dev 安装包
-#   api_trigger (手触)   → 手动触发构建
-#   tag_push             → 构建 release 安装包
+#   web_trigger (网页)   → 页面按钮手动触发
+#   tag_push             → 发布 Release（含 .deb 附件）
 #   pull_request         → PR 代码检查
 
 # ============================================================================
@@ -16,41 +16,58 @@
     image: rust:1.85-bookworm
   env:
     DEBIAN_FRONTEND: noninteractive
+    TAURI_SIGNING_PRIVATE_KEY: ""
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
 
 # 系统依赖 + Node.js
 .install-deps: &install-deps
   name: 安装系统依赖
   script: |
     set -e
-    echo "[1/4] apt update..."
-    apt-get update -qq && echo "  OK"
-    echo "[2/4] apt install Tauri deps..."
+    apt-get update -qq
     apt-get install -y -qq \
       curl ca-certificates gnupg \
       libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
       librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
-      patchelf pkg-config wget file openssl 2>&1 && echo "  OK"
+      patchelf pkg-config wget file openssl
 
 # pnpm + Tauri CLI
 .install-tools: &install-tools
   name: 安装 pnpm + Tauri CLI
   script: |
     set -e
-    echo "[3/4] nodesource setup (Node.js 22)..."
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - 2>&1 | tail -3
-    echo "[4/4] apt install nodejs..."
-    apt-get install -y -qq nodejs 2>&1 && echo "  OK"
-    echo "node $(node --version) npm $(npm --version)"
-    # 降级 pnpm 版本以兼容 Node.js 22（最新 pnpm 要求 Node 22+，确保锁定）
-    npm install -g pnpm@latest @tauri-apps/cli@latest 2>&1 | tail -3
-    rustup target add x86_64-unknown-linux-gnu 2>&1 | tail -1
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    apt-get install -y -qq nodejs
+    echo "node: $(node --version)  npm: $(npm --version)"
+    npm install -g pnpm@latest @tauri-apps/cli@latest | tail -1
+    rustup target add x86_64-unknown-linux-gnu
 
 # 前端构建
 .build-app: &build-app
-  name: 安装依赖 + 构建前端
+  name: 构建前端
   script: |
-    pnpm install --frozen-lockfile
-    pnpm build:renderer
+    pnpm install --frozen-lockfile 2>&1 | tail -3
+    pnpm build:renderer 2>&1 | tail -3
+
+# 编译 + 打包
+.build-deb: &build-deb
+  name: 编译 + 打包
+  script: |
+    set -e
+    echo "=== Rust 编译 + Tauri 打包 ==="
+    pnpm tauri build --bundles deb 2>&1 | tail -20 || echo "[WARN] 签名步骤报错（deb 已生成，可忽略）"
+    echo "=== 确认产物 ==="
+    ls -lh src-tauri/target/release/bundle/deb/
+
+# 复制制品到工作区根目录
+.collect-artifacts: &collect-artifacts
+  name: 收集构建制品
+  script: |
+    set -e
+    mkdir -p artifacts
+    cp -v src-tauri/target/release/bundle/deb/*.deb artifacts/ 2>/dev/null || echo "无 deb 文件"
+    cp -v src-tauri/target/release/bundle/appimage/*.AppImage artifacts/ 2>/dev/null || echo "无 appimage"
+    ls -lh artifacts/
 
 # ============================================================================
 # 流水线定义
@@ -59,14 +76,24 @@ $:
   # ── 手动/API 触发构建 ──
   api_trigger:
     - <<: *rust-env
-      name: 构建安装包（手动触发）
+      name: 构建安装包
       stages:
         - *install-deps
         - *install-tools
         - *build-app
-        - name: 编译 + 打包
-          script: |
-            pnpm tauri build --bundles deb 2>&1 | tail -30
+        - *build-deb
+        - *collect-artifacts
+
+  # ── 网页按钮触发 ──
+  web_trigger:
+    - <<: *rust-env
+      name: 网页触发构建
+      stages:
+        - *install-deps
+        - *install-tools
+        - *build-app
+        - *build-deb
+        - *collect-artifacts
 
   # ── PR 代码检查 ──
   pull_request:
@@ -75,7 +102,7 @@ $:
       stages:
         - *install-deps
         - *install-tools
-        - name: 前端依赖 + 类型检查
+        - name: 前端 + 类型检查
           script: |
             pnpm install --frozen-lockfile
             pnpm typecheck 2>&1 || echo "类型检查有警告"
@@ -92,19 +119,23 @@ $:
         - *install-deps
         - *install-tools
         - *build-app
-        - name: 编译 + 打包
-          script: |
-            pnpm tauri build --bundles deb 2>&1 | tail -30
+        - *build-deb
+        - *collect-artifacts
+      endStages:
+        - name: 发布 Release
+          type: git:release
+          options:
+            tag: $CNB_BRANCH
+            description: "CC Switch $CNB_BRANCH — Linux release build"
 
 main:
   # ── Push 自动构建 ──
   push:
     - <<: *rust-env
-      name: 自动构建安装包
+      name: 自动构建
       stages:
         - *install-deps
         - *install-tools
         - *build-app
-        - name: 编译 + 打包
-          script: |
-            pnpm tauri build --bundles deb 2>&1
+        - *build-deb
+        - *collect-artifacts

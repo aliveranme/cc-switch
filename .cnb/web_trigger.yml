@@ -1,0 +1,10 @@
+# CNB Web 触发器 — CC Switch 安装包构建
+###############################################################################
+# 在 CNB 网页界面添加手动触发按钮
+
+branch:
+  - reg: ^main
+    buttons:
+      - name: 构建安装包
+        event: api_trigger
+        description: 手动触发 CC Switch Linux 安装包构建（生成 .deb）
