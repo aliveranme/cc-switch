@@ -482,6 +482,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Download built release artifacts
         uses: actions/download-artifact@v8
         with:
@@ -494,6 +499,43 @@ jobs:
         run: |
           ls -la release-assets
 
+      - name: Generate release body
+        env:
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+
+          # 从 CHANGELOG.md 提取当前版本的变更内容
+          echo "## CC Switch ${TAG}" > release-body.md
+          echo "" >> release-body.md
+
+          # 提取 CHANGELOG 中对应版本的内容
+          if [ -f CHANGELOG.md ]; then
+            echo "### 📋 变更日志" >> release-body.md
+            # 提取当前版本与上一版本之间的 changelog 区块
+            awk -v ver="$VERSION" '
+              $0 ~ "## \\[" ver "\\]" || $0 ~ "## " ver {found=1; next}
+              found && /^## \[/ {exit}
+              found {print}
+            ' CHANGELOG.md >> release-body.md
+            echo "" >> release-body.md
+          fi
+
+          # git 提交记录
+          echo "### 🔄 Git 提交记录" >> release-body.md
+          echo '```' >> release-body.md
+          git log "$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)..HEAD" \
+            --oneline --no-merges --format="* %s (%h)" 2>/dev/null >> release-body.md || true
+          echo '```' >> release-body.md
+          echo "" >> release-body.md
+
+          echo "---" >> release-body.md
+          echo "🌐 **官网**: [ccswitch.io](https://ccswitch.io)" >> release-body.md
+
+          echo "Release body generated:"
+          head -30 release-body.md
+
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v3
         with:
@@ -502,23 +544,7 @@ jobs:
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || true }}
           fail_on_unmatched_files: false
           overwrite_files: true
-          generate_release_notes: true
-          body: |
-            ## CC Switch ${{ needs.resolve-version.outputs.tag }}
-
-            🌐 **Only Official Website / 唯一官方网站 / 唯一の公式サイト**: [ccswitch.io](https://ccswitch.io)
-
-            Claude Code 供应商切换工具
-
-            ### 下载
-
-            - **macOS**: `CC-Switch-${{ needs.resolve-version.outputs.tag }}-macOS.dmg`（推荐）或 `CC-Switch-${{ needs.resolve-version.outputs.tag }}-macOS.zip`（解压即用）
-            - **Windows (x86_64)**: `CC-Switch-${{ needs.resolve-version.outputs.tag }}-Windows.msi`（安装版）或 `CC-Switch-${{ needs.resolve-version.outputs.tag }}-Windows-Portable.zip`（绿色版）
-            - **Windows (ARM64)**: `CC-Switch-${{ needs.resolve-version.outputs.tag }}-Windows-arm64.msi`（安装版）或 `CC-Switch-${{ needs.resolve-version.outputs.tag }}-Windows-arm64-Portable.zip`（绿色版）
-            - **Linux (x86_64)**: `CC-Switch-${{ needs.resolve-version.outputs.tag }}-Linux-x86_64.AppImage` / `.deb` / `.rpm`
-            - **Linux (ARM64)**: `CC-Switch-${{ needs.resolve-version.outputs.tag }}-Linux-arm64.AppImage` / `.deb` / `.rpm`
-
-            > `.tar.gz` 为 Tauri updater 自动更新专用，无需手动下载。
+          body_path: release-body.md
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
