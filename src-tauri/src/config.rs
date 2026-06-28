@@ -678,6 +678,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn retry_transient_io_recovers_after_transient_errors() {
         // 模拟穿过符号链接时前两次返回 448/183（瞬时），第三次成功。
