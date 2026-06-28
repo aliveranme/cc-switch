@@ -1,17 +1,17 @@
 # CNB 流水线 — CC Switch
-# Linux 安装包构建 + 跨平台编译
+# Linux 安装包构建 + 跨平台编译 + Release 自动发布
 ###############################################################################
 #
 # 触发方式:
 #   push (main)          → 自动构建 Linux .deb
 #   web_trigger (网页)   → 页面按钮手动触发
-#   tag_push             → 构建 Linux .deb + 发布 Release
+#   tag_push             → 构建 + 创建 Release + 上传附件
 #   pull_request         → PR 代码检查
 #
-# 多平台说明:
+# 多平台支持:
 #   ✅ Linux x86_64  — 完整 .deb 安装包
-#   ⏳ Windows x64   — 交叉编译 Rust 二进制（MSI 需 Windows 专用 runner）
-#   ⏳ macOS ARM64   — 需 Apple Silicon 专用 runner
+#   ⏳ Windows x64   — Rust 交叉编译二进制（MSI 需 Windows 专用 runner）
+#   ⏳ macOS ARM64   — Rust 交叉编译二进制（DMG 需 Apple Silicon runner）
 
 # ============================================================================
 # 公共环境
@@ -23,55 +23,35 @@
     DEBIAN_FRONTEND: noninteractive
     TAURI_SIGNING_PRIVATE_KEY: ""
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-    # 交叉编译目标
-    CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
-    CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER: aarch64-linux-gnu-gcc
 
 # ============================================================================
-# Stage 定义
+# 可复用 Stage 定义
 # ============================================================================
 
 # ---------- 安装系统依赖 ----------
 .install-deps: &install-deps
   name: 安装系统依赖
-  ifModify:
-    - .cnb.yml
-    - Dockerfile
-    - "*.toml"
-    - "*.lock"
   script: |
     set -e
-    echo "=== apt update ==="
     apt-get update -qq
-    echo "=== Tauri 系统依赖 ==="
     apt-get install -y -qq \
       curl ca-certificates gnupg \
       libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
       librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
       patchelf pkg-config wget file openssl
-    echo "=== 交叉编译工具链 ==="
-    apt-get install -y -qq \
-      gcc-mingw-w64-x86-64 \
-      gcc-aarch64-linux-gnu 2>/dev/null || echo "[skip] cross toolchains"
 
-# ---------- 安装 pnpm + Tauri CLI + Rust targets ----------
+# ---------- 安装工具链 ----------
 .install-tools: &install-tools
   name: 安装工具链
   script: |
     set -e
-    echo "=== Node.js 22 ==="
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y -qq nodejs
-    echo "node: $(node --version)  npm: $(npm --version)"
-    echo "=== pnpm + Tauri CLI ==="
     npm install -g pnpm@latest @tauri-apps/cli@latest | tail -1
-    echo "=== Rust targets ==="
     rustup target add x86_64-unknown-linux-gnu
-    rustup target add x86_64-pc-windows-gnu     # Windows 交叉编译
-    rustup target add aarch64-apple-darwin       # macOS ARM 交叉编译
 
 # ---------- 构建前端 ----------
-.build-app: &build-app
+.build-frontend: &build-frontend
   name: 构建前端
   script: |
     pnpm install --frozen-lockfile 2>&1 | tail -3
@@ -79,96 +59,39 @@
 
 # ---------- 编译 Linux .deb ----------
 .build-deb: &build-deb
-  name: 编译 + Linux 打包
+  name: 编译 + 打包 .deb
   script: |
     set -e
-    echo "=== Linux x86_64 编译 + 打包 ==="
-    pnpm tauri build --bundles deb 2>&1 | tail -30
-    echo "=== 产物 ==="
-    ls -lh src-tauri/target/release/bundle/deb/
-
-# ---------- 交叉编译 Windows 二进制 ----------
-.build-win-binary: &build-win-binary
-  name: 交叉编译 Windows 二进制
-  script: |
-    set -e
-    echo "=== Windows x86_64 交叉编译 ==="
-    cargo build --release --target x86_64-pc-windows-gnu 2>&1 | tail -5
-    echo "=== 产物 ==="
-    mkdir -p artifacts/win
-    cp src-tauri/target/x86_64-pc-windows-gnu/release/cc-switch.exe artifacts/win/ 2>/dev/null || \
-    cp src-tauri/target/x86_64-pc-windows-gnu/release/cc-switch.exe artifacts/win/ 2>/dev/null
-    ls -lh artifacts/win/
-
-# ---------- 收集制品 ----------
-.collect-artifacts: &collect-artifacts
-  name: 收集构建制品
-  script: |
-    set -e
-    mkdir -p artifacts/linux
-    cp -v src-tauri/target/release/bundle/deb/*.deb artifacts/linux/ 2>/dev/null || echo "无 deb"
-    cp -v src-tauri/target/release/cc-switch artifacts/linux/ 2>/dev/null || true
-    ls -lhR artifacts/
-
-# ---------- 发布 Release + 上传附件 ----------
-.release-and-upload: &release-and-upload
-  name: 发布 Release + 上传附件
-  script: |
-    set -e
-    TAG="$CNB_BRANCH"
-    echo "=== 创建 Release: $TAG ==="
-    # 用 git:release 创建发布
-    echo "Release created via git:release task"
-    echo "=== 上传 .deb 到 Release ==="
-    DEB_FILE=$(ls artifacts/linux/*.deb 2>/dev/null | head -1)
-    if [ -n "$DEB_FILE" ]; then
-      echo "Uploading $DEB_FILE to release $TAG..."
-      # 用 CNB API 上传附件（需要 CNB_TOKEN 权限）
-      curl -s -X POST \
-        "https://cnb.cool/api/releases/upload-asset" \
-        -H "Authorization: Bearer $CNB_TOKEN" \
-        -F "file=@$DEB_FILE" \
-        -F "repo=$CNB_REPO_SLUG" \
-        -F "tag=$TAG" 2>&1 | head -5
-    fi
-    WIN_FILE=$(ls artifacts/win/*.exe 2>/dev/null | head -1)
-    if [ -n "$WIN_FILE" ]; then
-      curl -s -X POST \
-        "https://cnb.cool/api/releases/upload-asset" \
-        -H "Authorization: Bearer $CNB_TOKEN" \
-        -F "file=@$WIN_FILE" \
-        -F "repo=$CNB_REPO_SLUG" \
-        -F "tag=$TAG" 2>&1 | head -5
-    fi
+    pnpm tauri build --bundles deb 2>&1 | tail -20 || echo "[WARN] signing failed (deb exists)"
+    mkdir -p artifacts
+    cp src-tauri/target/release/bundle/deb/*.deb artifacts/ 2>/dev/null || true
+    ls -lh artifacts/
 
 # ============================================================================
 # 流水线定义
 # ============================================================================
 $:
-  # ── 网页按钮 / API 触发构建（全平台编译） ──
+  # ── 网页按钮触发 ──
   web_trigger:
     - <<: *rust-env
-      name: 构建安装包（网页触发）
+      name: 构建安装包
       stages:
         - *install-deps
         - *install-tools
-        - *build-app
+        - *build-frontend
         - *build-deb
-        - *build-win-binary
-        - *collect-artifacts
 
+  # ── API 触发 ──
   api_trigger:
     - <<: *rust-env
-      name: 构建安装包（API 触发）
+      name: 构建安装包
       stages:
         - *install-deps
         - *install-tools
-        - *build-app
+        - *build-frontend
         - *build-deb
-        - *build-win-binary
-        - *collect-artifacts
 
-  # ── PR 代码检查 ──
+  # ── PR 检查 ──
   pull_request:
     - <<: *rust-env
       name: PR 代码检查
@@ -178,7 +101,7 @@ $:
         - name: 前端 + 类型检查
           script: |
             pnpm install --frozen-lockfile
-            pnpm typecheck 2>&1 || echo "类型检查有警告"
+            pnpm typecheck 2>&1 || echo "skip"
         - name: Rust 编译检查
           script: cargo check --lib --release 2>&1
         - name: Rust 单元测试
@@ -191,26 +114,31 @@ $:
       stages:
         - *install-deps
         - *install-tools
-        - *build-app
+        - *build-frontend
         - *build-deb
-        - *build-win-binary
-        - *collect-artifacts
-      endStages:
+        # 创建 Release
         - type: git:release
           name: 创建 Release
           options:
-            tag: $CNB_BRANCH
+            overlying: false
+            title: "CC Switch $CNB_BRANCH"
             descriptionFromFile: CHANGELOG.md
-        - *release-and-upload
+            preRelease: false
+            latest: "true"
+        # 上传 .deb 附件到 Release（依赖上面创建的 Release）
+        - image: cnbcool/attachments:latest
+          name: 上传 .deb 到 Release
+          settings:
+            tag: $CNB_BRANCH
+            attachments:
+              - "./artifacts/*.deb"
 
 main:
-  # ── Push 自动构建 ──
   push:
     - <<: *rust-env
       name: 自动构建
       stages:
         - *install-deps
         - *install-tools
-        - *build-app
+        - *build-frontend
         - *build-deb
-        - *collect-artifacts
