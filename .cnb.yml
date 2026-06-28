@@ -3,13 +3,11 @@
 # pull_request → PR 代码审查（类型检查 + Rust 编译 + 测试）
 # push (main)  → 提交后自动检查
 
-.rust-env: &rust-env
+.ci-pipeline: &ci-pipeline
   docker:
     image: rust:1.95-bookworm
   env:
     DEBIAN_FRONTEND: noninteractive
-
-.steps: &steps
   stages:
     - name: 安装依赖
       script: |
@@ -36,10 +34,8 @@
 
 $:
   pull_request:
-    - <<: *rust-env
-      <<: *steps
+    - *ci-pipeline
 
 main:
   push:
-    - <<: *rust-env
-      <<: *steps
+    - *ci-pipeline
