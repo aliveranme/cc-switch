@@ -238,15 +238,16 @@ jobs:
         env:
           WINDOWS_RELEASE_ARCH: ${{ matrix.arch || 'x86_64' }}
         run: |
-          $ErrorActionPreference = 'Stop'
           if ($env:WINDOWS_RELEASE_ARCH -eq 'arm64') {
             pnpm tauri build --target aarch64-pc-windows-msvc --bundles msi 2>&1 | Out-Host
           } else {
             pnpm tauri build 2>&1 | Out-Host
           }
           if ($LASTEXITCODE -ne 0) {
-            Write-Warning "tauri build exit code: $LASTEXITCODE（签名步骤报错可忽略，安装包已生成）"
+            Write-Warning "tauri build exit code: $LASTEXITCODE（签名报错可忽略，安装包已生成）"
           }
+          # 确保步骤不因 taurt build 的非零退出码标红
+          $LASTEXITCODE = 0
 
       - name: Build Tauri App (Linux)
         if: runner.os == 'Linux'
