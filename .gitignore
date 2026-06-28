@@ -34,3 +34,6 @@ mainWindow.js
 .atl/
 .pi/
 claude-code-reverse/
+
+# CNB pipeline validator
+.agents/skills/cnb-pipeline/validator/node_modules/
