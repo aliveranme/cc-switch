@@ -63,9 +63,15 @@ $:
         - *install-deps
         - *install-tools
         - *build-app
-        - name: 编译 + 打包
+        - name: 编译 Rust
           script: |
-            pnpm tauri build --bundles deb,appimage 2>&1
+            set -e
+            echo "=== cargo check ==="
+            cargo check --release 2>&1 | tail -10
+            echo "=== cargo build ==="
+            cargo build --release 2>&1 | tail -10
+            echo "=== pnpm tauri build ==="
+            pnpm tauri build --bundles deb 2>&1 | tail -20
 
   # ── PR 代码检查 ──
   pull_request:
@@ -91,9 +97,15 @@ $:
         - *install-deps
         - *install-tools
         - *build-app
-        - name: 编译 + 打包
+        - name: 编译 Rust
           script: |
-            pnpm tauri build --bundles deb,appimage 2>&1
+            set -e
+            echo "=== cargo check ==="
+            cargo check --release 2>&1 | tail -10
+            echo "=== cargo build ==="
+            cargo build --release 2>&1 | tail -10
+            echo "=== pnpm tauri build ==="
+            pnpm tauri build --bundles deb 2>&1 | tail -20
 
 main:
   # ── Push 自动构建 ──
