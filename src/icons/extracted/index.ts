@@ -11,10 +11,12 @@ import _claudecn from "./claudecn.png";
 import _cherryin from "./cherryin.png";
 import _eflowcode from "./eflowcode.png";
 import _etok from "./etok.png";
+import _fenno from "./fenno-icon.webp";
 import _hermes from "./hermes.png";
 import _huoshan from "./huoshan.png";
 import _pateway from "./pateway.jpg";
 import _pipellm from "./pipellm.png";
+import _qiniu from "./qiniu.png";
 import _relaxcode from "./relaxcode.png";
 import _runapi from "./runapi.jpg";
 import _shengsuanyun from "./shengsuanyun.svg?url";
@@ -105,10 +107,12 @@ export const iconUrls: Record<string, string> = {
   cherryin: _cherryin,
   eflowcode: _eflowcode,
   etok: _etok,
+  fenno: _fenno,
   hermes: _hermes,
   huoshan: _huoshan,
   pateway: _pateway,
   pipellm: _pipellm,
+  qiniu: _qiniu,
   relaxcode: _relaxcode,
   runapi: _runapi,
   shengsuanyun: _shengsuanyun,
