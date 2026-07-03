@@ -217,14 +217,15 @@ pub fn write_codex_live_atomic(
         None => String::new(),
     };
 
-    // Merge new config with existing config to preserve user settings
-    let merged_text = merge_codex_config_text(&cfg_text)?;
+    if !cfg_text.trim().is_empty() {
+        toml::from_str::<toml::Table>(&cfg_text).map_err(|e| AppError::toml(&config_path, e))?;
+    }
 
     // 第一步：写 auth.json
     write_json_file(&auth_path, auth)?;
 
     // 第二步：写 config.toml（失败则回滚 auth.json）
-    if let Err(e) = write_text_file(&config_path, &merged_text) {
+    if let Err(e) = write_text_file(&config_path, &cfg_text) {
         // 回滚 auth.json
         if let Some(bytes) = old_auth {
             let _ = atomic_write(&auth_path, &bytes);
@@ -263,61 +264,6 @@ pub fn read_and_validate_codex_config_text() -> Result<String, AppError> {
     validate_config_toml(&s)?;
     Ok(s)
 }
-
-/// Deep-merge TOML tables: recursively overlay `src` values onto `dest`.
-/// Tables are merged recursively; all other values are overwritten.
-fn merge_toml_table_into(dest: &mut toml::Table, src: &toml::Table) {
-    for (key, src_val) in src {
-        match src_val {
-            toml::Value::Table(src_table) => {
-                if let Some(toml::Value::Table(dest_table)) = dest.get_mut(key) {
-                    merge_toml_table_into(dest_table, src_table);
-                } else {
-                    dest.insert(key.clone(), src_val.clone());
-                }
-            }
-            _ => {
-                dest.insert(key.clone(), src_val.clone());
-            }
-        }
-    }
-}
-
-/// Merge a new provider config into the existing `~/.codex/config.toml`.
-///
-/// This preserves user-specific settings (`[features]`, `[tui]`, `[memories]`,
-/// `[tools]`, `developer_instructions`, etc.) that are not part of the provider
-/// config, while still updating provider-specific fields (`model`, `model_provider`,
-/// `[model_providers.*]`, etc.).
-pub fn merge_codex_config_text(new_text: &str) -> Result<String, AppError> {
-    let config_path = get_codex_config_path();
-
-    // Read existing config
-    let existing_text = if config_path.exists() {
-        fs::read_to_string(&config_path).map_err(|e| AppError::io(&config_path, e))?
-    } else {
-        String::new()
-    };
-
-    let mut merged: toml::Table = if existing_text.trim().is_empty() {
-        toml::Table::new()
-    } else {
-        existing_text
-            .parse::<toml::Table>()
-            .map_err(|e| AppError::toml(&config_path, e))?
-    };
-
-    // Parse and overlay the new config
-    if !new_text.trim().is_empty() {
-        let new_table: toml::Table = new_text
-            .parse::<toml::Table>()
-            .map_err(|e| AppError::toml(&config_path, e))?;
-        merge_toml_table_into(&mut merged, &new_table);
-    }
-
-    toml::to_string_pretty(&merged).map_err(|e| AppError::Config(format!("TOML serialization error: {e}")))
-}
-
 fn active_codex_model_provider_id(doc: &DocumentMut) -> Option<String> {
     doc.get("model_provider")
         .and_then(|item| item.as_str())
@@ -346,10 +292,11 @@ pub fn write_codex_live_config_atomic(config_text_opt: Option<&str>) -> Result<(
         None => String::new(),
     };
 
-    // Merge new config with existing config to preserve user settings
-    let merged_text = merge_codex_config_text(&cfg_text)?;
+    if !cfg_text.trim().is_empty() {
+        toml::from_str::<toml::Table>(&cfg_text).map_err(|e| AppError::toml(&config_path, e))?;
+    }
 
-    write_text_file(&config_path, &merged_text)
+    write_text_file(&config_path, &cfg_text)
 }
 
 pub fn extract_codex_auth_api_key(auth: &Value) -> Option<String> {
