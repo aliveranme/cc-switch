@@ -2123,7 +2123,13 @@ impl ProviderService {
             .proxy_service
             .detect_takeover_in_live_config_for_app(&app_type);
 
-        let should_hot_switch = is_app_taken_over || live_taken_over;
+        // For Codex/Gemini: only hot-switch when proxy is actively managing the config.
+        // A stale backup (without active takeover) must NOT block the normal write path.
+        // For Claude/others: the backup IS the takeover signal.
+        let should_hot_switch = match app_type {
+            AppType::Codex | AppType::Gemini => live_taken_over,
+            _ => is_app_taken_over || live_taken_over,
+        };
 
         // Block switching to official providers when proxy takeover is active.
         // Using a proxy with official APIs (Anthropic/OpenAI/Google) may cause account bans.
