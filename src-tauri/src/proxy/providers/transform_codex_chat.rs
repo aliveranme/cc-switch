@@ -506,8 +506,12 @@ fn collapse_system_messages_to_head(messages: Vec<Value>) -> Vec<Value> {
                 if !trimmed.is_empty() {
                     system_chunks.push(text.to_string());
                 }
-                continue;
             }
+            // 无论 content 是否为有效的非空字符串——role=system 的消息
+            // 都不应进入 rest。空/缺失 content 的 system 消息若落入 rest
+            // 会在 Chat 请求体中产生多余的 role=system 项，导致上游
+            // 拒绝（DeepSeek/OpenCode Go 等严格实现的 HTTP 400）。
+            continue;
         }
         rest.push(msg);
     }
