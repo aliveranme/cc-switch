@@ -40,3 +40,12 @@ claude-code-reverse/
 # CodeBuddy local tool state (skills cache + runtime memory)
 .codebuddy/
 .workbuddy/
+
+# Analysis artifacts
+ampcode-analysis/
+
+# ZCode working files
+.zcode/
+
+# CLI proxy API
+CLIProxyAPI/
