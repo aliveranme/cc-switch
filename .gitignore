@@ -49,3 +49,6 @@ ampcode-analysis/
 
 # CLI proxy API
 CLIProxyAPI/
+
+# Independent plugins workspace (contains its own .git)
+plugins/
