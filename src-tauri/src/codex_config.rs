@@ -93,7 +93,7 @@ fn codex_native_gateway_rejects_web_search(config_text: &str) -> bool {
     }
     false
 }
-const CODEX_MODEL_CATALOG_TEMPLATE_SLUG: &str = "gpt-5.5";
+const CODEX_MODEL_CATALOG_TEMPLATE_SLUG: &str = "gpt-5.6-sol";
 
 /// Which Codex tool surface the generated model catalog should target.
 ///
@@ -445,7 +445,7 @@ fn codex_catalog_model_entry(
         // (type=="custom") tool. Strip any key that would make Codex emit a
         // custom/freeform tool, and rely on shell_type="shell_command" for
         // edits. Defensive even though the native template is already clean
-        // (guards against template drift / an accidental gpt-5.5 clone).
+        // (guards against template drift / an accidental gpt-5.6-sol clone).
         //
         // NOTE: `base_instructions` is NOT stripped — Codex's catalog parser
         // treats it as a REQUIRED field and refuses to load the file without
@@ -456,6 +456,12 @@ fn codex_catalog_model_entry(
             "web_search_tool_type",
             "tools",
             "model_messages",
+            // OpenAI-specific — native third-party /responses gateways do not
+            // support multi-agent delegation.
+            "multi_agent_version",
+            // OpenAI-specific — native gateways may not implement the lite
+            // Responses format; strip to use the full format for compatibility.
+            "use_responses_lite",
         ] {
             entry_obj.remove(key);
         }
@@ -801,22 +807,22 @@ fn load_codex_model_template_from_bundled() -> Result<Option<Value>, AppError> {
 }
 
 fn load_codex_model_template_static() -> Option<Value> {
-    let text = include_str!("resources/gpt5_5_template.json");
+    let text = include_str!("resources/gpt5_6_sol_template.json");
     match serde_json::from_str(text) {
         Ok(template) => Some(template),
         Err(e) => {
-            log::warn!("Failed to parse bundled gpt-5.5 template: {e}");
+            log::warn!("Failed to parse bundled gpt-5.6-sol template: {e}");
             None
         }
     }
 }
 
 /// Bundled clean template for native `/responses` providers. Unlike the
-/// gpt-5.5 template it carries NO freeform `apply_patch` / `web_search` tool
+/// gpt-5.6-sol template it carries NO freeform `apply_patch` / `web_search` tool
 /// declarations and no GPT-5 base_instructions, so Codex never emits a
 /// `type=="custom"` tool that native gateways (MiMo/MiniMax/…) reject. Edits
 /// flow through `shell_type="shell_command"` instead. We deliberately do NOT
-/// fall back to `models_cache.json` here (that would reintroduce gpt-5.5's
+/// fall back to `models_cache.json` here (that would reintroduce gpt-5.6-sol's
 /// freeform apply_patch).
 fn load_codex_native_responses_template() -> Value {
     let text = include_str!("resources/codex_native_responses_template.json");
@@ -867,7 +873,7 @@ fn codex_model_catalog_from_settings(
     }
 
     // Native providers use the bundled clean template (no freeform apply_patch,
-    // no cache dependency); proxy-chat providers keep cloning Codex's gpt-5.5
+    // no cache dependency); proxy-chat providers keep cloning Codex's gpt-5.6-sol
     // entry so the proxy can rewrite custom<->function tools as before.
     let template = match profile {
         CodexCatalogToolProfile::NativeResponses => load_codex_native_responses_template(),
@@ -2929,8 +2935,8 @@ web_search = "disabled"
             load_codex_model_template_static().expect("static template must parse as valid JSON");
         assert_eq!(
             template.get("slug").and_then(|v| v.as_str()),
-            Some("gpt-5.5"),
-            "static template slug must be gpt-5.5"
+            Some("gpt-5.6-sol"),
+            "static template slug must be gpt-5.6-sol"
         );
     }
 
