@@ -53,3 +53,8 @@ CLIProxyAPI/
 # Independent plugins workspace (contains its own .git)
 plugins/
 chatgpt-desktop-analysis/
+
+# Local Codex experimentation and desktop patching resources
+codex/
+scripts/patch-codex-macos.mjs
+src-tauri/codex-windows-fast-patch-skill/
