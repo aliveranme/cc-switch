@@ -476,7 +476,8 @@ fn codex_catalog_model_entry(
             "multi_agent_version",
             // OpenAI-specific — native gateways may not implement the lite
             // Responses format; strip to use the full format for compatibility.
-            "use_responses_lite",
+            // NOTE: use_responses_lite is now preserved (explicit false in template) to
+            // ensure Codex emits tool_use items in the correct format.
         ] {
             entry_obj.remove(key);
         }
