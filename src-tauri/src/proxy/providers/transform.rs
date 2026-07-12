@@ -54,41 +54,18 @@ pub fn is_openai_o_series(model: &str) -> bool {
         && model.as_bytes().get(1).is_some_and(|b| b.is_ascii_digit())
 }
 
-/// Detect models that support `reasoning_effort`.
+/// Detect OpenAI models that support reasoning_effort.
 ///
 /// Supported families:
 /// - o-series: o1, o3, o4-mini, etc.
 /// - GPT-5+: gpt-5, gpt-5.1, gpt-5.4, gpt-5-codex, etc.
-/// - GLM: glm-5+, glm-4.6+ (via CF Workers AI, Z.AI, etc.)
-/// - Kimi/Moonshot: kimi-k2+, moonshot models (via CF Workers AI, etc.)
-///   CF Workers AI exposes `reasoning_effort` as a supported parameter
-///   for these reasoning models. Official APIs may use `thinking` instead,
-///   but the extra field is harmless (OpenAI-compatible APIs ignore unknown
-///   parameters).
 pub fn supports_reasoning_effort(model: &str) -> bool {
-    let lower = model.to_lowercase();
     is_openai_o_series(model)
-        || lower
+        || model
+            .to_lowercase()
             .strip_prefix("gpt-")
             .and_then(|rest| rest.chars().next())
             .is_some_and(|c| c.is_ascii_digit() && c >= '5')
-        // GLM 系列：glm-4.6+, glm-5+（含 CF Workers AI 前缀如 @cf/zai-org/glm-5.2）
-        || lower.contains("glm-")
-        // Kimi 系列：kimi-k2+（含 Moonshot API 前缀如 moonshot/kimi-k2）
-        || lower.contains("kimi-k2")
-        // Moonshot 自有模型（不含 kimi 前缀）
-        || lower.contains("moonshot")
-}
-
-/// Detect DeepSeek reasoning models (deepseek-chat, deepseek-reasoner,
-/// deepseek-v4-*, etc.).
-///
-/// DeepSeek supports `reasoning_effort` but only accepts `"high"` and `"max"`
-/// — any other value causes a 400 error. This detection enables the Claude
-/// Code → OpenAI Chat conversion path to inject the correct effort.
-pub fn is_deepseek_reasoning_model(model: &str) -> bool {
-    let lower = model.to_lowercase();
-    lower.contains("deepseek")
 }
 
 /// Resolve the appropriate OpenAI `reasoning_effort` from an Anthropic request body.
@@ -220,18 +197,6 @@ pub fn anthropic_to_openai_with_reasoning_content(
     if supports_reasoning_effort(model) {
         if let Some(effort) = resolve_reasoning_effort(&body) {
             result["reasoning_effort"] = json!(effort);
-        }
-    } else if is_deepseek_reasoning_model(model) {
-        // DeepSeek only accepts "high" and "max" for reasoning_effort.
-        // Map: xhigh (from adaptive/max) → "max", everything else → "high".
-        // This mirrors the Codex path's `effort_value_mode: "deepseek"` logic
-        // in codex.rs → map_reasoning_effort().
-        if let Some(effort) = resolve_reasoning_effort(&body) {
-            let mapped = match effort {
-                "xhigh" => "max",
-                _ => "high",
-            };
-            result["reasoning_effort"] = json!(mapped);
         }
     }
 
@@ -525,97 +490,35 @@ fn convert_message_to_openai(
     Ok(result)
 }
 
-/// 清理 JSON schema（移除不支持的 format，确保 OpenAI 兼容性）。
-///
-/// # `type: "object"` 补全策略
-///
-/// OpenAI Chat Completions 的 function parameters 要求根级别必须有
-/// `type: "object"`，否则严格校验的上游（如 DeepSeek）会报
-/// `schema must be a JSON Schema of 'type: "object"', got 'type: null'`。
-/// Anthropic 允许省略 type，转换时需要补上。
-///
-/// ## 安全规则
-///
-/// 只在以下条件**全部满足**时注入 `type: "object"`：
-/// - schema 是 JSON Object 且没有 compound 关键字
-///   (`anyOf`/`oneOf`/`allOf`/`$ref`/`not`/`if`/`then`/`else`/`dependencies`)
-/// - schema 没有 `const` 或 `enum`（不幻想一个值是什么类型）
-/// - schema 没有非 `null` 的 `type` 字段
-///
-/// ## 递归范围
-///
-/// 递归进入以下关键字（它们本身都是 sub-schema）：
-/// - `properties` 值 · `items` · `additionalProperties`
-/// - `patternProperties` 值 · `$defs` 值
-/// - `allOf`/`anyOf`/`oneOf` 数组元素 · `not`/`if`/`then`/`else`
-pub fn clean_schema(mut schema: Value) -> Value {
+/// 清理工具参数的 JSON schema，并为根 schema 补齐 OpenAI 要求的 object 类型。
+pub fn clean_schema(schema: Value) -> Value {
+    clean_schema_inner(schema, true)
+}
+
+fn clean_schema_inner(mut schema: Value, is_root: bool) -> Value {
     if let Some(obj) = schema.as_object_mut() {
-        // ── 安全注入 type: "object" ──
-        // 仅在 schema 不是 compound、没有 const/enum/已有 type 时才补。
-        let has_compound = obj.contains_key("anyOf")
-            || obj.contains_key("oneOf")
-            || obj.contains_key("allOf")
-            || obj.contains_key("$ref")
-            || obj.contains_key("not")
-            || obj.contains_key("if")
-            || obj.contains_key("then")
-            || obj.contains_key("else")
-            || obj.contains_key("dependencies");
-        let has_type = matches!(obj.get("type"), Some(Value::String(s)) if !s.is_empty());
-        let has_const_or_enum = obj.contains_key("const") || obj.contains_key("enum");
-        if !has_compound && !has_type && !has_const_or_enum {
+        let missing_type = is_root && !obj.contains_key("type");
+        if missing_type {
             obj.insert("type".to_string(), json!("object"));
         }
+        if missing_type && !obj.contains_key("properties") {
+            obj.insert("properties".to_string(), json!({}));
+        }
 
-        // 移除 "format": "uri"（DeepSeek 不接受某些 format）
+        // 移除 "format": "uri"
         if obj.get("format").and_then(|v| v.as_str()) == Some("uri") {
             obj.remove("format");
         }
 
-        // ── 递归清理 ──
-        // 注意：这里使用 take 代替 clone 避免不必要的分配，
-        // 但 clean_schema 外部可能仍持有旧引用，所以用 clone 安全。
-        // 内部递归保持 clone，因为编译器不能证明借用安全。
-        if let Some(props) = obj.get_mut("properties").and_then(|v| v.as_object_mut()) {
-            for val in props.values_mut() {
-                *val = clean_schema(val.clone());
+        // 递归清理嵌套 schema
+        if let Some(properties) = obj.get_mut("properties").and_then(|v| v.as_object_mut()) {
+            for (_, value) in properties.iter_mut() {
+                *value = clean_schema_inner(value.clone(), false);
             }
         }
+
         if let Some(items) = obj.get_mut("items") {
-            *items = clean_schema(items.clone());
-        }
-        if let Some(add_props) = obj.get_mut("additionalProperties") {
-            if add_props.is_object() {
-                *add_props = clean_schema(add_props.clone());
-            }
-        }
-        if let Some(pat_props) = obj
-            .get_mut("patternProperties")
-            .and_then(|v| v.as_object_mut())
-        {
-            for val in pat_props.values_mut() {
-                *val = clean_schema(val.clone());
-            }
-        }
-        if let Some(defs) = obj.get_mut("$defs").and_then(|v| v.as_object_mut()) {
-            for val in defs.values_mut() {
-                *val = clean_schema(val.clone());
-            }
-        }
-        // compound 子 schema
-        for key in &["allOf", "anyOf", "oneOf"] {
-            if let Some(arr) = obj.get_mut(*key).and_then(|v| v.as_array_mut()) {
-                for val in arr.iter_mut() {
-                    *val = clean_schema(val.clone());
-                }
-            }
-        }
-        for key in &["not", "if", "then", "else"] {
-            if let Some(sub) = obj.get_mut(*key) {
-                if sub.is_object() {
-                    *sub = clean_schema(sub.clone());
-                }
-            }
+            *items = clean_schema_inner(items.clone(), false);
         }
     }
     schema
@@ -940,6 +843,75 @@ mod tests {
         let result = anthropic_to_openai(input).unwrap();
         assert_eq!(result["tools"][0]["type"], "function");
         assert_eq!(result["tools"][0]["function"]["name"], "get_weather");
+        assert_eq!(
+            result["tools"][0]["function"]["parameters"]["type"],
+            json!("object")
+        );
+        assert_eq!(
+            result["tools"][0]["function"]["parameters"]["properties"]["location"]["type"],
+            json!("string")
+        );
+    }
+
+    #[test]
+    fn test_anthropic_to_openai_defaults_missing_tool_schema_type() {
+        let input = json!({
+            "model": "claude-3-opus",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "What's the weather?"}],
+            "tools": [{
+                "name": "get_weather",
+                "description": "Get weather info",
+                "input_schema": {"properties": {"location": {"type": "string"}}}
+            }]
+        });
+
+        let result = anthropic_to_openai(input).unwrap();
+        let parameters = &result["tools"][0]["function"]["parameters"];
+        assert_eq!(parameters["type"], json!("object"));
+        assert_eq!(
+            parameters["properties"]["location"]["type"],
+            json!("string")
+        );
+    }
+
+    #[test]
+    fn test_anthropic_to_openai_defaults_empty_tool_schema() {
+        let input = json!({
+            "model": "claude-3-opus",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "Do work"}],
+            "tools": [{"name": "do_work", "input_schema": {}}]
+        });
+
+        let result = anthropic_to_openai(input).unwrap();
+        let parameters = &result["tools"][0]["function"]["parameters"];
+        assert_eq!(parameters, &json!({"type": "object", "properties": {}}));
+    }
+
+    #[test]
+    fn test_clean_schema_only_defaults_root_to_object() {
+        let schema = json!({
+            "properties": {
+                "nullable_value": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}]
+                },
+                "list": {
+                    "items": {"type": "string"}
+                }
+            }
+        });
+
+        let result = clean_schema(schema);
+        assert_eq!(result["type"], json!("object"));
+        assert_eq!(
+            result["properties"]["nullable_value"],
+            json!({"anyOf": [{"type": "string"}, {"type": "null"}]})
+        );
+        assert_eq!(
+            result["properties"]["list"],
+            json!({"items": {"type": "string"}})
+        );
     }
 
     #[test]
@@ -1590,151 +1562,6 @@ mod tests {
         assert!(supports_reasoning_effort("gpt-5-codex"));
         assert!(!supports_reasoning_effort("gpt-4o"));
         assert!(!supports_reasoning_effort("claude-sonnet-4-6"));
-        // GLM models (CF Workers AI, Z.AI)
-        assert!(supports_reasoning_effort("glm-5.2"));
-        assert!(supports_reasoning_effort("glm-5.1"));
-        assert!(supports_reasoning_effort("glm-5"));
-        assert!(supports_reasoning_effort("glm-4.7"));
-        assert!(supports_reasoning_effort("@cf/zai-org/glm-5.2"));
-        // Kimi/Moonshot models (CF Workers AI, Moonshot API)
-        assert!(supports_reasoning_effort("kimi-k2.7-code"));
-        assert!(supports_reasoning_effort("kimi-k2.6"));
-        assert!(supports_reasoning_effort("@cf/moonshotai/kimi-k2.7-code"));
-        assert!(supports_reasoning_effort("moonshot/kimi-k2"));
-    }
-
-    // ── is_deepseek_reasoning_model unit tests ──
-
-    #[test]
-    fn test_is_deepseek_reasoning_model() {
-        assert!(is_deepseek_reasoning_model("deepseek-chat"));
-        assert!(is_deepseek_reasoning_model("deepseek-reasoner"));
-        assert!(is_deepseek_reasoning_model("deepseek-v4-pro"));
-        assert!(is_deepseek_reasoning_model("DeepSeek-V4-Flash"));
-        assert!(!is_deepseek_reasoning_model("gpt-5"));
-        assert!(!is_deepseek_reasoning_model("glm-5.2"));
-    }
-
-    #[test]
-    fn test_deepseek_thinking_enabled_maps_to_high() {
-        // Claude Code sends thinking.enabled with budget_tokens.
-        // DeepSeek only accepts "high" and "max" — budget <16k should map to "high".
-        let input = json!({
-            "model": "deepseek-chat",
-            "max_tokens": 1024,
-            "thinking": {"type": "enabled", "budget_tokens": 8000}
-        });
-        let result = anthropic_to_openai(input).unwrap();
-        assert_eq!(result["reasoning_effort"], "high");
-    }
-
-    #[test]
-    fn test_deepseek_thinking_adaptive_maps_to_max() {
-        // Claude Code sends thinking.adaptive → resolve_reasoning_effort returns "xhigh"
-        // → DeepSeek maps "xhigh" to "max".
-        let input = json!({
-            "model": "deepseek-reasoner",
-            "max_tokens": 4096,
-            "thinking": {"type": "adaptive"}
-        });
-        let result = anthropic_to_openai(input).unwrap();
-        assert_eq!(result["reasoning_effort"], "max");
-    }
-
-    #[test]
-    fn test_deepseek_output_config_max_maps_to_max() {
-        let input = json!({
-            "model": "deepseek-v4-pro",
-            "max_tokens": 4096,
-            "output_config": {"effort": "max"}
-        });
-        let result = anthropic_to_openai(input).unwrap();
-        assert_eq!(result["reasoning_effort"], "max");
-    }
-
-    #[test]
-    fn test_deepseek_no_thinking_no_effort() {
-        // When thinking is disabled/absent, no reasoning_effort should be injected.
-        let input = json!({
-            "model": "deepseek-chat",
-            "max_tokens": 1024
-        });
-        let result = anthropic_to_openai(input).unwrap();
-        assert!(result.get("reasoning_effort").is_none());
-    }
-
-    // ── GLM reasoning_effort injection tests (Claude Code → OpenAI Chat path) ──
-
-    #[test]
-    fn test_glm_thinking_enabled_injects_reasoning_effort() {
-        // Claude Code sends thinking.enabled with budget_tokens.
-        // GLM uses standard OpenAI reasoning_effort values (passthrough).
-        let input = json!({
-            "model": "@cf/zai-org/glm-5.2",
-            "max_tokens": 1024,
-            "thinking": {"type": "enabled", "budget_tokens": 8000}
-        });
-        let result = anthropic_to_openai(input).unwrap();
-        assert_eq!(result["reasoning_effort"], "medium");
-    }
-
-    #[test]
-    fn test_glm_thinking_adaptive_injects_xhigh() {
-        // Claude Code sends thinking.adaptive → resolve_reasoning_effort returns "xhigh".
-        // GLM on CF Workers AI accepts standard OpenAI values.
-        let input = json!({
-            "model": "glm-5.2",
-            "max_tokens": 4096,
-            "thinking": {"type": "adaptive"}
-        });
-        let result = anthropic_to_openai(input).unwrap();
-        assert_eq!(result["reasoning_effort"], "xhigh");
-    }
-
-    #[test]
-    fn test_glm_no_thinking_no_effort() {
-        let input = json!({
-            "model": "glm-5.2",
-            "max_tokens": 1024
-        });
-        let result = anthropic_to_openai(input).unwrap();
-        assert!(result.get("reasoning_effort").is_none());
-    }
-
-    // ── Kimi/Moonshot reasoning_effort injection tests (Claude Code → OpenAI Chat path) ──
-
-    #[test]
-    fn test_kimi_thinking_enabled_injects_reasoning_effort() {
-        // Claude Code sends thinking.enabled with budget_tokens.
-        // Kimi K2.7 Code on CF Workers AI accepts standard OpenAI reasoning_effort.
-        let input = json!({
-            "model": "@cf/moonshotai/kimi-k2.7-code",
-            "max_tokens": 1024,
-            "thinking": {"type": "enabled", "budget_tokens": 8000}
-        });
-        let result = anthropic_to_openai(input).unwrap();
-        assert_eq!(result["reasoning_effort"], "medium");
-    }
-
-    #[test]
-    fn test_kimi_thinking_adaptive_injects_xhigh() {
-        let input = json!({
-            "model": "kimi-k2.7-code",
-            "max_tokens": 4096,
-            "thinking": {"type": "adaptive"}
-        });
-        let result = anthropic_to_openai(input).unwrap();
-        assert_eq!(result["reasoning_effort"], "xhigh");
-    }
-
-    #[test]
-    fn test_kimi_no_thinking_no_effort() {
-        let input = json!({
-            "model": "kimi-k2.6",
-            "max_tokens": 1024
-        });
-        let result = anthropic_to_openai(input).unwrap();
-        assert!(result.get("reasoning_effort").is_none());
     }
 
     // ── resolve_reasoning_effort unit tests ──
