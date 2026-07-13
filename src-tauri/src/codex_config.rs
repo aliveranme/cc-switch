@@ -1240,6 +1240,24 @@ pub fn prepare_codex_live_config_text_with_optional_catalog(
     }
 }
 
+/// Prepare a provider-owned live config. Third-party providers that only have
+/// a top-level TOML `model` receive a generated one-row catalog; official
+/// OpenAI configs stay untouched unless they explicitly carry a catalog.
+pub fn prepare_codex_provider_live_config_text_with_catalog(
+    settings: &Value,
+    category: Option<&str>,
+    config_text: &str,
+    profile: CodexCatalogToolProfile,
+) -> Result<String, AppError> {
+    let catalog_settings = if category.is_some_and(|value| value.eq_ignore_ascii_case("official")) {
+        settings.clone()
+    } else {
+        settings_with_codex_model_catalog_fallback(settings, config_text)
+    };
+
+    prepare_codex_config_text_with_model_catalog(&catalog_settings, config_text, profile)
+}
+
 pub fn write_codex_provider_live_with_catalog(
     settings: &Value,
     category: Option<&str>,
@@ -1250,17 +1268,9 @@ pub fn write_codex_provider_live_with_catalog(
     // Never synthesize a custom catalog for OpenAI's official config. For every
     // third-party config, however, provide a one-model fallback when the form
     // did not persist an explicit modelCatalog, so Codex can render its slider.
-    let catalog_settings = config_text.map(|text| {
-        if category.is_some_and(|value| value.eq_ignore_ascii_case("official")) {
-            settings.clone()
-        } else {
-            settings_with_codex_model_catalog_fallback(settings, text)
-        }
-    });
     let prepared_config = config_text
-        .zip(catalog_settings.as_ref())
-        .map(|(text, catalog_settings)| {
-            prepare_codex_config_text_with_model_catalog(catalog_settings, text, profile)
+        .map(|text| {
+            prepare_codex_provider_live_config_text_with_catalog(settings, category, text, profile)
         })
         .transpose()?;
 
@@ -2815,6 +2825,26 @@ base_url = "https://production.api/v1"
             settings_with_codex_model_catalog_fallback(&explicit, "model = \"ignored\""),
             explicit,
             "an explicit catalog remains the DB source of truth"
+        );
+    }
+
+    #[test]
+    fn provider_live_catalog_fallback_projects_a_top_level_model() {
+        let prepared = prepare_codex_provider_live_config_text_with_catalog(
+            &json!({ "auth": {} }),
+            Some("custom"),
+            "model = \"third-party-coder\"\nmodel_provider = \"custom\"\n",
+            CodexCatalogToolProfile::NativeResponses,
+        )
+        .unwrap();
+
+        let parsed: toml::Value = toml::from_str(&prepared).unwrap();
+        assert_eq!(
+            parsed
+                .get("model_catalog_json")
+                .and_then(|value| value.as_str()),
+            Some(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME),
+            "proxy takeover must project a fallback catalog instead of stripping it"
         );
     }
 

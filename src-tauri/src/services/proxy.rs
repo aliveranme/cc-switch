@@ -2387,11 +2387,9 @@ impl ProxyService {
             return;
         };
 
-        let model_catalog = provider
-            .settings_config
-            .get("modelCatalog")
-            .cloned()
-            .unwrap_or_else(|| json!({ "models": [] }));
+        let Some(model_catalog) = provider.settings_config.get("modelCatalog").cloned() else {
+            return;
+        };
 
         if let Some(root) = live_config.as_object_mut() {
             root.insert("modelCatalog".to_string(), model_catalog);
@@ -2506,11 +2504,19 @@ impl ProxyService {
                 let profile = provider
                     .map(crate::proxy::providers::resolve_codex_catalog_tool_profile)
                     .unwrap_or(crate::codex_config::CodexCatalogToolProfile::ProxyChat);
-                let prepared_config =
+                let prepared_config = if let Some(provider) = provider {
+                    crate::codex_config::prepare_codex_provider_live_config_text_with_catalog(
+                        config,
+                        provider.category.as_deref(),
+                        config_str,
+                        profile,
+                    )
+                } else {
                     crate::codex_config::prepare_codex_live_config_text_with_optional_catalog(
                         config, config_str, profile,
                     )
-                    .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
+                }
+                .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
                 let live_config =
                     crate::codex_config::prepare_codex_provider_live_config(auth, &prepared_config)
                         .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
