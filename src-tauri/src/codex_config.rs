@@ -537,6 +537,14 @@ fn codex_catalog_model_entry(
         }
     }
 
+    // ProxyChat providers (third-party via chat-completions relay) inherit
+    // the template's use_responses_lite, which may be true for OpenAI models.
+    // Force false for all third-party providers since the lite format is
+    // OpenAI-specific and not supported by third-party gateways.
+    if profile == CodexCatalogToolProfile::ProxyChat {
+        entry_obj.insert("use_responses_lite".to_string(), json!(false));
+    }
+
     entry
 }
 
