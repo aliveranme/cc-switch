@@ -33,9 +33,7 @@
   "visibility": "list",
   "supported_in_api": true,
   "priority": 0,
-  "additional_speed_tiers": [
-    "fast"
-  ],
+  "additional_speed_tiers": ["fast"],
   "service_tiers": [
     {
       "id": "priority",
@@ -59,10 +57,7 @@
   },
   "apply_patch_tool_type": "freeform",
   "supports_parallel_tool_calls": true,
-  "input_modalities": [
-    "text",
-    "image"
-  ],
+  "input_modalities": ["text", "image"],
   "tool_mode": "code_mode_only",
   "supports_search_tool": true,
   "web_search_tool_type": "text_and_image",
