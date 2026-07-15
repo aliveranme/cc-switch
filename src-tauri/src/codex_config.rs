@@ -100,7 +100,7 @@ fn codex_native_gateway_rejects_web_search(config_text: &str) -> bool {
     }
     false
 }
-const CODEX_MODEL_CATALOG_TEMPLATE_SLUG: &str = "gpt-5.5";
+const CODEX_MODEL_CATALOG_TEMPLATE_SLUG: &str = "gpt-5.6-sol";
 
 /// Which Codex tool surface the generated model catalog should target.
 ///
@@ -503,38 +503,19 @@ fn codex_catalog_model_entry(
         )),
     );
 
-    if profile != CodexCatalogToolProfile::ProxyChat {
-        // Native `/responses` and Anthropic gateways reject / drop Codex's freeform
-        // `apply_patch` (type=="custom") tool. Strip any key that would make Codex
-        // emit a custom/freeform tool, and rely on shell_type="shell_command" for
-        // edits. Defensive even though the native template is already clean
-        // (guards against template drift / an accidental gpt-5.5 clone).
-        //
-        // NOTE: `base_instructions` is NOT stripped — Codex's catalog parser
-        // treats it as a REQUIRED field and refuses to load the file without
-        // it ("missing field `base_instructions`"). The template carries a
-        // neutral identity default; per-vendor official text overrides below.
-        for key in [
-            "apply_patch_tool_type",
-            "web_search_tool_type",
-            "tools",
-            "model_messages",
-        ] {
-            entry_obj.remove(key);
-        }
-        entry_obj.insert("shell_type".to_string(), json!("shell_command"));
-
-        if let Some(base_instructions) = spec
-            .base_instructions
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            entry_obj.insert("base_instructions".to_string(), json!(base_instructions));
-        }
-        if let Some(parallel) = spec.supports_parallel_tool_calls {
-            entry_obj.insert("supports_parallel_tool_calls".to_string(), json!(parallel));
-        }
+    // Apply per-row overrides for all profiles. The gpt-5.6-sol template
+    // already carries the correct defaults for modern Codex gateways, so
+    // no profile-specific field stripping is needed.
+    if let Some(base_instructions) = spec
+        .base_instructions
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        entry_obj.insert("base_instructions".to_string(), json!(base_instructions));
+    }
+    if let Some(parallel) = spec.supports_parallel_tool_calls {
+        entry_obj.insert("supports_parallel_tool_calls".to_string(), json!(parallel));
     }
 
     // ProxyChat providers (third-party via chat-completions relay) inherit
@@ -874,19 +855,16 @@ fn load_codex_model_template_static() -> Option<Value> {
     match serde_json::from_str(text) {
         Ok(template) => Some(template),
         Err(e) => {
-            log::warn!("Failed to parse bundled gpt-5.5 template: {e}");
+            log::warn!("Failed to parse bundled gpt-5.6-sol template: {e}");
             None
         }
     }
 }
 
-/// Bundled clean template for native `/responses` providers. Unlike the
-/// gpt-5.5 template it carries NO freeform `apply_patch` / `web_search` tool
-/// declarations and no GPT-5 base_instructions, so Codex never emits a
-/// `type=="custom"` tool that native gateways (MiMo/MiniMax/…) reject. Edits
-/// flow through `shell_type="shell_command"` instead. We deliberately do NOT
-/// fall back to `models_cache.json` here (that would reintroduce gpt-5.5's
-/// freeform apply_patch).
+/// Bundled template for native `/responses` providers. Uses the same
+/// gpt-5.6-sol template as ProxyChat — the catalog model entry function no
+/// longer strips any fields, so native gateways receive the full feature
+/// set (apply_patch, web_search, model_messages, etc.) from the template.
 fn load_codex_native_responses_template() -> Value {
     let text = include_str!("resources/codex_native_responses_template.json");
     serde_json::from_str(text).expect("bundled codex native responses template must be valid JSON")
@@ -935,9 +913,10 @@ fn codex_model_catalog_from_settings(
         return Ok(None);
     }
 
-    // Native providers use the bundled clean template (no freeform apply_patch,
-    // no cache dependency); proxy-chat providers keep cloning Codex's gpt-5.5
-    // entry so the proxy can rewrite custom<->function tools as before.
+    // All profiles now use the same gpt-5.6-sol template. Native providers
+    // load it via the bundled file (no cache dependency), while proxy-chat
+    // providers also try Codex's on-disk cache/cli first before falling back
+    // to the bundled template. Both paths produce identical catalog output.
     let template = match profile {
         CodexCatalogToolProfile::NativeResponses | CodexCatalogToolProfile::Anthropic => {
             load_codex_native_responses_template()
@@ -2776,11 +2755,12 @@ base_url = "https://production.api/v1"
     }
 
     #[test]
-    fn native_responses_profile_suppresses_apply_patch_and_keeps_shell() {
-        // Native (direct) /responses providers must NOT emit a freeform
-        // apply_patch (type=="custom") tool — gateways like MiMo reject it.
-        // The native profile uses the bundled clean template and relies on
-        // shell_type="shell_command" for edits, plus per-row overrides.
+    fn native_responses_profile_keeps_all_template_fields() {
+        // Native (direct) /responses providers now use the same gpt-5.6-sol
+        // template as ProxyChat, and no longer strip any fields.
+        // `apply_patch_tool_type`, `web_search_tool_type`, `model_messages`
+        // etc. are preserved in the catalog so Codex can use the full
+        // feature set.
         let settings = json!({
             "modelCatalog": {
                 "models": [
@@ -2812,11 +2792,11 @@ base_url = "https://production.api/v1"
         assert_eq!(
             entry.get("shell_type").and_then(|v| v.as_str()),
             Some("shell_command"),
-            "native entries edit via shell, not the custom apply_patch tool"
+            "native entries must have shell_type for Codex"
         );
         assert!(
-            entry.get("apply_patch_tool_type").is_none(),
-            "native entries must NOT declare a freeform apply_patch tool"
+            entry.get("apply_patch_tool_type").is_some(),
+            "native entries should declare apply_patch_tool_type (no longer stripped)"
         );
         // `base_instructions` is REQUIRED by Codex's catalog parser, so it must
         // be present — and the per-row official override must win over the
@@ -2827,8 +2807,8 @@ base_url = "https://production.api/v1"
             "per-row baseInstructions override must apply (and field must exist)"
         );
         assert!(
-            entry.get("model_messages").is_none(),
-            "native entries must not carry the gpt-5.5 model_messages persona text"
+            entry.get("model_messages").is_some(),
+            "native entries should carry model_messages (no longer stripped)"
         );
         assert_eq!(
             entry.get("supports_parallel_tool_calls"),
@@ -2966,9 +2946,8 @@ base_url = "https://production.api/v1"
             input_modalities: None,
             base_instructions: None,
         }];
-        // Using a gpt-5.5-shaped template under ProxyChat must NOT strip
-        // apply_patch_tool_type. (The native template lacks it, so synthesize
-        // one with the field present to prove ProxyChat leaves it intact.)
+        // Applying a gpt-5.6-sol template under ProxyChat — the template already
+        // carries apply_patch_tool_type, and no profile strips it anymore.
         let mut proxy_template = template.clone();
         proxy_template["apply_patch_tool_type"] = json!("freeform");
         let catalog = codex_model_catalog_from_specs(
@@ -3395,8 +3374,8 @@ web_search = "disabled"
             load_codex_model_template_static().expect("static template must parse as valid JSON");
         assert_eq!(
             template.get("slug").and_then(|v| v.as_str()),
-            Some("gpt-5.5"),
-            "static template slug must be gpt-5.5"
+            Some("gpt-5.6-sol"),
+            "static template slug must be gpt-5.6-sol"
         );
     }
 
