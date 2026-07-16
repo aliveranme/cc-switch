@@ -1174,6 +1174,16 @@
             }
         }
 
+        function escapeHtml(str) {
+            if (typeof str !== 'string') return str;
+            return str
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
         // 切换导入模式
         function toggleImportMode() {
             const mode = document.getElementById('importMode').value;
@@ -1549,15 +1559,15 @@ requires_openai_auth = true`;
                         <h4 style="margin-bottom: 12px; color: #2c3e50;">📋 基本信息</h4>
                         <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; font-size: 14px;">
                             <div style="color: #7f8c8d;">协议版本:</div>
-                            <div style="font-weight: 600; color: #2c3e50;">${version}</div>
+                            <div style="font-weight: 600; color: #2c3e50;">${escapeHtml(version)}</div>
                             <div style="color: #7f8c8d;">路径:</div>
-                            <div style="font-weight: 600; color: #2c3e50;">${path}</div>
+                            <div style="font-weight: 600; color: #2c3e50;">${escapeHtml(path)}</div>
                             <div style="color: #7f8c8d;">资源类型:</div>
-                            <div style="font-weight: 600; color: #2c3e50;">${paramsObj.resource || '-'}</div>
+                            <div style="font-weight: 600; color: #2c3e50;">${escapeHtml(paramsObj.resource || '-')}</div>
                             <div style="color: #7f8c8d;">应用类型:</div>
-                            <div style="font-weight: 600; color: #2c3e50; text-transform: capitalize;">${paramsObj.app || '-'}</div>
+                            <div style="font-weight: 600; color: #2c3e50; text-transform: capitalize;">${escapeHtml(paramsObj.app || '-')}</div>
                             <div style="color: #7f8c8d;">供应商名称:</div>
-                            <div style="font-weight: 600; color: #2c3e50;">${paramsObj.name || '-'}</div>
+                            <div style="font-weight: 600; color: #2c3e50;">${escapeHtml(paramsObj.name || '-')}</div>
                         </div>
                     </div>
                 `;
@@ -1580,7 +1590,7 @@ requires_openai_auth = true`;
                         }
                         urlParamsHtml += `
                             <div style="color: #856404; font-weight: 500;">${key}:</div>
-                            <div style="color: #856404; word-break: break-all; font-family: monospace; font-size: 12px;">${displayValue}</div>
+                            <div style="color: #856404; word-break: break-all; font-family: monospace; font-size: 12px;">${escapeHtml(displayValue)}</div>
                         `;
                     }
                 });
@@ -1592,7 +1602,7 @@ requires_openai_auth = true`;
                         // 单个端点
                         urlParamsHtml += `
                             <div style="color: #856404; font-weight: 500;">endpoint:</div>
-                            <div style="color: #856404; word-break: break-all; font-family: monospace; font-size: 12px;">${endpoints[0]}</div>
+                            <div style="color: #856404; word-break: break-all; font-family: monospace; font-size: 12px;">${escapeHtml(endpoints[0])}</div>
                         `;
                     } else {
                         // 多个端点
@@ -1604,7 +1614,7 @@ requires_openai_auth = true`;
                             const label = idx === 0 ? '🔹 主端点' : `└ 备用 ${idx}`;
                             urlParamsHtml += `
                                 <div style="margin-bottom: 4px; ${idx === 0 ? 'font-weight: 600;' : 'color: #a08040;'}">
-                                    ${label}: ${ep}
+                                    ${escapeHtml(label)}: ${escapeHtml(ep)}
                                 </div>
                             `;
                         });
@@ -1623,7 +1633,7 @@ requires_openai_auth = true`;
                     if (paramsObj[key]) {
                         urlParamsHtml += `
                             <div style="color: #856404; font-weight: 500;">${key}:</div>
-                            <div style="color: #856404; word-break: break-all; font-family: monospace; font-size: 12px;">${paramsObj[key]}</div>
+                            <div style="color: #856404; word-break: break-all; font-family: monospace; font-size: 12px;">${escapeHtml(paramsObj[key])}</div>
                         `;
                     }
                 });
@@ -1640,7 +1650,7 @@ requires_openai_auth = true`;
 
                         configHtml = `
                             <div style="background: #d1ecf1; padding: 16px; border-radius: 8px; border-left: 4px solid #17a2b8;">
-                                <h4 style="margin-bottom: 12px; color: #0c5460;">📄 配置文件内容 (${paramsObj.configFormat?.toUpperCase() || 'JSON'})</h4>
+                                <h4 style="margin-bottom: 12px; color: #0c5460;">📄 配置文件内容 (${escapeHtml(paramsObj.configFormat?.toUpperCase() || 'JSON')})</h4>
                         `;
 
                         // 根据应用类型解析配置
@@ -1657,8 +1667,8 @@ requires_openai_auth = true`;
                                     value = value.substring(0, 10) + '****';
                                 }
                                 configHtml += `
-                                    <div style="color: #0c5460; font-weight: 500;">${key}:</div>
-                                    <div style="color: #0c5460;">${value}</div>
+                                    <div style="color: #0c5460; font-weight: 500;">${escapeHtml(key)}:</div>
+                                    <div style="color: #0c5460;">${escapeHtml(value)}</div>
                                 `;
                             });
                             configHtml += '</div></div>';
@@ -1677,8 +1687,8 @@ requires_openai_auth = true`;
                                     value = value.substring(0, 10) + '****';
                                 }
                                 configHtml += `
-                                    <div style="color: #0c5460; font-weight: 500;">${key}:</div>
-                                    <div style="color: #0c5460;">${value}</div>
+                                    <div style="color: #0c5460; font-weight: 500;">${escapeHtml(key)}:</div>
+                                    <div style="color: #0c5460;">${escapeHtml(value)}</div>
                                 `;
                             });
                             configHtml += '</div></div>';
@@ -1687,7 +1697,7 @@ requires_openai_auth = true`;
                                 configHtml += `
                                     <div style="background: #fff; padding: 12px; border-radius: 6px;">
                                         <div style="font-size: 12px; color: #0c5460; margin-bottom: 8px; font-weight: 600;">TOML 配置:</div>
-                                        <pre style="margin: 0; font-size: 11px; color: #0c5460; white-space: pre-wrap; word-break: break-all;">${config}</pre>
+                                        <pre style="margin: 0; font-size: 11px; color: #0c5460; white-space: pre-wrap; word-break: break-all;">${escapeHtml(config)}</pre>
                                     </div>
                                 `;
                             }
@@ -1703,8 +1713,8 @@ requires_openai_auth = true`;
                                     value = value.substring(0, 10) + '****';
                                 }
                                 configHtml += `
-                                    <div style="color: #0c5460; font-weight: 500;">${key}:</div>
-                                    <div style="color: #0c5460;">${value}</div>
+                                    <div style="color: #0c5460; font-weight: 500;">${escapeHtml(key)}:</div>
+                                    <div style="color: #0c5460;">${escapeHtml(value)}</div>
                                 `;
                             });
                             configHtml += '</div></div>';
@@ -1723,7 +1733,7 @@ requires_openai_auth = true`;
                         configHtml = `
                             <div style="background: #f8d7da; padding: 16px; border-radius: 8px; border-left: 4px solid #dc3545;">
                                 <h4 style="margin-bottom: 8px; color: #721c24;">❌ 配置文件解析失败</h4>
-                                <div style="color: #721c24; font-size: 13px;">${e.message}</div>
+                                <div style="color: #721c24; font-size: 13px;">${escapeHtml(e.message)}</div>
                             </div>
                         `;
                     }
@@ -1741,42 +1751,42 @@ requires_openai_auth = true`;
                     if (paramsObj.usageEnabled) {
                         usageHtml += `
                             <div style="color: #27ae60; font-weight: 500;">启用状态:</div>
-                            <div style="color: #27ae60;">${paramsObj.usageEnabled === 'true' ? '✅ 已启用' : '❌ 已禁用'}</div>
+                            <div style="color: #27ae60;">${escapeHtml(paramsObj.usageEnabled === 'true' ? '✅ 已启用' : '❌ 已禁用')}</div>
                         `;
                     }
 
                     if (paramsObj.usageBaseUrl) {
                         usageHtml += `
                             <div style="color: #27ae60; font-weight: 500;">Base URL:</div>
-                            <div style="color: #27ae60; word-break: break-all; font-family: monospace; font-size: 12px;">${paramsObj.usageBaseUrl}</div>
+                            <div style="color: #27ae60; word-break: break-all; font-family: monospace; font-size: 12px;">${escapeHtml(paramsObj.usageBaseUrl)}</div>
                         `;
                     }
 
                     if (paramsObj.usageApiKey) {
                         usageHtml += `
                             <div style="color: #27ae60; font-weight: 500;">API Key:</div>
-                            <div style="color: #27ae60; font-family: monospace; font-size: 12px;">${paramsObj.usageApiKey.substring(0, 10)}****</div>
+                            <div style="color: #27ae60; font-family: monospace; font-size: 12px;">${escapeHtml(paramsObj.usageApiKey.substring(0, 10))}****</div>
                         `;
                     }
 
                     if (paramsObj.usageAutoInterval) {
                         usageHtml += `
                             <div style="color: #27ae60; font-weight: 500;">自动查询间隔:</div>
-                            <div style="color: #27ae60;">${paramsObj.usageAutoInterval} 分钟</div>
+                            <div style="color: #27ae60;">${escapeHtml(paramsObj.usageAutoInterval)} 分钟</div>
                         `;
                     }
 
                     if (paramsObj.usageAccessToken) {
                         usageHtml += `
                             <div style="color: #27ae60; font-weight: 500;">Access Token:</div>
-                            <div style="color: #27ae60; font-family: monospace; font-size: 12px;">${paramsObj.usageAccessToken.substring(0, 10)}****</div>
+                            <div style="color: #27ae60; font-family: monospace; font-size: 12px;">${escapeHtml(paramsObj.usageAccessToken.substring(0, 10))}****</div>
                         `;
                     }
 
                     if (paramsObj.usageUserId) {
                         usageHtml += `
                             <div style="color: #27ae60; font-weight: 500;">User ID:</div>
-                            <div style="color: #27ae60; font-family: monospace; font-size: 12px;">${paramsObj.usageUserId}</div>
+                            <div style="color: #27ae60; font-family: monospace; font-size: 12px;">${escapeHtml(paramsObj.usageUserId)}</div>
                         `;
                     }
 
@@ -1797,13 +1807,13 @@ requires_openai_auth = true`;
                             usageHtml += `
                                 <div style="margin-top: 12px;">
                                     <div style="font-size: 12px; color: #27ae60; margin-bottom: 8px; font-weight: 600;">用量查询脚本:</div>
-                                    <pre style="margin: 0; padding: 12px; background: #fff; border-radius: 6px; font-size: 11px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; border: 1px solid #27ae60;">${scriptContent}</pre>
+                                    <pre style="margin: 0; padding: 12px; background: #fff; border-radius: 6px; font-size: 11px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; border: 1px solid #27ae60;">${escapeHtml(scriptContent)}</pre>
                                 </div>
                             `;
                         } catch (e) {
                             usageHtml += `
                                 <div style="margin-top: 12px; color: #dc3545; font-size: 12px;">
-                                    ⚠️ 脚本解码失败: ${e.message}
+                                    ⚠️ 脚本解码失败: ${escapeHtml(e.message)}
                                 </div>
                             `;
                         }
@@ -2005,7 +2015,12 @@ requires_openai_auth = true`;
 
             // 显示结果
             document.getElementById('providerUrl').textContent = url;
-            document.getElementById('providerImportBtn').href = url;
+            try {
+                const parsed = new URL(url);
+                if (parsed.protocol === 'ccswitch:') {
+                    document.getElementById('providerImportBtn').setAttribute('href', parsed.href);
+                }
+            } catch {}
             document.getElementById('providerResult').style.display = 'block';
 
             // 滚动到结果
@@ -2098,7 +2113,12 @@ requires_openai_auth = true`;
 
             // 显示结果
             document.getElementById('promptUrl').textContent = url;
-            document.getElementById('promptImportBtn').href = url;
+            try {
+                const parsed = new URL(url);
+                if (parsed.protocol === 'ccswitch:') {
+                    document.getElementById('promptImportBtn').setAttribute('href', parsed.href);
+                }
+            } catch {}
             document.getElementById('promptResult').style.display = 'block';
 
             // 滚动到结果

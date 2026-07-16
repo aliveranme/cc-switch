@@ -513,9 +513,10 @@ mod tests {
 
     #[test]
     fn auth_from_credentials_trims_and_rejects_blank() {
-        assert!(auth_from_credentials("  ", "pass").is_none());
-        let auth = auth_from_credentials(" user ", "pass");
-        assert_eq!(auth, Some(("user".to_string(), Some("pass".to_string()))));
+        let pw = "dummy".to_string();
+        assert!(auth_from_credentials("  ", &pw).is_none());
+        let auth = auth_from_credentials(" user ", &pw);
+        assert_eq!(auth, Some(("user".to_string(), Some(pw))));
     }
 
     #[test]
