@@ -7,7 +7,7 @@ import TOML from "smol-toml";
  */
 export function useCodexTomlValidation() {
   const [configError, setConfigError] = useState("");
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /**
    * 校验 TOML 格式

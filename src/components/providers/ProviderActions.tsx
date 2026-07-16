@@ -51,7 +51,7 @@ interface MainButtonState {
   disabled: boolean;
   variant: "default" | "secondary";
   className: string;
-  icon: JSX.Element;
+  icon: React.ReactNode;
   text: string;
   title?: string;
 }
