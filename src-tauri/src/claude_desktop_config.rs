@@ -1036,6 +1036,8 @@ fn build_gateway_profile(
         "autoModeEnabled": true,
         "chatTabEnabled": true,
         "chatAdvancedFileAnalysisEnabled": true,
+        // 启用工具搜索，允许用户在对话中搜索和发现已安装的 MCP 工具
+        "toolSearchEnabled": true,
         "disableEssentialTelemetry": true,
         "disableNonessentialTelemetry": true,
         "disableNonessentialServices": true,
