@@ -10,11 +10,32 @@ const isPlainObject = (value: unknown): value is Record<string, any> => {
   return Object.prototype.toString.call(value) === "[object Object]";
 };
 
+/**
+ * Safely check if a URL belongs to the specified domain.
+ * Prevents substring matching attacks (e.g. "evil-githubcopilot.com" matching "githubcopilot.com").
+ */
+export const isMatchingDomain = (url: string, domain: string): boolean => {
+  try {
+    const normalized = url.includes("://") ? url : `https://${url}`;
+    const parsed = new URL(normalized);
+    const hostname = parsed.hostname.toLowerCase();
+    const targetDomain = domain.toLowerCase();
+    return hostname === targetDomain || hostname.endsWith(`.${targetDomain}`);
+  } catch {
+    return false;
+  }
+};
+
+const isSafeKey = (key: string): boolean => {
+  return key !== "__proto__" && key !== "constructor" && key !== "prototype";
+};
+
 const deepMerge = (
   target: Record<string, any>,
   source: Record<string, any>,
 ): Record<string, any> => {
   Object.entries(source).forEach(([key, value]) => {
+    if (!isSafeKey(key)) return;
     if (isPlainObject(value)) {
       if (!isPlainObject(target[key])) {
         target[key] = {};

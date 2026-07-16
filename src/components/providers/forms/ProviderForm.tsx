@@ -57,6 +57,7 @@ import type { UniversalProviderPreset } from "@/config/universalProviderPresets"
 import {
   applyTemplateValues,
   hasApiKeyField,
+  isMatchingDomain,
 } from "@/utils/providerConfigUtils";
 import { mergeProviderMeta } from "@/utils/providerMetaUtils";
 import {
@@ -1138,7 +1139,7 @@ function ProviderFormFull({
     const isCopilotProvider =
       templatePreset?.providerType === "github_copilot" ||
       initialData?.meta?.providerType === "github_copilot" ||
-      baseUrl.includes("githubcopilot.com");
+      isMatchingDomain(baseUrl, "githubcopilot.com");
     const isCodexOauthProvider =
       templatePreset?.providerType === "codex_oauth" ||
       initialData?.meta?.providerType === "codex_oauth";
@@ -1270,7 +1271,7 @@ function ProviderFormFull({
     const isCopilotProvider =
       templatePreset?.providerType === "github_copilot" ||
       initialData?.meta?.providerType === "github_copilot" ||
-      baseUrl.includes("githubcopilot.com");
+      isMatchingDomain(baseUrl, "githubcopilot.com");
     const isCodexOauthProvider =
       templatePreset?.providerType === "codex_oauth" ||
       initialData?.meta?.providerType === "codex_oauth";
@@ -2099,7 +2100,7 @@ function ProviderFormFull({
               isCopilotPreset={
                 templatePreset?.providerType === "github_copilot" ||
                 initialData?.meta?.providerType === "github_copilot" ||
-                baseUrl.includes("githubcopilot.com")
+                isMatchingDomain(baseUrl, "githubcopilot.com")
               }
               isCodexOauthPreset={
                 templatePreset?.providerType === "codex_oauth" ||
@@ -2109,7 +2110,7 @@ function ProviderFormFull({
                 templatePreset?.requiresOAuth === true ||
                 templatePreset?.providerType === "github_copilot" ||
                 initialData?.meta?.providerType === "github_copilot" ||
-                baseUrl.includes("githubcopilot.com") ||
+                isMatchingDomain(baseUrl, "githubcopilot.com") ||
                 templatePreset?.providerType === "codex_oauth" ||
                 initialData?.meta?.providerType === "codex_oauth"
               }

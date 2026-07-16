@@ -79,7 +79,7 @@ export const icons: Record<string, string> = {
 ${ALL_ICONS.filter(name => !notFound.includes(name))
   .map(name => {
     const svg = fs.readFileSync(path.join(OUTPUT_DIR, `${name}.svg`), 'utf-8');
-    const escaped = svg.replace(/`/g, '\\`').replace(/\$/g, '\\$');
+    const escaped = svg.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
     return `  '${name}': \`${escaped}\`,`;
   })
   .join('\n')}
