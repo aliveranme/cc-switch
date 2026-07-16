@@ -530,7 +530,7 @@ pub fn is_origin_only_url(value: &str) -> bool {
 }
 
 fn extract_codex_wire_api_from_toml(config_text: &str) -> Option<String> {
-    let doc = config_text.parse::<TomlValue>().ok()?;
+    let doc: toml::Table = toml::from_str(config_text).ok()?;
 
     if let Some(active_provider) = doc.get("model_provider").and_then(|v| v.as_str()) {
         if let Some(wire_api) = doc
@@ -549,7 +549,7 @@ fn extract_codex_wire_api_from_toml(config_text: &str) -> Option<String> {
 }
 
 fn extract_codex_model_from_toml(config_text: &str) -> Option<String> {
-    let doc = config_text.parse::<TomlValue>().ok()?;
+    let doc: toml::Table = toml::from_str(config_text).ok()?;
 
     doc.get("model")
         .and_then(|v| v.as_str())

@@ -78,6 +78,7 @@ export function useSettingsForm(): UseSettingsFormResult {
   );
 
   const initialLanguageRef = useRef<Language>("zh");
+  const seededRef = useRef(false);
 
   const readPersistedLanguage = useCallback((): Language => {
     if (typeof window !== "undefined") {
@@ -99,9 +100,11 @@ export function useSettingsForm(): UseSettingsFormResult {
     [i18n],
   );
 
-  // 初始化设置数据
+  // 初始化设置数据（仅从服务端数据填充一次，后续由 resetSettings / updateSettings 接管）
   useEffect(() => {
     if (!data) return;
+    if (seededRef.current) return;
+    seededRef.current = true;
 
     const normalizedLanguage = normalizeLanguage(
       data.language ?? readPersistedLanguage(),
@@ -130,7 +133,8 @@ export function useSettingsForm(): UseSettingsFormResult {
     setSettingsState(normalized);
     initialLanguageRef.current = normalizedLanguage;
     syncLanguage(normalizedLanguage);
-  }, [data, readPersistedLanguage, syncLanguage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
 
   const updateSettings = useCallback(
     (updates: Partial<SettingsFormState>) => {
@@ -194,9 +198,9 @@ export function useSettingsForm(): UseSettingsFormResult {
       };
 
       setSettingsState(normalized);
-      syncLanguage(initialLanguageRef.current);
+      void i18n.changeLanguage(initialLanguageRef.current);
     },
-    [readPersistedLanguage, syncLanguage],
+    [readPersistedLanguage, i18n],
   );
 
   return {
