@@ -12,7 +12,6 @@ use regex::Regex;
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 use std::sync::LazyLock;
-use toml::Value as TomlValue;
 
 /// 官方 Codex 客户端 User-Agent 正则
 #[allow(dead_code)]

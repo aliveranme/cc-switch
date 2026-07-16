@@ -81,7 +81,7 @@ pub struct Database {
 }
 
 fn register_db_change_hook(conn: &Connection) {
-    conn.update_hook(Some(
+    let _ = conn.update_hook(Some(
         |action: Action, _database: &str, table: &str, _row_id: i64| match action {
             Action::SQLITE_INSERT | Action::SQLITE_UPDATE | Action::SQLITE_DELETE => {
                 crate::services::webdav_auto_sync::notify_db_changed(table);
