@@ -61,7 +61,7 @@ fn optional_non_empty_string(table: &toml::value::Table, key: &str) -> Option<St
 
 /// Validate the provider-owned Grok Build TOML document.
 pub fn validate_config_toml(config_toml: &str) -> Result<(), AppError> {
-    let document = config_toml.parse::<toml::Value>().map_err(|error| {
+    let document = toml::from_str::<toml::Value>(config_toml).map_err(|error| {
         AppError::localized(
             "provider.grokbuild.config.invalid_toml",
             format!("Grok Build config.toml 格式错误: {error}"),
@@ -138,7 +138,7 @@ pub fn validate_config_toml(config_toml: &str) -> Result<(), AppError> {
 }
 
 pub fn extract_model_config(config_toml: &str) -> Option<GrokModelConfig> {
-    let document = config_toml.parse::<toml::Value>().ok()?;
+    let document = toml::from_str::<toml::Value>(config_toml).ok()?;
     let root = document.as_table()?;
     let default_model = root
         .get("models")?
