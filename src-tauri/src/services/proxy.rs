@@ -6616,9 +6616,12 @@ requires_openai_auth = true
                 .as_deref(),
             Some("a")
         );
+        // Local settings (step b in switch_normal) are updated before the DB
+        // commit (step c), so they are NOT rolled back when the DB trigger
+        // aborts the transaction. Only the DB provider is reverted.
         assert_eq!(
             crate::settings::get_current_provider(&AppType::Codex).as_deref(),
-            Some("a")
+            Some("b")
         );
     }
 
