@@ -2757,70 +2757,6 @@ fn extract_error_message(error: &ProxyError) -> Option<String> {
     }
 }
 
-/// Produce request diagnostics without retaining prompts, tool arguments,
-/// inline images, or other user-provided values in debug logs.
-fn request_body_log_summary(body: &Value) -> String {
-    let byte_len = serde_json::to_vec(body)
-        .map(|bytes| bytes.len())
-        .unwrap_or(0);
-    let top_level_fields = body
-        .as_object()
-        .map(|object| {
-            let mut fields = object.keys().map(String::as_str).collect::<Vec<_>>();
-            fields.sort_unstable();
-            if fields.len() > 16 {
-                fields.truncate(16);
-                fields.push("…");
-            }
-            fields.join(",")
-        })
-        .unwrap_or_else(|| "<non-object>".to_string());
-    format!("{byte_len} bytes; fields=[{top_level_fields}]")
-}
-
-fn redact_url_for_log(url: &str) -> String {
-    const SENSITIVE_QUERY_NAMES: &[&str] = &[
-        "key",
-        "api_key",
-        "api-key",
-        "apikey",
-        "x-api-key",
-        "x-goog-api-key",
-        "subscription-key",
-        "access_token",
-        "refresh_token",
-        "client_secret",
-        "token",
-        "signature",
-        "sig",
-        "authorization",
-        "auth",
-    ];
-
-    let Some((base, query_and_fragment)) = url.split_once('?') else {
-        return url.to_string();
-    };
-    // Fragments are never part of an HTTP request target. They can still be
-    // present in a client-supplied URL, so omit them from diagnostics rather
-    // than treating them as safe routing data.
-    let query = query_and_fragment
-        .split_once('#')
-        .map(|(query, _)| query)
-        .unwrap_or(query_and_fragment);
-    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
-        if SENSITIVE_QUERY_NAMES
-            .iter()
-            .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
-        {
-            serializer.append_pair(&name, "<redacted>");
-        } else {
-            serializer.append_pair(&name, &value);
-        }
-    }
-    format!("{base}?{}", serializer.finish())
-}
-
 /// 检测 Provider 是否为 Bedrock（通过 CLAUDE_CODE_USE_BEDROCK 环境变量判断）
 fn is_bedrock_provider(provider: &Provider) -> bool {
     provider
@@ -3765,36 +3701,6 @@ mod tests {
             streaming_first_byte_timeout,
             max_attempts: 1,
         }
-    }
-
-    #[test]
-    fn request_body_log_summary_never_includes_request_values() {
-        let body = json!({
-            "model": "gpt-5.6-sol",
-            "input": "top secret prompt",
-            "tools": [{"name": "read_file", "parameters": {"path": "/private/key"}}]
-        });
-
-        let summary = request_body_log_summary(&body);
-
-        assert!(summary.contains("fields=[input,model,tools]"));
-        assert!(!summary.contains("top secret prompt"));
-        assert!(!summary.contains("/private/key"));
-        assert!(!summary.contains("gpt-5.6-sol"));
-    }
-
-    #[test]
-    fn redact_url_for_log_preserves_routing_query_and_redacts_credentials() {
-        let redacted = redact_url_for_log(
-            "https://generativelanguage.googleapis.com/v1beta/models?key=secret&x-goog-api-key=google-secret&alt=sse&access_token=also-secret#fragment",
-        );
-
-        assert!(redacted.contains("key=%3Credacted%3E"));
-        assert!(redacted.contains("x-goog-api-key=%3Credacted%3E"));
-        assert!(redacted.contains("access_token=%3Credacted%3E"));
-        assert!(redacted.contains("alt=sse"));
-        assert!(!redacted.contains("fragment"));
-        assert!(!redacted.contains("secret"));
     }
 
     #[test]

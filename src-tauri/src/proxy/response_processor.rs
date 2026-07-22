@@ -872,19 +872,6 @@ fn format_headers(headers: &HeaderMap) -> String {
     format!("[{}]", entries.join(", "))
 }
 
-fn is_sensitive_header_for_log(name: &str) -> bool {
-    matches!(
-        name,
-        "authorization"
-            | "proxy-authorization"
-            | "cookie"
-            | "set-cookie"
-            | "x-api-key"
-            | "x-goog-api-key"
-            | "x-anthropic-api-key"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
