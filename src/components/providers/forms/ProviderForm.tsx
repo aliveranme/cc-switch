@@ -2217,7 +2217,7 @@ function ProviderFormFull({
                 templatePreset?.requiresOAuth === true ||
                 presetProviderType === "github_copilot" ||
                 initialData?.meta?.providerType === "github_copilot" ||
-                baseUrl.includes("githubcopilot.com") ||
+                isMatchingDomain(baseUrl, "githubcopilot.com") ||
                 presetProviderType === "codex_oauth" ||
                 initialData?.meta?.providerType === "codex_oauth" ||
                 presetProviderType === "xai_oauth" ||
