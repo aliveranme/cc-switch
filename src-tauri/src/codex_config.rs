@@ -878,7 +878,7 @@ fn load_codex_model_template_from_bundled() -> Result<Option<Value>, AppError> {
 }
 
 fn load_codex_model_template_static() -> Option<Value> {
-    let text = include_str!("resources/gpt5_5_template.json");
+    let text = include_str!("resources/gpt5_6_sol_template.json");
     match serde_json::from_str(text) {
         Ok(template) => Some(template),
         Err(e) => {
@@ -893,7 +893,7 @@ fn load_codex_model_template_static() -> Option<Value> {
 /// longer strips any fields, so native gateways receive the full feature
 /// set (apply_patch, web_search, model_messages, etc.) from the template.
 fn load_codex_native_responses_template() -> Value {
-    let text = include_str!("resources/codex_native_responses_template.json");
+    let text = include_str!("resources/gpt5_6_sol_template.json");
     serde_json::from_str(text).expect("bundled codex native responses template must be valid JSON")
 }
 
