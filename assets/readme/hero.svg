@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-labelledby="title desc">
+  <title id="title">CC Switch hero banner</title>
+  <desc id="desc">Hero title with connected AI agent nodes: Claude, Codex, Gemini, Grok, Hermes surrounding a central CC hub.</desc>
+  <rect width="1200" height="340" rx="28" fill="url(#bg)"/>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B0C0F"/>
+      <stop offset="100%" stop-color="#111317"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(64 58)">
+    <text x="0" y="60" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif' font-size="72" font-weight="800" fill="#F7F8FA">CC Switch</text>
+    <text x="0" y="118" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif' font-size="26" fill="#9CA3AF">One manager for Claude Code, Codex, Gemini CLI, Grok Build &amp; more.</text>
+    <g transform="translate(0 165)">
+      <rect x="0" y="0" width="78" height="28" rx="14" fill="#1A1D23" stroke="#2A2F38"/>
+      <text x="39" y="19" text-anchor="middle" font-family='ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", monospace' font-size="12" fill="#00D68F">v3.18.0</text>
+      <rect x="90" y="0" width="150" height="28" rx="14" fill="#1A1D23" stroke="#2A2F38"/>
+      <text x="165" y="19" text-anchor="middle" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif' font-size="12" fill="#F7F8FA">macOS · Windows · Linux</text>
+    </g>
+  </g>
+  <g transform="translate(0 0)">
+    <line x1="950" y1="150" x2="800" y2="75" stroke="#2A2F38" stroke-width="2"/>
+    <line x1="950" y1="150" x2="1030" y2="75" stroke="#2A2F38" stroke-width="2"/>
+    <line x1="950" y1="150" x2="800" y2="190" stroke="#2A2F38" stroke-width="2"/>
+    <line x1="950" y1="150" x2="1030" y2="190" stroke="#2A2F38" stroke-width="2"/>
+    <line x1="950" y1="150" x2="915" y2="270" stroke="#2A2F38" stroke-width="2"/>
+    <rect x="738" y="55" width="124" height="40" rx="20" fill="#1A1D23" stroke="#2A2F38" stroke-width="1"/>
+    <text x="800" y="81" text-anchor="middle" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif' font-size="16" font-weight="600" fill="#E57035">Claude</text>
+    <rect x="968" y="55" width="124" height="40" rx="20" fill="#1A1D23" stroke="#2A2F38" stroke-width="1"/>
+    <text x="1030" y="81" text-anchor="middle" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif' font-size="16" font-weight="600" fill="#10A37F">Codex</text>
+    <rect x="738" y="170" width="124" height="40" rx="20" fill="#1A1D23" stroke="#2A2F38" stroke-width="1"/>
+    <text x="800" y="196" text-anchor="middle" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif' font-size="16" font-weight="600" fill="#4285F4">Gemini</text>
+    <rect x="968" y="170" width="124" height="40" rx="20" fill="#1A1D23" stroke="#2A2F38" stroke-width="1"/>
+    <text x="1030" y="196" text-anchor="middle" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif' font-size="16" font-weight="600" fill="#FFFFFF">Grok</text>
+    <rect x="853" y="250" width="124" height="40" rx="20" fill="#1A1D23" stroke="#2A2F38" stroke-width="1"/>
+    <text x="915" y="276" text-anchor="middle" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif' font-size="16" font-weight="600" fill="#FACC15">Hermes</text>
+
+    <circle cx="950" cy="150" r="42" fill="#0B0C0F" stroke="#00D68F" stroke-width="2"/>
+    <text x="950" y="160" text-anchor="middle" font-family='ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", monospace' font-size="30" font-weight="700" fill="#00D68F">CC</text>
+
+  </g>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="140" viewBox="0 0 1200 140" role="img" aria-labelledby="title desc">
+  <title id="title">Download</title>
+  <desc id="desc">Section header for Download.</desc>
+  <rect width="1200" height="140" rx="22" fill="#0B0C0F"/>
+  <rect x="0" y="0" width="6" height="140" rx="3" fill="#00D68F"/>
+  <text x="54" y="66" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif' font-size="42" font-weight="700" fill="#F7F8FA">Download</text>
+  <text x="54" y="100" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif' font-size="18" fill="#9CA3AF">Get the desktop app for your platform.</text>
+  <g transform="translate(1070 42)" opacity="0.25">
+    <rect x="0" y="0" width="96" height="56" rx="12" fill="none" stroke="#2A2F38" stroke-width="2"/>
+    <circle cx="28" cy="28" r="6" fill="#00D68F"/>
+    <circle cx="68" cy="28" r="6" fill="#00D68F"/>
+    <line x1="34" y1="28" x2="62" y2="28" stroke="#00D68F" stroke-width="2"/>
+  </g>
+</svg>
