@@ -67,7 +67,7 @@ pub fn anthropic_to_gemini_with_shadow(
     let supports_multimodal_function_response = body
         .get("model")
         .and_then(Value::as_str)
-        .is_some_and(is_gemini_3_series);
+        .is_some_and(supports_multimodal_function_response);
 
     let messages = body.get("messages").and_then(|value| value.as_array());
 
@@ -808,13 +808,17 @@ fn plan_gemini_tool_result(content: Option<&Value>) -> (Value, Vec<Value>) {
     (normalize_tool_result_response(Some(&cleaned)), gemini_parts)
 }
 
-fn is_gemini_3_series(model: &str) -> bool {
-    let normalized = model.trim().to_ascii_lowercase();
-    normalized.starts_with("gemini-3")
+fn supports_multimodal_function_response(model: &str) -> bool {
+    let normalized = model.trim().to_ascii_lowercase().replace(' ', "-");
+    normalized.starts_with("gemini-2.5")
+        || normalized.starts_with("gemini-3")
         || normalized
             .rsplit('/')
             .next()
-            .is_some_and(|tail| tail.starts_with("gemini-3"))
+            .is_some_and(|tail| {
+                let tail = tail.replace(' ', "-");
+                tail.starts_with("gemini-2.5") || tail.starts_with("gemini-3")
+            })
 }
 
 fn gemini_part_from_chat_image(part: &Value) -> Option<Value> {
