@@ -243,7 +243,9 @@ fn append_sanitized_responses_tool_value(value: &Value, output: &mut Vec<Value>)
                 output.push(json!({"type":"input_text","text":text}));
             }
         }
-        Value::Null | Value::String(_) => {}
+        Value::Null | Value::String(_) => {
+            // 图像已被提取到 chat_media_parts，空文本在此上下文中应跳过
+        }
         other => output.push(json!({
             "type":"input_text",
             "text":canonical_json_string(other)

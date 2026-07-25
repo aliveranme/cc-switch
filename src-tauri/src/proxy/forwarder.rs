@@ -186,7 +186,7 @@ impl RequestForwarder {
         provider_body: &Value,
         error: &ProxyError,
     ) -> bool {
-        matches!(adapter_name, "Claude" | "Codex")
+        matches!(adapter_name, "Claude" | "Codex" | "Gemini")
             && self.rectifier_config.enabled
             && self.rectifier_config.request_media_fallback
             && !already_retried
@@ -547,7 +547,9 @@ impl RequestForwarder {
                     });
                 }
                 Err(e) => {
-                    // 检测是否需要触发整流器（仅 Claude/ClaudeAuth 供应商）
+                    // 检测是否需要触发整流器
+                    // 媒体整流器通过 adapter name（Claude/Codex/Gemini）判断；
+                    // budget 整流器仅限 Claude/ClaudeAuth 供应商
                     let provider_type = ProviderType::from_app_type_and_config(app_type, provider);
                     let is_anthropic_provider = matches!(
                         provider_type,
@@ -5090,7 +5092,7 @@ mod tests {
             &image_unsupported_error()
         ));
         assert!(fwd.media_retry_should_trigger(
-            "Claude",
+            "Gemini",
             false,
             &body_with_gemini_image(),
             &image_unsupported_error()
