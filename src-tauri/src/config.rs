@@ -449,10 +449,14 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(path) {
-            let perm = meta.permissions().mode();
-            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(perm));
-        }
+        // 目标已存在时沿用它的权限，不去改动用户或对应 CLI 工具的既有设置。
+        // 目标不存在时说明这是 cc-switch 首次落盘：这些文件普遍带着 API key
+        // （~/.claude/settings.json 等），若什么都不做就会落到 umask 的默认
+        // 0644，同机其他用户可读，所以按凭据文件对待，取 0600。
+        let mode = fs::metadata(path)
+            .map(|meta| meta.permissions().mode() & 0o777)
+            .unwrap_or(0o600);
+        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode));
     }
 
     // Windows 上 rename 目标存在会失败，先移除再重命名。rename 同样可能因穿过
@@ -693,6 +697,28 @@ mod tests {
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("chmod");
         harden_secret_file(&dir);
         assert_eq!(mode_of(&dir), 0o755, "目录不应被改动");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_creates_new_files_owner_only_and_preserves_existing_modes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mode_of = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+
+        // 新建：这些文件常带着 API key，不能落到 umask 的 0644
+        let fresh = temp.path().join("settings.json");
+        atomic_write(&fresh, b"{}").expect("write new file");
+        assert_eq!(mode_of(&fresh), 0o600, "新建文件应为 0600");
+
+        // 已存在：沿用目标原有权限，不擅自改动 CLI 工具或用户的设置
+        let existing = temp.path().join("config.toml");
+        fs::write(&existing, b"old").expect("seed");
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o640)).expect("chmod");
+        atomic_write(&existing, b"new").expect("overwrite");
+        assert_eq!(mode_of(&existing), 0o640, "覆写应保留既有权限");
+        assert_eq!(fs::read(&existing).unwrap(), b"new", "内容应已更新");
     }
 
     #[test]
