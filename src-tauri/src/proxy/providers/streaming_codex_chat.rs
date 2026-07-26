@@ -7,9 +7,9 @@ use super::{
     },
     transform_codex_chat::{
         chat_usage_to_responses_usage, custom_tool_input_from_chat_arguments,
-        response_id_from_chat_id, response_status_from_finish_reason,
-        response_tool_call_item_from_chat_name, response_tool_call_item_id_from_chat_name,
-        CodexToolContext,
+        response_id_from_chat_id, response_incomplete_reason_from_finish_reason,
+        response_status_from_finish_reason, response_tool_call_item_from_chat_name,
+        response_tool_call_item_id_from_chat_name, CodexToolContext,
     },
 };
 use crate::proxy::json_canonical::canonicalize_tool_arguments_str;
@@ -496,8 +496,10 @@ impl ChatToResponsesState {
 
         let status = response_status_from_finish_reason(self.finish_reason.as_deref());
         let mut response = self.base_response(status, self.completed_output_items());
-        if status == "incomplete" {
-            response["incomplete_details"] = json!({ "reason": "max_output_tokens" });
+        if let Some(reason) =
+            response_incomplete_reason_from_finish_reason(self.finish_reason.as_deref())
+        {
+            response["incomplete_details"] = json!({ "reason": reason });
         }
 
         events.push(sse::response_completed(&response));

@@ -1449,8 +1449,8 @@ pub(crate) fn chat_completion_to_response_with_context(
         "usage": chat_usage_to_responses_usage(body.get("usage"))
     });
 
-    if finish_reason == Some("length") {
-        response["incomplete_details"] = json!({ "reason": "max_output_tokens" });
+    if let Some(reason) = response_incomplete_reason_from_finish_reason(finish_reason) {
+        response["incomplete_details"] = json!({ "reason": reason });
     }
 
     Ok(response)
@@ -1847,10 +1847,24 @@ pub(crate) fn response_id_from_chat_id(id: Option<&str>) -> String {
     }
 }
 
-pub(crate) fn response_status_from_finish_reason(finish_reason: Option<&str>) -> &'static str {
+/// Chat finish_reason -> Responses incomplete_details.reason（None 表示不是
+/// incomplete）。此前只识别 length；content_filter 会被当成 completed，Codex
+/// 客户端因此看不出回答是被内容过滤截断的。
+pub(crate) fn response_incomplete_reason_from_finish_reason(
+    finish_reason: Option<&str>,
+) -> Option<&'static str> {
     match finish_reason {
-        Some("length") => "incomplete",
-        _ => "completed",
+        Some("length") => Some("max_output_tokens"),
+        Some("content_filter") => Some("content_filter"),
+        _ => None,
+    }
+}
+
+pub(crate) fn response_status_from_finish_reason(finish_reason: Option<&str>) -> &'static str {
+    if response_incomplete_reason_from_finish_reason(finish_reason).is_some() {
+        "incomplete"
+    } else {
+        "completed"
     }
 }
 
@@ -4040,6 +4054,22 @@ mod tests {
             result["usage"]["output_tokens_details"]["reasoning_tokens"],
             18
         );
+    }
+
+    #[test]
+    fn chat_response_content_filter_maps_to_incomplete_response() {
+        // content_filter 此前落到 "completed"，Codex 客户端看不出回答被过滤截断。
+        let input = json!({
+            "id": "chatcmpl_cf",
+            "model": "gpt-5.4",
+            "choices": [{
+                "message": {"role": "assistant", "content": "partial"},
+                "finish_reason": "content_filter"
+            }]
+        });
+        let result = chat_completion_to_response(input).unwrap();
+        assert_eq!(result["status"], "incomplete");
+        assert_eq!(result["incomplete_details"]["reason"], "content_filter");
     }
 
     #[test]
