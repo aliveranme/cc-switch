@@ -1631,9 +1631,14 @@ pub(crate) fn write_gemini_live(provider: &Provider) -> Result<(), AppError> {
 
     if let Some(config_value) = provider.settings_config.get("config") {
         if config_value.is_object() {
-            // Merge with existing settings to preserve mcpServers and other fields
+            // Merge with existing settings to preserve mcpServers and other fields.
+            //
+            // 解析失败必须中止：回退到 json!({}) 会让下面的合并把整份
+            // settings.json 替换成仅含本 provider 配置的新文件，用户的
+            // mcpServers 等内容全部丢失。行 1662 的同类读取本来就用 `?`
+            // 传播，这里保持一致。
             let mut merged = if settings_path.exists() {
-                read_json_file::<Value>(&settings_path).unwrap_or_else(|_| json!({}))
+                read_json_file::<Value>(&settings_path)?
             } else {
                 json!({})
             };
@@ -2621,5 +2626,64 @@ base_url = "https://a.example/v1"
 
         assert!(!config_text.contains("mcp_servers"));
         assert!(config_text.contains("model = \"grok-4.5\""));
+    }
+}
+
+#[cfg(test)]
+mod gemini_live_merge_tests {
+    use super::*;
+    use crate::gemini_config::get_gemini_settings_path;
+    use serde_json::json;
+    use serial_test::serial;
+
+    /// settings.json 解析失败时必须中止写入，而不是当作空对象继续。
+    ///
+    /// 回退到 json!({}) 会让后续 merge 产出一份只含本 provider 配置的新文件，
+    /// 把用户的 mcpServers 等内容整体替换掉——一次切换就永久丢失。
+    #[test]
+    #[serial]
+    fn write_gemini_live_aborts_on_unparsable_settings_json() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let original_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", temp.path());
+
+        let outcome = (|| -> Result<(bool, Vec<u8>), String> {
+            let settings_path = get_gemini_settings_path();
+            std::fs::create_dir_all(settings_path.parent().unwrap()).map_err(|e| e.to_string())?;
+
+            // 用户既有的配置，但文件被外部工具写坏了（尾随逗号）
+            let corrupt = br#"{"mcpServers": {"fs": {"command": "npx"}},}"#;
+            std::fs::write(&settings_path, corrupt).map_err(|e| e.to_string())?;
+
+            let provider = Provider::with_id(
+                "p1".to_string(),
+                "P1".to_string(),
+                json!({
+                    "env": { "GEMINI_API_KEY": "key-1" },
+                    "config": {}
+                }),
+                None,
+            );
+
+            let failed = write_gemini_live(&provider).is_err();
+            let after = std::fs::read(&settings_path).map_err(|e| e.to_string())?;
+            Ok((failed, after))
+        })();
+
+        match original_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+
+        let (failed, after) = outcome.expect("test body should not fail");
+        assert!(
+            failed,
+            "settings.json 无法解析时 write_gemini_live 必须返回 Err"
+        );
+        assert_eq!(
+            after,
+            br#"{"mcpServers": {"fs": {"command": "npx"}},}"#.to_vec(),
+            "失败时不得改动原文件"
+        );
     }
 }
