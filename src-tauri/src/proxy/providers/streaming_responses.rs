@@ -309,6 +309,10 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
         let mut tool_name_by_index: HashMap<u32, String> = HashMap::new();
         let mut tool_args_by_index: HashMap<u32, String> = HashMap::new();
         let mut tool_had_delta: HashSet<u32> = HashSet::new();
+        // 跟踪某个文本块是否收到过 output_text.delta。content_part.added 也会设
+        // current_text_index，所以不能用它判断“有没有增量”；done 时据此决定是否
+        // 需要从 data["text"] 补发完整文本。
+        let mut text_had_delta: HashSet<u32> = HashSet::new();
         let mut last_tool_index: Option<u32> = None;
         let mut reasoning_index_by_item_id: HashMap<String, u32> = HashMap::new();
         let mut reasoning_item_by_index: HashMap<u32, Value> = HashMap::new();
@@ -425,6 +429,10 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
                                 | "response.reasoning_summary_text.delta"
                                 | "response.reasoning_text.delta"
                                 | "response.reasoning.delta"
+                                // output_text.done 也纳入：网关跳过 delta、只在
+                                // done 里带完整文本时，done 分支会补发 text_delta，
+                                // 必须先有 message_start 才合法。
+                                | "response.output_text.done"
                         );
                         if delta_requires_message_start {
                             has_substantive_output = true;
@@ -566,6 +574,7 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
                                         current_text_index = Some(index);
                                         index
                                     };
+                                    text_had_delta.insert(index);
 
                                     if !open_indices.contains(&index) {
                                         let start_event = json!({
@@ -1278,7 +1287,59 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
                             // Lifecycle events that don't need Anthropic counterparts.
                             // Listed explicitly so new events trigger a match-completeness review.
                             "response.output_text.done" => {
-                                if let Some(index) = current_text_index.take() {
+                                // 网关跳过 output_text.delta、只在 done 带完整文本
+                                // 时，text_had_delta 里不会有这个 index，需从
+                                // data["text"] 恢复。不能用 current_text_index 判断，
+                                // 因为 content_part.added 也会设置它。
+                                let index = current_text_index.take().or_else(|| {
+                                    data.get("text")
+                                        .and_then(Value::as_str)
+                                        .filter(|value| !value.is_empty())
+                                        .map(|_| {
+                                            resolve_content_index(
+                                                &data,
+                                                &mut next_content_index,
+                                                &mut index_by_key,
+                                                &mut fallback_open_index,
+                                            )
+                                        })
+                                });
+
+                                if let Some(index) = index {
+                                    // 没有 text_delta 到过时补发完整文本。块可能已被
+                                    // content_part.added 打开，所以 content_block_start
+                                    // 用 open_indices 守卫，是否补发只看 text_had_delta。
+                                    if !text_had_delta.contains(&index) {
+                                        if let Some(text) = data
+                                            .get("text")
+                                            .and_then(Value::as_str)
+                                            .filter(|value| !value.is_empty())
+                                        {
+                                            if !open_indices.contains(&index) {
+                                                let start_event = json!({
+                                                    "type": "content_block_start",
+                                                    "index": index,
+                                                    "content_block": {"type": "text", "text": ""}
+                                                });
+                                                yield Ok(Bytes::from(format!(
+                                                    "event: content_block_start\ndata: {}\n\n",
+                                                    serde_json::to_string(&start_event).unwrap_or_default()
+                                                )));
+                                                open_indices.insert(index);
+                                            }
+
+                                            let delta_event = json!({
+                                                "type": "content_block_delta",
+                                                "index": index,
+                                                "delta": {"type": "text_delta", "text": text}
+                                            });
+                                            yield Ok(Bytes::from(format!(
+                                                "event: content_block_delta\ndata: {}\n\n",
+                                                serde_json::to_string(&delta_event).unwrap_or_default()
+                                            )));
+                                        }
+                                    }
+
                                     if open_indices.remove(&index) {
                                         let stop_event = json!({
                                             "type": "content_block_stop",
@@ -1555,6 +1616,33 @@ mod tests {
             .into_iter()
             .map(|chunk| String::from_utf8_lossy(chunk.unwrap().as_ref()).to_string())
             .collect()
+    }
+
+    #[tokio::test]
+    async fn test_output_text_done_recovers_text_when_deltas_are_skipped() {
+        // 某些兼容网关跳过 output_text.delta，把完整可见文本只放在
+        // output_text.done 上。旧实现只关闭块、从不读 data["text"]，
+        // assistant 轮次因此为空。现在应从 done 恢复出一个 text_delta。
+        let input = concat!(
+            "event: response.created\n",
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-4o\"}}\n\n",
+            "event: response.content_part.added\n",
+            "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\"}}\n\n",
+            "event: response.output_text.done\n",
+            "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"text\":\"full answer\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n\n"
+        );
+
+        let merged = convert_stream_text(input.as_bytes().to_vec()).await;
+        assert!(
+            merged.contains("\"type\":\"message_start\""),
+            "缺 message_start: {merged}"
+        );
+        assert!(
+            merged.contains("\"type\":\"text_delta\"") && merged.contains("full answer"),
+            "output_text.done 的文本未被恢复: {merged}"
+        );
     }
 
     #[test]
