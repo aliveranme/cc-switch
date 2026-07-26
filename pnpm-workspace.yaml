@@ -1,12 +1,24 @@
 packages: []
 
+# Keep allowBuilds (pnpm 11+) and onlyBuilt/ignoredBuiltDependencies
+# (pnpm 10, used by CI) in sync so both versions resolve identically.
+#
+# esbuild / @tailwindcss/oxide: postinstall fetches the platform binary — required.
+# msw: postinstall only prints an integration notice.
+# @code-inspector/core + node-pty: dev-only, codeInspectorPlugin runs solely
+#   when command === "serve"; node-pty would force a node-gyp rebuild in CI.
 allowBuilds:
+  '@code-inspector/core': false
+  '@tailwindcss/oxide': true
   esbuild: true
-  msw: true
+  msw: false
+  node-pty: false
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
   - esbuild
 
 ignoredBuiltDependencies:
+  - '@code-inspector/core'
   - msw
+  - node-pty
