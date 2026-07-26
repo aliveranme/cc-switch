@@ -56,6 +56,12 @@ jobs:
       - name: Unit tests
         run: pnpm test:unit
 
+      # typecheck and vitest both stop short of the bundler, so nothing here
+      # exercised vite, PostCSS or Tailwind until a release build ran. Keep the
+      # renderer build in CI so bundler-only breakage surfaces on the PR.
+      - name: Build renderer
+        run: pnpm build:renderer
+
   backend:
     name: Backend Checks
     runs-on: ${{ matrix.os }}
@@ -100,8 +106,10 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
 
+      # --all-targets so test and bench code is linted too; without it the
+      # entire #[cfg(test)] tree is a blind spot.
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+        run: cargo clippy --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings
 
       - name: Run tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
