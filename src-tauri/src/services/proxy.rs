@@ -6599,6 +6599,22 @@ requires_openai_auth = true
             .expect_err("provider switch should fail when catalog cannot be written");
         state.proxy_service.stop().await.expect("stop proxy server");
 
+        // live 写入失败后指针必须留在 a。若提交到 b 而 live 仍是 a 的凭据，
+        // 应用会以为 b 已生效；更糟的是下一次切换的 backfill 会按这个错误指针，
+        // 把 a 的 live 内容写进 b 的 settings_config，永久覆盖 b 的配置。
+        assert_eq!(
+            crate::settings::get_current_provider(&AppType::Codex).as_deref(),
+            Some("a"),
+            "本地 current provider 应回滚到 a"
+        );
+        assert_eq!(
+            db.get_current_provider("codex")
+                .expect("read db current provider")
+                .as_deref(),
+            Some("a"),
+            "数据库 is_current 应回滚到 a"
+        );
+
         let message = err.to_string();
         assert!(
             message.contains("写入 Codex 配置失败") || message.contains("原子替换失败"),

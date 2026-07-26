@@ -2685,6 +2685,9 @@ impl ProviderService {
         }
 
         // Additive mode apps skip setting is_current (no such concept)
+        let previous_local_current = crate::settings::get_current_provider(&app_type);
+        let previous_db_current = state.db.get_current_provider(app_type.as_str())?;
+
         if !app_type.is_additive_mode() {
             // Update local settings (device-level, takes priority)
             crate::settings::set_current_provider(&app_type, Some(id))?;
@@ -2694,7 +2697,38 @@ impl ProviderService {
         }
 
         // Sync to live (write_gemini_live handles security flag internally for Gemini)
-        write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
+        //
+        // 指针在上面已经提交，而这一步是可失败的（Gemini 的 strict 校验、磁盘
+        // 只读、Windows 文件占用……）。不回滚的话应用会认为新供应商已生效，
+        // 但 live 文件仍是旧供应商的凭据；更糟的是下一次切换的 backfill 会按
+        // 这个错误指针，把旧 live 的内容写进新供应商的 settings_config，造成
+        // 不可恢复的覆盖。additive 模式的 live_config_managed 翻转在下面本来
+        // 就有同样的回滚处理。
+        if let Err(e) = write_live_with_common_config(state.db.as_ref(), &app_type, provider) {
+            if !app_type.is_additive_mode() {
+                if let Err(re) = crate::settings::set_current_provider(
+                    &app_type,
+                    previous_local_current.as_deref(),
+                ) {
+                    log::warn!(
+                        "Failed to roll back local current provider for {}: {re}",
+                        app_type.as_str()
+                    );
+                }
+                // DAO 只能设置某一行为 current，没有"全部清除"的接口；
+                // previous 为 None 时保持原样，本地 settings 的回滚已经生效，
+                // 而 DB 的值只作为新设备的默认。
+                if let Some(prev) = previous_db_current.as_deref() {
+                    if let Err(re) = state.db.set_current_provider(app_type.as_str(), prev) {
+                        log::warn!(
+                            "Failed to roll back DB is_current for {}: {re}",
+                            app_type.as_str()
+                        );
+                    }
+                }
+            }
+            return Err(e);
+        }
 
         // Hermes is additive, so "switching" doesn't overwrite a live config file
         // — we instead update the top-level `model:` section to point at this
