@@ -108,6 +108,10 @@ impl Database {
 
         let conn = Connection::open(&db_path).map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 库里存着所有供应商的明文 API key，而 SQLite 按 umask 建文件，默认落到
+        // 0644，同机其他用户可读。OAuth 凭据文件已经是 0600，这里补齐。
+        crate::config::harden_secret_file(&db_path);
+
         // 启用外键约束
         conn.execute("PRAGMA foreign_keys = ON;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;

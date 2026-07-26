@@ -6,6 +6,39 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::error::AppError;
 
+/// 把保存明文凭据的文件权限收紧到 0600，幂等。
+///
+/// `OpenOptions::mode()` 只在真正创建文件时生效，对已存在的文件会被忽略，
+/// 所以早于权限修复安装的用户，其文件会一直停留在创建时 umask 的结果
+/// （通常是 0644，同机其他用户可读）。`Connection::open` 更是完全不设权限。
+/// 在打开或写入之后调用本函数，可以把这些历史文件一并收敛。
+///
+/// Windows 不走 Unix 权限位，用户目录本身已受 ACL 保护，故为空实现。
+pub fn harden_secret_file(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let Ok(meta) = fs::metadata(path) else {
+            return;
+        };
+        if !meta.is_file() {
+            return;
+        }
+        // 只在确实对 group/other 开放时才写，避免每次启动都触发磁盘写入
+        if meta.permissions().mode() & 0o077 == 0 {
+            return;
+        }
+        if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+            log::warn!("无法收紧 {} 的文件权限: {e}", path.display());
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
 /// 获取用户主目录，带回退和日志
 ///
 /// ## Windows 注意事项
@@ -623,6 +656,43 @@ mod tests {
         ensure_dir(&dir).expect("ensure on existing dir should succeed");
         // 幂等：再调一次仍成功
         ensure_dir(&dir).expect("ensure should be idempotent");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn harden_secret_file_tightens_group_and_other_bits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mode_of = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+
+        // 0644：默认 umask 下 SQLite / fs::write 产出的权限，同机其他用户可读
+        let world_readable = temp.path().join("cc-switch.db");
+        fs::write(&world_readable, b"secret").expect("seed");
+        fs::set_permissions(&world_readable, fs::Permissions::from_mode(0o644)).expect("chmod");
+        harden_secret_file(&world_readable);
+        assert_eq!(mode_of(&world_readable), 0o600, "0644 应被收紧到 0600");
+
+        // 已经是 0600：保持不变，且可重复调用
+        harden_secret_file(&world_readable);
+        assert_eq!(mode_of(&world_readable), 0o600, "收紧后应保持幂等");
+
+        // 更宽松的 0666 同样要收紧
+        let world_writable = temp.path().join("settings.json");
+        fs::write(&world_writable, b"{}").expect("seed");
+        fs::set_permissions(&world_writable, fs::Permissions::from_mode(0o666)).expect("chmod");
+        harden_secret_file(&world_writable);
+        assert_eq!(mode_of(&world_writable), 0o600, "0666 应被收紧到 0600");
+
+        // 不存在的路径不应 panic
+        harden_secret_file(&temp.path().join("missing.db"));
+
+        // 目录不属于处理范围，权限保持原样
+        let dir = temp.path().join("backups");
+        fs::create_dir(&dir).expect("mkdir");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("chmod");
+        harden_secret_file(&dir);
+        assert_eq!(mode_of(&dir), 0o755, "目录不应被改动");
     }
 
     #[test]

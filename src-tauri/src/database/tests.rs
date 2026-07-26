@@ -919,3 +919,51 @@ fn ensure_incremental_auto_vacuum_rebuilds_existing_file_db() {
         "file db should persist INCREMENTAL auto_vacuum after VACUUM rebuild"
     );
 }
+
+/// `Database::init` 必须收紧已存在数据库文件的权限。
+///
+/// 库里是全部供应商的明文 API key，但 `Connection::open` 按 umask 建文件，
+/// 默认落到 0644。旧版本装出来的库会一直保持这个权限，所以每次 init 都要
+/// 重新收敛，而不是只在创建时设置。
+#[cfg(unix)]
+#[test]
+#[serial_test::serial]
+fn init_hardens_world_readable_database_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let original_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+    std::env::set_var("CC_SWITCH_TEST_HOME", temp.path());
+
+    let result = (|| -> Result<u32, String> {
+        let dir = crate::config::get_app_config_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let db_path = dir.join("cc-switch.db");
+
+        // 模拟旧版本留下的、对同机其他用户可读的库文件
+        Connection::open(&db_path).map_err(|e| e.to_string())?;
+        std::fs::set_permissions(&db_path, std::fs::Permissions::from_mode(0o644))
+            .map_err(|e| e.to_string())?;
+
+        let _db = Database::init().map_err(|e| e.to_string())?;
+
+        let mode = std::fs::metadata(&db_path)
+            .map_err(|e| e.to_string())?
+            .permissions()
+            .mode()
+            & 0o777;
+        Ok(mode)
+    })();
+
+    // 先恢复环境再断言，避免失败时污染其它测试
+    match original_home {
+        Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+        None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+    }
+
+    assert_eq!(
+        result.expect("init should succeed"),
+        0o600,
+        "Database::init 应把已存在的 0644 库文件收紧到 0600"
+    );
+}

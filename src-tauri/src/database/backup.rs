@@ -329,6 +329,9 @@ impl Database {
                 .map_err(|e| AppError::Database(e.to_string()))?;
         }
 
+        // 备份是主库的完整副本，同样含明文 API key
+        crate::config::harden_secret_file(&backup_path);
+
         Self::cleanup_db_backups(&backup_dir)?;
         Ok(Some(backup_path))
     }

@@ -696,6 +696,10 @@ fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
         fs::write(&path, json).map_err(|e| AppError::io(&path, e))?;
     }
 
+    // 上面的 mode(0o600) 只作用于新建文件；早于该修复安装的用户，其
+    // settings.json 仍是创建时 umask 的结果，这里把它一并收敛。
+    crate::config::harden_secret_file(&path);
+
     Ok(())
 }
 
