@@ -684,6 +684,33 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                 log::debug!("[Claude/OpenRouter] >>> Anthropic SSE: message_stop (at stream end)");
                 yield Ok(Bytes::from(sse_data));
             }
+
+            // 止损：客户端请求了流式，但网关无视 stream 标志、返回了一份完整
+            // JSON（无 `data:`/`\n\n`）。这些字节从没被 SSE 分块消费，留在 buffer
+            // 里，转换器一个事件都没产出（has_sent_message_start 仍为 false）。
+            // 不发任何东西的话客户端会静默挂起。这里补一个 Anthropic error 事件，
+            // 让客户端和用量收集器都能看到一个明确的终止结果。
+            //
+            // 注意：这只是把「静默挂起」变成「明确报错」，并没有把那份 JSON 应答
+            // 真正转成 Anthropic 流式格式（完整方案需仿 streaming_responses 的
+            // whole-JSON 回退，改动面大，另行处理）。
+            if !has_sent_message_start && !buffer.trim().is_empty() {
+                log::warn!(
+                    "[Claude/OpenRouter] 上游对流式请求返回了非 SSE 响应，转换器零产出；\
+                     发送 error 事件避免客户端静默挂起"
+                );
+                let error_event = json!({
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": "Upstream returned a non-streaming response to a streaming request; \
+                                    the proxy could not convert it to Anthropic SSE.",
+                    }
+                });
+                let sse_data = format!("event: error\ndata: {}\n\n",
+                    serde_json::to_string(&error_event).unwrap_or_default());
+                yield Ok(Bytes::from(sse_data));
+            }
         }
     }
 }
@@ -1227,6 +1254,25 @@ mod tests {
         assert!(!events
             .iter()
             .any(|event| event_type(event) == Some("message_stop")));
+    }
+
+    #[tokio::test]
+    async fn test_non_sse_json_body_emits_error_not_silence() {
+        // 客户端请求流式，网关却返回一份完整 JSON（无 data:/\n\n）。这些字节
+        // 从不被 SSE 分块消费，转换器零产出。旧行为是空流——客户端静默挂起。
+        // 现在应至少产出一个 error 事件。
+        let json_body = r#"{"id":"chatcmpl-1","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"hi"}}]}"#;
+        let events = collect_anthropic_events(json_body).await;
+
+        assert!(
+            events.iter().any(|e| event_type(e) == Some("error")),
+            "非 SSE 的 JSON 应答应产出 error 事件，实际: {events:?}"
+        );
+        // 且不得伪装成成功完成
+        assert!(
+            !events.iter().any(|e| event_type(e) == Some("message_stop")),
+            "不应发出 message_stop（那会把失败伪装成成功）"
+        );
     }
 
     #[tokio::test]
