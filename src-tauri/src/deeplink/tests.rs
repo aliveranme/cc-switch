@@ -974,3 +974,76 @@ fn test_provider_deeplink_accepts_every_app_type() {
         assert_eq!(parsed.unwrap().app.as_deref(), Some(app));
     }
 }
+
+/// Claude Desktop 的 `config=` 载荷必须和 Claude 走同一条 merge 分支。
+///
+/// parser 放行 claude-desktop 之后（ec56db28），parse_and_merge_config 的
+/// match 仍只有 "claude" 分支，带 config 的 Desktop deeplink 会落到 `_ =>`
+/// 报 "Invalid app type" —— 解析通过却在合并阶段失败。
+#[test]
+fn test_parse_and_merge_config_claude_desktop() {
+    let config_json = r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-desktop","ANTHROPIC_BASE_URL":"https://desktop.example.com"}}"#;
+    let config_b64 = BASE64_STANDARD.encode(config_json.as_bytes());
+
+    let request = DeepLinkImportRequest {
+        version: "v1".to_string(),
+        resource: "provider".to_string(),
+        app: Some("claude-desktop".to_string()),
+        name: Some("Desktop".to_string()),
+        config: Some(config_b64),
+        config_format: Some("json".to_string()),
+        ..Default::default()
+    };
+
+    let merged = parse_and_merge_config(&request).expect("claude-desktop config 应能合并");
+    assert_eq!(
+        merged.api_key,
+        Some("sk-desktop".to_string()),
+        "Desktop 应复用 Claude 的 merge 分支回填 api_key"
+    );
+    assert_eq!(
+        merged.endpoint,
+        Some("https://desktop.example.com".to_string())
+    );
+}
+
+/// parse_and_merge_config 必须覆盖 parser 放行的每一个 app。
+///
+/// 锁住两侧的一致性：parser 的白名单和这里的 match 分头维护过一次，
+/// 结果就是 claude-desktop 能解析却不能合并。
+#[test]
+fn test_parse_and_merge_config_covers_every_provider_app() {
+    use crate::app_config::AppType;
+
+    let config_b64 = BASE64_STANDARD.encode(br#"{}"#);
+    for app_type in [
+        AppType::Claude,
+        AppType::ClaudeDesktop,
+        AppType::Codex,
+        AppType::Gemini,
+        AppType::GrokBuild,
+        AppType::OpenCode,
+        AppType::OpenClaw,
+        AppType::Hermes,
+    ] {
+        let request = DeepLinkImportRequest {
+            version: "v1".to_string(),
+            resource: "provider".to_string(),
+            app: Some(app_type.as_str().to_string()),
+            name: Some("X".to_string()),
+            config: Some(config_b64.clone()),
+            config_format: Some("json".to_string()),
+            ..Default::default()
+        };
+        // 只关心 app 是否被 match 覆盖：空 config 可能因缺字段被各自的
+        // merge 函数拒绝，那是另一回事；"Invalid app type" 才说明这个 app
+        // 根本没有分支。
+        if let Err(e) = parse_and_merge_config(&request) {
+            assert!(
+                !e.to_string().contains("Invalid app type"),
+                "app={} 在 parse_and_merge_config 中没有对应分支: {e}",
+                app_type.as_str()
+            );
+        }
+    }
+}

@@ -631,7 +631,9 @@ pub fn parse_and_merge_config(
     }
 
     match request.app.as_deref().unwrap_or("") {
-        "claude" => merge_claude_config(&mut merged, &config_value)?,
+        // Claude Desktop 复用 Claude 的 settings 形态（见
+        // build_provider_from_request），config= 载荷同样走 merge_claude_config
+        "claude" | "claude-desktop" => merge_claude_config(&mut merged, &config_value)?,
         "codex" => merge_codex_config(&mut merged, &config_value)?,
         "gemini" => merge_gemini_config(&mut merged, &config_value)?,
         "grokbuild" => merge_grokbuild_config(&mut merged, &config_value)?,
