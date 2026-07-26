@@ -899,6 +899,29 @@ fn restore_live_settings_for_provider_backfill(
         }
     }
 
+    // 同样的道理适用于 `config` 本身。read_codex_live_settings 容忍缺失或空的
+    // config.toml（auth.json 单独存在的 OAuth 安装要能导入），此时它返回
+    // config: ""。让这个空投影回填进存储，会把供应商的整份 TOML 抹掉。
+    let live_config_is_empty = settings
+        .get("config")
+        .and_then(Value::as_str)
+        .is_none_or(|text| text.trim().is_empty());
+    if live_config_is_empty {
+        if let Some(stored_config) = provider
+            .settings_config
+            .get("config")
+            .filter(|value| value.as_str().is_some_and(|text| !text.trim().is_empty()))
+        {
+            if let Some(obj) = settings.as_object_mut() {
+                obj.insert("config".to_string(), stored_config.clone());
+            }
+            log::debug!(
+                "Live config.toml for '{}' is empty; keeping the stored TOML instead of erasing it",
+                provider.id
+            );
+        }
+    }
+
     settings
 }
 
@@ -2626,6 +2649,71 @@ base_url = "https://a.example/v1"
 
         assert!(!config_text.contains("mcp_servers"));
         assert!(config_text.contains("model = \"grok-4.5\""));
+    }
+}
+
+#[cfg(test)]
+mod codex_backfill_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// 空的 live config.toml 投影不得抹掉已存储的 TOML。
+    ///
+    /// read_codex_live_settings 对缺失/空的 config.toml 返回 config: ""（这样
+    /// 只有 auth.json 的 OAuth 安装仍可导入）。切换离开时的 backfill 若把这个
+    /// 空投影写回存储，供应商的整份 TOML 就没了——与 modelCatalog 的保护同理。
+    #[test]
+    fn codex_backfill_keeps_stored_config_when_live_projection_is_empty() {
+        let stored_toml = "model = \"gpt-5\"\n[model_providers.custom]\nname = \"Custom\"\n";
+        let provider = Provider::with_id(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "key-1" },
+                "config": stored_toml
+            }),
+            None,
+        );
+
+        // live 端只剩 auth，config.toml 缺失 -> 空字符串投影
+        let live = json!({
+            "auth": { "OPENAI_API_KEY": "key-1" },
+            "config": ""
+        });
+
+        let restored =
+            restore_live_settings_for_provider_backfill(&AppType::Codex, &provider, live);
+        assert_eq!(
+            restored.get("config").and_then(Value::as_str),
+            Some(stored_toml),
+            "空的 live 投影不应覆盖已存储的 config.toml"
+        );
+    }
+
+    /// 非空的 live config 仍然正常回填，保证这条保护不会反过来卡住真实编辑。
+    #[test]
+    fn codex_backfill_still_accepts_a_non_empty_live_config() {
+        let provider = Provider::with_id(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "key-1" },
+                "config": "model = \"old\"\n"
+            }),
+            None,
+        );
+        let live = json!({
+            "auth": { "OPENAI_API_KEY": "key-1" },
+            "config": "model = \"edited-by-user\"\n"
+        });
+
+        let restored =
+            restore_live_settings_for_provider_backfill(&AppType::Codex, &provider, live);
+        assert_eq!(
+            restored.get("config").and_then(Value::as_str),
+            Some("model = \"edited-by-user\"\n"),
+            "用户在 live 里的真实编辑必须照常回填"
+        );
     }
 }
 
