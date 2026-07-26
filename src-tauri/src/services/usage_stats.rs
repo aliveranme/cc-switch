@@ -1013,7 +1013,28 @@ impl Database {
                 if bucket_idx >= bucket_count {
                     bucket_idx = bucket_count - 1;
                 }
-                map.insert(bucket_idx, stat);
+                // 累加而不是覆盖：越界的行都会被 clamp 到最后一个桶，用 insert
+                // 会让先到的那些被后来的整条替换掉，最后一个小时的用量因此少算。
+                // 日线分支（下方 rollup 合并处）本来就是累加语义。
+                let entry = map.entry(bucket_idx).or_insert_with(|| DailyStats {
+                    date: String::new(),
+                    request_count: 0,
+                    total_cost: "0.000000".to_string(),
+                    total_tokens: 0,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    total_cache_creation_tokens: 0,
+                    total_cache_read_tokens: 0,
+                });
+                entry.request_count += stat.request_count;
+                let existing_cost: f64 = entry.total_cost.parse().unwrap_or(0.0);
+                let added_cost: f64 = stat.total_cost.parse().unwrap_or(0.0);
+                entry.total_cost = format!("{:.6}", existing_cost + added_cost);
+                entry.total_tokens += stat.total_tokens;
+                entry.total_input_tokens += stat.total_input_tokens;
+                entry.total_output_tokens += stat.total_output_tokens;
+                entry.total_cache_creation_tokens += stat.total_cache_creation_tokens;
+                entry.total_cache_read_tokens += stat.total_cache_read_tokens;
             }
 
             let mut stats = Vec::with_capacity(bucket_count as usize);
