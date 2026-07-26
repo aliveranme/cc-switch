@@ -662,6 +662,14 @@ fn convert_input_to_messages(
                     push_block(&mut messages, "user", block);
                 }
             }
+            Some("input_file") => {
+                // 顶层 input_file 此前无 arm，落到 `_` 分支被当消息处理，因无
+                // content 键而被丢弃。复用嵌套/tool_result 路径同一个 helper，
+                // 转成 Anthropic document 块（base64 -> file_data，url -> file_url）。
+                if let Some(block) = document_block_from_input_file(item) {
+                    push_block(&mut messages, "user", block);
+                }
+            }
             Some("reasoning") => {
                 if let Some(block) = item
                     .get("encrypted_content")
@@ -1659,6 +1667,27 @@ mod tests {
             "name"
         );
         assert_eq!(result["output_config"]["effort"], "medium");
+    }
+
+    #[test]
+    fn test_request_top_level_input_file_becomes_document() {
+        // 顶层 input_file 此前落到 `_` 分支被丢弃；应转成 Anthropic document 块。
+        let input = json!({
+            "model": "claude",
+            "max_output_tokens": 100,
+            "input": [{
+                "type": "input_file",
+                "filename": "a.pdf",
+                "file_data": "data:application/pdf;base64,JVBERi0xLjQK"
+            }]
+        });
+        let result = responses_request_to_anthropic(input, 4096).unwrap();
+        let content = result["messages"][0]["content"].as_array().unwrap();
+        let doc = content
+            .iter()
+            .find(|b| b["type"] == "document")
+            .expect("input_file should become a document block");
+        assert_eq!(doc["source"]["type"], "base64");
     }
 
     #[test]
