@@ -10,9 +10,15 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
+      # 只把 minor/patch 合并成一个 PR；major 单独开 PR，避免破坏性变更被淹没
+      # 在几十条更新里（例如 b54a6ff7 一次带入 33 个更新，其中 tailwindcss
+      # 3→4 让整份 tailwind.config.cjs 静默失效）
       frontend-deps:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "cargo"
     directory: "/src-tauri"
@@ -24,9 +30,13 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
+      # 同上：major 单独审查
       cargo-deps:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
