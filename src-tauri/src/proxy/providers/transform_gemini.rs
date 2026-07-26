@@ -358,8 +358,42 @@ fn build_generation_config(body: &Value) -> Option<Value> {
     if let Some(value) = body.get("top_p") {
         config.insert("topP".to_string(), value.clone());
     }
+    // Anthropic top_k -> Gemini topK：同为采样约束，此前未映射，Claude Code
+    // 显式设 top_k 时会被丢弃。
+    if let Some(value) = body.get("top_k") {
+        config.insert("topK".to_string(), value.clone());
+    }
     if let Some(value) = body.get("stop_sequences") {
         config.insert("stopSequences".to_string(), value.clone());
+    }
+
+    // Anthropic thinking -> Gemini generationConfig.thinkingConfig。此前完全未
+    // 映射：一个开了 extended thinking 的 Claude Code 请求经 Gemini 原生路径转发
+    // 时，thinking 预算被丢弃，Gemini 端按默认（通常关闭或自动）处理。
+    if let Some(thinking) = body.get("thinking").and_then(|v| v.as_object()) {
+        let mut tc = Map::new();
+        match thinking.get("type").and_then(|v| v.as_str()) {
+            Some("disabled") => {
+                // thinkingBudget=0 明确关闭思考
+                tc.insert("thinkingBudget".to_string(), json!(0));
+            }
+            Some("enabled") => {
+                // 有预算就透传，没有就用 -1（Gemini 的动态预算）
+                if let Some(budget) = thinking.get("budget_tokens").and_then(|v| v.as_i64()) {
+                    tc.insert("thinkingBudget".to_string(), json!(budget));
+                } else {
+                    tc.insert("thinkingBudget".to_string(), json!(-1));
+                }
+                tc.insert("includeThoughts".to_string(), json!(true));
+            }
+            // 未知/adaptive：交给 Gemini 动态决定
+            _ => {
+                tc.insert("thinkingBudget".to_string(), json!(-1));
+            }
+        }
+        if !tc.is_empty() {
+            config.insert("thinkingConfig".to_string(), Value::Object(tc));
+        }
     }
 
     if config.is_empty() {
@@ -1293,6 +1327,39 @@ mod tests {
         assert_eq!(result["contents"][0]["role"], "user");
         assert_eq!(result["contents"][0]["parts"][0]["text"], "Hello");
         assert_eq!(result["generationConfig"]["maxOutputTokens"], 128);
+    }
+
+    #[test]
+    fn anthropic_to_gemini_maps_thinking_and_top_k_into_generation_config() {
+        // extended thinking 预算和 top_k 此前完全未映射到 Gemini。
+        let enabled = anthropic_to_gemini(json!({
+            "model": "gemini-3-pro",
+            "max_tokens": 64,
+            "top_k": 40,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": "Hi" }]
+        }))
+        .unwrap();
+        assert_eq!(enabled["generationConfig"]["topK"], 40);
+        assert_eq!(
+            enabled["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            2048
+        );
+        assert_eq!(
+            enabled["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            true
+        );
+
+        let disabled = anthropic_to_gemini(json!({
+            "model": "gemini-3-pro",
+            "thinking": { "type": "disabled" },
+            "messages": [{ "role": "user", "content": "Hi" }]
+        }))
+        .unwrap();
+        assert_eq!(
+            disabled["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            0
+        );
     }
 
     #[test]
