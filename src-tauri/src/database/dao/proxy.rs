@@ -455,26 +455,43 @@ impl Database {
         }
     }
 
-    /// 更新代理配置（兼容旧接口，更新所有三行的公共字段）
+    /// 更新代理配置（兼容旧接口）
+    ///
+    /// listen_address / listen_port / enable_logging 是真正的全局字段（只有一个
+    /// 监听器），镜像写所有行。而 max_retries / streaming_* / non_streaming_timeout
+    /// 是 per-app 字段（见 update_proxy_config_for_app 按 app_type 单独写）。此前
+    /// 这里把它们也无条件写到三行，于是每次退出/端口变更都用 get_proxy_config 读
+    /// 的那一行（claude）的值覆盖掉 codex / gemini 的 per-app 设置。现在只把
+    /// per-app 字段写回 get_proxy_config 实际读取的 'claude' 行。
     pub async fn update_proxy_config(&self, config: ProxyConfig) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
 
-        // 更新所有三行的公共字段
+        // 全局字段：镜像写所有行
         conn.execute(
             "UPDATE proxy_config SET
                 listen_address = ?1,
                 listen_port = ?2,
-                max_retries = ?3,
-                enable_logging = ?4,
-                streaming_first_byte_timeout = ?5,
-                streaming_idle_timeout = ?6,
-                non_streaming_timeout = ?7,
+                enable_logging = ?3,
                 updated_at = datetime('now')",
             rusqlite::params![
                 config.listen_address,
                 config.listen_port as i32,
-                config.max_retries as i32,
                 if config.enable_logging { 1 } else { 0 },
+            ],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // per-app 字段：只写 get_proxy_config 读取的 'claude' 行，不波及其他 app
+        conn.execute(
+            "UPDATE proxy_config SET
+                max_retries = ?1,
+                streaming_first_byte_timeout = ?2,
+                streaming_idle_timeout = ?3,
+                non_streaming_timeout = ?4,
+                updated_at = datetime('now')
+             WHERE app_type = 'claude'",
+            rusqlite::params![
+                config.max_retries as i32,
                 config.streaming_first_byte_timeout as i32,
                 config.streaming_idle_timeout as i32,
                 config.non_streaming_timeout as i32,
@@ -906,6 +923,43 @@ impl Database {
 mod tests {
     use crate::database::Database;
     use crate::error::AppError;
+
+    #[tokio::test]
+    async fn update_proxy_config_does_not_clobber_per_app_fields() -> Result<(), AppError> {
+        // 兼容接口 update_proxy_config 曾用一条无 WHERE 的 UPDATE 把 per-app 字段
+        // （max_retries / 各类 timeout）写到全部三行，于是每次退出/端口变更都用
+        // get_proxy_config 读的 claude 行覆盖掉 codex/gemini 的 per-app 设置。
+        let db = Database::memory()?;
+
+        // 给 codex 设一个与默认不同的 per-app max_retries
+        let mut codex = db.get_proxy_config_for_app("codex").await?;
+        codex.max_retries = 99;
+        codex.streaming_idle_timeout = 4321;
+        db.update_proxy_config_for_app(codex).await?;
+
+        // 走全局兼容接口写一次（模拟退出/端口持久化），带的是 claude 行的值
+        let global = db.get_proxy_config().await?;
+        db.update_proxy_config(global).await?;
+
+        // codex 的 per-app 字段必须原样保留
+        let codex_after = db.get_proxy_config_for_app("codex").await?;
+        assert_eq!(
+            codex_after.max_retries, 99,
+            "全局 update 不应覆盖 codex 的 per-app max_retries"
+        );
+        assert_eq!(
+            codex_after.streaming_idle_timeout, 4321,
+            "全局 update 不应覆盖 codex 的 per-app streaming_idle_timeout"
+        );
+
+        // 全局字段仍应生效并可被 get_proxy_config 读回
+        let mut g2 = db.get_proxy_config().await?;
+        g2.listen_port = 23456;
+        db.update_proxy_config(g2).await?;
+        assert_eq!(db.get_proxy_config().await?.listen_port, 23456);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_default_cost_multiplier_round_trip() -> Result<(), AppError> {
