@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { UsageHero } from "./UsageHero";
-import { UsageTrendChart } from "./UsageTrendChart";
 import { RequestLogTable } from "./RequestLogTable";
 import { ProviderStatsTable } from "./ProviderStatsTable";
 import { ModelStatsTable } from "./ModelStatsTable";
@@ -23,6 +22,19 @@ import {
   Loader2,
 } from "lucide-react";
 import { ProviderIcon } from "@/components/ProviderIcon";
+
+// recharts pulls in the d3 scale/shape stack and is used by this chart alone,
+// so it is split out of the main chunk. The fallback mirrors the chart's own
+// loading state exactly, keeping the 350px slot stable while it arrives.
+const UsageTrendChart = lazy(() =>
+  import("./UsageTrendChart").then((m) => ({ default: m.UsageTrendChart })),
+);
+
+const chartFallback = (
+  <div className="flex h-[350px] items-center justify-center rounded-xl bg-card/40 border border-border/50">
+    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground/30" />
+  </div>
+);
 import {
   Select,
   SelectContent,
@@ -375,14 +387,16 @@ export function UsageDashboard({
         refreshIntervalMs={refreshIntervalMs}
       />
 
-      <UsageTrendChart
-        range={range}
-        rangeLabel={rangeLabel}
-        appType={appType}
-        providerName={providerName}
-        model={model}
-        refreshIntervalMs={refreshIntervalMs}
-      />
+      <Suspense fallback={chartFallback}>
+        <UsageTrendChart
+          range={range}
+          rangeLabel={rangeLabel}
+          appType={appType}
+          providerName={providerName}
+          model={model}
+          refreshIntervalMs={refreshIntervalMs}
+        />
+      </Suspense>
 
       <div className="space-y-4">
         <Tabs defaultValue="logs" className="w-full">
