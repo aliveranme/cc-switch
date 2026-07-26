@@ -101,6 +101,12 @@ export const useAddProviderMutation = (appId: AppId) => {
       await queryClient.invalidateQueries({ queryKey: ["providers", appId] });
 
       if (appId === "opencode") {
+        // 新增默认会写入 live（后端 addToLive.unwrap_or(true)），live provider
+        // id 列表必须一并失效——否则新供应商不会显示为「已在配置中」，要等到
+        // 别的操作顺带刷新。update / delete 分支本来就做了这件事。
+        await queryClient.invalidateQueries({
+          queryKey: ["opencodeLiveProviderIds"],
+        });
         await queryClient.invalidateQueries({
           queryKey: ["omo", "current-provider-id"],
         });
@@ -116,6 +122,9 @@ export const useAddProviderMutation = (appId: AppId) => {
       }
 
       if (appId === "openclaw") {
+        await queryClient.invalidateQueries({
+          queryKey: openclawKeys.liveProviderIds,
+        });
         await queryClient.invalidateQueries({
           queryKey: openclawKeys.health,
         });
