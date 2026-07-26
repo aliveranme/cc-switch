@@ -1407,8 +1407,17 @@ function ProviderFormFull({
           configObj.modelCatalog = { models: normalizedCatalogModels };
         }
         settingsConfig = JSON.stringify(configObj);
-      } catch (err) {
-        settingsConfig = values.settingsConfig.trim();
+      } catch {
+        // codex 从不写 RHF 的 settingsConfig（useBaseUrlState 拿到的是空串，
+        // onCodexConfigChange 是 no-op），回退到 values.settingsConfig 只会
+        // 保存一份陈旧快照——用户以为改了 auth.json，实际存进去的是旧值。
+        // 直接中止并提示，让用户修正 JSON。
+        toast.error(
+          t("codexConfig.authJsonInvalid", {
+            defaultValue: "auth.json 不是合法 JSON，请修正后再保存",
+          }),
+        );
+        return;
       }
     } else if (appId === "gemini") {
       try {
@@ -1419,8 +1428,15 @@ function ProviderFormFull({
           config: configObj,
         };
         settingsConfig = JSON.stringify(combined);
-      } catch (err) {
-        settingsConfig = values.settingsConfig.trim();
+      } catch {
+        // 同理：geminiConfig 由表单字段驱动，回退到 values.settingsConfig
+        // 会写入陈旧内容。中止并提示用户修正 config JSON。
+        toast.error(
+          t("geminiConfig.configJsonInvalid", {
+            defaultValue: "Gemini config 不是合法 JSON，请修正后再保存",
+          }),
+        );
+        return;
       }
     } else if (
       appId === "opencode" &&
@@ -1515,27 +1531,30 @@ function ProviderFormFull({
       const needsClearEndpoints =
         hadEndpoints && draftCustomEndpoints.length === 0;
 
-      let mergedMeta = needsClearEndpoints
+      const mergedMeta = needsClearEndpoints
         ? mergeProviderMeta(initialData?.meta, {})
         : mergeProviderMeta(initialData?.meta, customEndpointsToSave);
-
-      if (activePreset?.isPartner) {
-        mergedMeta = {
-          ...(mergedMeta ?? {}),
-          isPartner: true,
-        };
-      }
-
-      if (activePreset?.partnerPromotionKey) {
-        mergedMeta = {
-          ...(mergedMeta ?? {}),
-          partnerPromotionKey: activePreset.partnerPromotionKey,
-        };
-      }
 
       if (mergedMeta !== undefined) {
         payload.meta = mergedMeta;
       }
+    }
+
+    // Partner 标记来自预设，与是否添加自定义 endpoint 无关。原先嵌在
+    // `draftCustomEndpoints.length > 0` 的 guard 里，导致没有自定义 endpoint
+    // 的合作方供应商在新建时丢失 isPartner / partnerPromotionKey（最终
+    // nextMeta 只从 baseMeta 展开，而 baseMeta 此时不含这两个字段）。
+    if (
+      !isEditMode &&
+      (activePreset?.isPartner || activePreset?.partnerPromotionKey)
+    ) {
+      payload.meta = {
+        ...(payload.meta ?? {}),
+        ...(activePreset.isPartner ? { isPartner: true } : {}),
+        ...(activePreset.partnerPromotionKey
+          ? { partnerPromotionKey: activePreset.partnerPromotionKey }
+          : {}),
+      };
     }
 
     const baseMeta: ProviderMeta | undefined =
