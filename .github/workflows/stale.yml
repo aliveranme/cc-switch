@@ -37,8 +37,9 @@ jobs:
           # --- Exemptions ---
           # Issues with these labels will NEVER be marked stale
           exempt-issue-labels: 'security,performance'
-          # Issues with 3+ reactions are likely popular requests, exempt them
-          exempt-issue-created-after: '2020-01-01'
+          # Note: actions/stale cannot exempt by reaction count — it only
+          # supports labels, milestones, assignees and start-date. To protect a
+          # popular request, add one of the labels above (or extend the list).
 
           # --- Processing limits ---
           # Process up to 100 issues per run to avoid API rate limits

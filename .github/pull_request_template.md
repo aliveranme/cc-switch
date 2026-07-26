@@ -19,7 +19,14 @@ Fixes #
 
 ## Checklist / 检查清单
 
+<!-- These mirror the CI jobs one-to-one; running them locally avoids a red PR. -->
+<!-- 这些与 CI 的检查项一一对应，本地先跑可以避免 PR 变红。 -->
+
 - [ ] `pnpm typecheck` passes / 通过 TypeScript 类型检查
 - [ ] `pnpm format:check` passes / 通过代码格式检查
-- [ ] `cargo clippy` passes (if Rust code changed) / 通过 Clippy 检查（如修改了 Rust 代码）
-- [ ] Updated i18n files if user-facing text changed / 如修改了用户可见文本，已更新国际化文件
+- [ ] `pnpm test:unit` passes / 通过前端单元测试
+- [ ] `pnpm build:renderer` passes / 通过前端构建
+- [ ] `cargo fmt --check` passes (if Rust code changed) / 通过 Rust 格式检查（如修改了 Rust 代码）
+- [ ] `cargo clippy --all-targets -- -D warnings` passes (if Rust code changed) / 通过 Clippy 检查（如修改了 Rust 代码）
+- [ ] `cargo test` passes (if Rust code changed) / 通过 Rust 测试（如修改了 Rust 代码）
+- [ ] Updated all four locales if user-facing text changed / 如修改了用户可见文本，已同步更新四个语言文件（zh / zh-TW / en / ja）
