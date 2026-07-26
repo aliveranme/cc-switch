@@ -236,6 +236,12 @@ pub fn anthropic_to_openai_with_reasoning_content(
 
     if let Some(v) = body.get("tool_choice") {
         result["tool_choice"] = map_tool_choice_to_chat(v);
+        // Anthropic 用 tool_choice.disable_parallel_tool_use 表达串行工具调用；
+        // OpenAI Chat 用顶层 parallel_tool_calls。此前只映射了 tool_choice 本身，
+        // 丢掉了这个约束。反向(codex_anthropic)已处理，这里补齐对称。
+        if v.get("disable_parallel_tool_use").and_then(Value::as_bool) == Some(true) {
+            result["parallel_tool_calls"] = json!(false);
+        }
     }
 
     Ok(result)
@@ -1322,6 +1328,19 @@ mod tests {
         assert_eq!(messages[1]["role"], "tool");
         assert_eq!(messages[2]["role"], "user");
         assert_eq!(messages[2]["content"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn test_anthropic_to_openai_maps_disable_parallel_tool_use() {
+        // Anthropic 的串行工具约束应转成 OpenAI 的 parallel_tool_calls:false。
+        let input = json!({
+            "model": "claude-3-opus",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tool_choice": {"type": "any", "disable_parallel_tool_use": true}
+        });
+        let result = anthropic_to_openai(input).unwrap();
+        assert_eq!(result["tool_choice"], "required");
+        assert_eq!(result["parallel_tool_calls"], false);
     }
 
     #[test]
