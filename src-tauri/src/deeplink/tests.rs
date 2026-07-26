@@ -906,3 +906,71 @@ fn test_infer_homepage_from_endpoint_without_homepage() {
         Some("https://cubence.com".to_string())
     );
 }
+
+/// Claude Desktop 供应商必须能通过 Deep Link 导入。
+///
+/// build_provider_from_request 一直有 ClaudeDesktop 分支（复用 Claude 的
+/// settings 形态，并补 claude_desktop_mode = Direct），但 parser 的 app 白名单
+/// 漏了 "claude-desktop"，请求在解析阶段就被拒绝，那段分支从未被执行过。
+/// 现有 31 个测试只覆盖了 claude / codex / grokbuild 三个 app，所以没暴露。
+#[test]
+fn test_parse_claude_desktop_provider() {
+    use super::provider::build_provider_from_request;
+    use crate::app_config::AppType;
+
+    let url = "ccswitch://v1/import?resource=provider&app=claude-desktop&name=Desktop%20Relay&endpoint=https%3A%2F%2Fapi.example.com&apiKey=secret";
+
+    let request = parse_deeplink_url(url).expect("claude-desktop 应被 parser 接受");
+
+    assert_eq!(request.app.as_deref(), Some("claude-desktop"));
+    assert_eq!(request.name.as_deref(), Some("Desktop Relay"));
+    assert_eq!(request.endpoint.as_deref(), Some("https://api.example.com"));
+    assert_eq!(request.api_key.as_deref(), Some("secret"));
+
+    // 解析结果必须能被导入层消费，并带上 Desktop 专属的 meta
+    let provider = build_provider_from_request(&AppType::ClaudeDesktop, &request)
+        .expect("build_provider_from_request 应接受 ClaudeDesktop");
+    assert_eq!(provider.name, "Desktop Relay");
+    assert_eq!(
+        provider
+            .meta
+            .as_ref()
+            .and_then(|m| m.claude_desktop_mode.as_ref()),
+        Some(&crate::provider::ClaudeDesktopMode::Direct),
+        "ClaudeDesktop 导入应设置 claude_desktop_mode = Direct"
+    );
+}
+
+/// parser 接受的 app 集合必须与 AppType 的全部变体一致。
+///
+/// 这条测试锁住上面那个缺陷的根因：任何新增的 AppType 如果忘了同步到 deeplink
+/// 白名单，这里会直接失败，而不是等到用户点链接才发现。
+#[test]
+fn test_provider_deeplink_accepts_every_app_type() {
+    use crate::app_config::AppType;
+
+    let all = [
+        AppType::Claude,
+        AppType::ClaudeDesktop,
+        AppType::Codex,
+        AppType::Gemini,
+        AppType::GrokBuild,
+        AppType::OpenCode,
+        AppType::OpenClaw,
+        AppType::Hermes,
+    ];
+
+    for app_type in all {
+        let app = app_type.as_str();
+        let url = format!(
+            "ccswitch://v1/import?resource=provider&app={app}&name=X&endpoint=https%3A%2F%2Fapi.example.com"
+        );
+        let parsed = parse_deeplink_url(&url);
+        assert!(
+            parsed.is_ok(),
+            "app={app} 应被 provider deeplink 接受，但被拒绝了: {:?}",
+            parsed.err()
+        );
+        assert_eq!(parsed.unwrap().app.as_deref(), Some(app));
+    }
+}

@@ -79,12 +79,24 @@ fn parse_provider_deeplink(
         .clone();
 
     // Validate app type
+    //
+    // 必须与 build_provider_from_request 覆盖的 AppType 保持一致：那里已经为
+    // ClaudeDesktop 写了专门的分支（复用 Claude 的 settings 形态，并补上
+    // claude_desktop_mode = Direct），但这里漏掉 "claude-desktop" 会让请求在
+    // 解析阶段就被拒绝，那段分支因此永远不可达。
     if !matches!(
         app.as_str(),
-        "claude" | "codex" | "gemini" | "grokbuild" | "opencode" | "openclaw" | "hermes"
+        "claude"
+            | "claude-desktop"
+            | "codex"
+            | "gemini"
+            | "grokbuild"
+            | "opencode"
+            | "openclaw"
+            | "hermes"
     ) {
         return Err(AppError::InvalidInput(format!(
-            "Invalid app type: must be 'claude', 'codex', 'gemini', 'grokbuild', 'opencode', 'openclaw', or 'hermes', got '{app}'"
+            "Invalid app type: must be 'claude', 'claude-desktop', 'codex', 'gemini', 'grokbuild', 'opencode', 'openclaw', or 'hermes', got '{app}'"
         )));
     }
 
