@@ -14,7 +14,8 @@ use crate::error::AppError;
 use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
 use crate::proxy::usage::parser::TokenUsage;
 use crate::services::usage_stats::{
-    effective_usage_log_filter, find_model_pricing, should_skip_session_insert, DedupKey,
+    effective_usage_log_filter, find_model_pricing, has_matching_proxy_usage_log,
+    proxy_request_id_exists, DedupKey,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -111,7 +112,7 @@ pub struct DataSourceSummary {
 }
 
 /// 从 JSONL 中解析出的 assistant 消息使用数据
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ParsedAssistantUsage {
     message_id: String,
     model: String,
@@ -509,7 +510,16 @@ fn insert_session_log_entry(
         cache_creation_tokens: msg.cache_creation_tokens,
         created_at,
     };
-    if should_skip_session_insert(&conn, request_id, &dedup_key)? {
+    // Claude 会话日志按增量 offset 读取，且没有 codex/grokbuild 那样的 defer
+    // 窗口。一条 assistant 消息可能先以中间态（token 尚未结算）落盘，下一次
+    // sync 才读到完成态。旧逻辑用 request_id 是否已存在直接短路，于是中间态那
+    // 行把消息"冻结"在偏低的 token 数上，完成态被丢弃。
+    //
+    // 改法：只有当这个 request_id 尚未写过、且已有一条匹配的 proxy 日志（说明
+    // 代理侧已记账，会话日志是重复来源）时才跳过。request_id 已存在时不再短路，
+    // 交给下面的 upsert 把它向前推进。
+    let request_id_existed = proxy_request_id_exists(&conn, request_id)?;
+    if !request_id_existed && has_matching_proxy_usage_log(&conn, &dedup_key)? {
         return Ok(false);
     }
 
@@ -548,13 +558,29 @@ fn insert_session_log_entry(
 
     let inserted_rows = conn
         .execute(
-            "INSERT OR IGNORE INTO proxy_request_logs (
+            // ON CONFLICT upsert：同一 request_id 再次出现时，只在这是一条
+            // session_log 行、且新的 output_tokens 严格大于旧值时才向前推进。
+            //   - data_source = 'session_log' 守卫：绝不覆盖代理实时记的 'proxy' 行
+            //   - 严格 `>`：保持幂等且单调，重复 sync 不会来回抖动
+            "INSERT INTO proxy_request_logs (
             request_id, provider_id, app_type, model, request_model,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
             provider_type, is_streaming, cost_multiplier, created_at, data_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+        ON CONFLICT(request_id) DO UPDATE SET
+            input_tokens = excluded.input_tokens,
+            output_tokens = excluded.output_tokens,
+            cache_read_tokens = excluded.cache_read_tokens,
+            cache_creation_tokens = excluded.cache_creation_tokens,
+            input_cost_usd = excluded.input_cost_usd,
+            output_cost_usd = excluded.output_cost_usd,
+            cache_read_cost_usd = excluded.cache_read_cost_usd,
+            cache_creation_cost_usd = excluded.cache_creation_cost_usd,
+            total_cost_usd = excluded.total_cost_usd
+        WHERE proxy_request_logs.data_source = 'session_log'
+          AND excluded.output_tokens > proxy_request_logs.output_tokens",
             rusqlite::params![
                 request_id,
                 "_session",         // provider_id: 标记为会话来源
@@ -584,7 +610,9 @@ fn insert_session_log_entry(
         )
         .map_err(|e| AppError::Database(format!("插入会话日志失败: {e}")))?;
 
-    Ok(inserted_rows > 0)
+    // 只把"新插入"计入 imported。request_id 已存在时这是一次原地上推
+    // （token 数向前推进），不是新导入，否则每次 sync 都会让计数虚高。
+    Ok(!request_id_existed && inserted_rows > 0)
 }
 
 /// 从 model_pricing 表查找模型定价（支持模糊匹配）
@@ -727,6 +755,81 @@ mod tests {
 
         messages.insert("msg_1".to_string(), final_entry);
         assert_eq!(messages.get("msg_1").unwrap().output_tokens, 1349);
+    }
+
+    #[test]
+    fn test_claude_session_upgrades_intermediate_row_to_final_tokens() -> Result<(), AppError> {
+        // Claude 会话按增量 offset 读取：一条消息可能先以中间态（output 偏低）
+        // 落盘，下一次 sync 才读到完成态。旧逻辑用 request_id 已存在直接短路，把
+        // 消息冻结在中间态。现在应原地上推到完成态的 token 数。
+        let db = Database::memory()?;
+
+        let mid = ParsedAssistantUsage {
+            message_id: "msg_1".to_string(),
+            model: "claude-opus-4-6".to_string(),
+            input_tokens: 3,
+            output_tokens: 26, // 中间态
+            cache_read_tokens: 5000,
+            cache_creation_tokens: 10000,
+            stop_reason: None,
+            timestamp: Some("2026-04-05T12:00:00Z".to_string()),
+            session_id: Some("s1".to_string()),
+        };
+        let first = insert_session_log_entry(&db, "session:msg_1", &mid)?;
+        assert!(first, "首次落盘应计入 imported");
+
+        let done = ParsedAssistantUsage {
+            output_tokens: 1349, // 完成态
+            stop_reason: Some("end_turn".to_string()),
+            ..mid.clone()
+        };
+        let second = insert_session_log_entry(&db, "session:msg_1", &done)?;
+        assert!(!second, "原地上推不应再计入 imported");
+
+        let conn = lock_conn!(db.conn);
+        // 仍只有一行，token 已推进到完成态
+        let (count, out): (i64, i64) = conn.query_row(
+            "SELECT COUNT(*), MAX(output_tokens) FROM proxy_request_logs WHERE request_id = 'session:msg_1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(count, 1, "不应产生重复行");
+        assert_eq!(out, 1349, "output_tokens 应被推进到完成态");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_claude_session_upsert_never_moves_tokens_backward() -> Result<(), AppError> {
+        // 严格 `>` 保证单调：完成态之后若又读到一条更旧的中间态，不得回退。
+        let db = Database::memory()?;
+        let base = ParsedAssistantUsage {
+            message_id: "msg_2".to_string(),
+            model: "claude-opus-4-6".to_string(),
+            input_tokens: 3,
+            output_tokens: 1349,
+            cache_read_tokens: 5000,
+            cache_creation_tokens: 10000,
+            stop_reason: Some("end_turn".to_string()),
+            timestamp: Some("2026-04-05T12:00:00Z".to_string()),
+            session_id: Some("s2".to_string()),
+        };
+        insert_session_log_entry(&db, "session:msg_2", &base)?;
+
+        let stale = ParsedAssistantUsage {
+            output_tokens: 26,
+            ..base.clone()
+        };
+        insert_session_log_entry(&db, "session:msg_2", &stale)?;
+
+        let conn = lock_conn!(db.conn);
+        let out: i64 = conn.query_row(
+            "SELECT output_tokens FROM proxy_request_logs WHERE request_id = 'session:msg_2'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(out, 1349, "更旧的中间态不得让 token 回退");
+        Ok(())
     }
 
     #[test]

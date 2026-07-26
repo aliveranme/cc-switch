@@ -361,7 +361,10 @@ pub(crate) fn should_skip_session_insert(
     has_matching_proxy_usage_log(conn, key)
 }
 
-fn proxy_request_id_exists(conn: &Connection, request_id: &str) -> Result<bool, AppError> {
+pub(crate) fn proxy_request_id_exists(
+    conn: &Connection,
+    request_id: &str,
+) -> Result<bool, AppError> {
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM proxy_request_logs WHERE request_id = ?1)",
         params![request_id],
