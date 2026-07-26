@@ -819,10 +819,14 @@ fn supports_multimodal_function_response(model: &str) -> bool {
 }
 
 fn gemini_part_from_chat_image(part: &Value) -> Option<Value> {
+    // 必须先 trim 再判断：接受侧（chat_image_part_has_inline_data /
+    // whole_string_image_data_url）都在 trim 后比较，这里若沿用原串，
+    // 带前导空白的 data URL 会通过接受检查却在这里转换失败，图片被丢掉。
     let image_url = part
         .pointer("/image_url/url")
         .and_then(Value::as_str)
-        .filter(|url| !url.trim().is_empty())?;
+        .map(str::trim)
+        .filter(|url| !url.is_empty())?;
 
     if image_url
         .get(..5)

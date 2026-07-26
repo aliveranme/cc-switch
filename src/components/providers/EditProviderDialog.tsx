@@ -188,8 +188,10 @@ export function EditProviderDialog({
         string,
         unknown
       >;
+      // hermes 同为 additive 模式，表单同样会填充并校验 providerKey；
+      // 漏掉它会让 Hermes 供应商的重命名被静默丢弃
       const nextProviderId =
-        (appId === "opencode" || appId === "openclaw") &&
+        (appId === "opencode" || appId === "openclaw" || appId === "hermes") &&
         values.providerKey?.trim()
           ? values.providerKey.trim()
           : provider.id;
