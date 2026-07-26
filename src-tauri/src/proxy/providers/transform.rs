@@ -566,11 +566,13 @@ pub fn openai_to_anthropic(body: Value) -> Result<Value, ProxyError> {
     let mut content = Vec::new();
     let mut has_tool_use = false;
 
-    // DeepSeek provider 会把思考内容放在 message.reasoning_content。
-    if let Some(reasoning_content) = message.get("reasoning_content").and_then(|r| r.as_str()) {
-        if !reasoning_content.is_empty() {
-            content.push(json!({"type": "thinking", "thinking": reasoning_content}));
-        }
+    // 穷举提取思考内容：reasoning_content > reasoning(字符串/对象) >
+    // reasoning_details。与流式聚合 (handlers.rs) 和 Codex 桥
+    // (transform_codex_chat.rs) 对称，避免非流式 Chat->Anthropic 丢失
+    // OpenRouter / Kimi / MiMo 等只在 reasoning / reasoning_details 里带思考的
+    // provider 的内容。helper 已对空值返回 None。
+    if let Some(reasoning) = super::codex_chat_common::extract_reasoning_field_text(message) {
+        content.push(json!({"type": "thinking", "thinking": reasoning}));
     }
 
     // 文本/拒绝内容
@@ -1333,6 +1335,35 @@ mod tests {
         assert_eq!(result["stop_reason"], "end_turn");
         assert_eq!(result["usage"]["input_tokens"], 10);
         assert_eq!(result["usage"]["output_tokens"], 5);
+    }
+
+    #[test]
+    fn test_openai_to_anthropic_extracts_reasoning_from_all_shapes() {
+        // 非流式 Chat->Anthropic 必须像流式聚合和 Codex 桥一样，穷举提取
+        // reasoning：reasoning_content / reasoning(字符串或对象) / reasoning_details。
+        // 否则 OpenRouter / Kimi / MiMo 等只在后两种字段里带思考的 provider，
+        // 思考内容会整段丢失。
+        let cases = [
+            json!({"role": "assistant", "content": "a", "reasoning": "R-string"}),
+            json!({"role": "assistant", "content": "a", "reasoning": {"content": "R-object"}}),
+            json!({"role": "assistant", "content": "a", "reasoning_details": [{"type": "reasoning.text", "text": "R-details"}]}),
+        ];
+        let expected = ["R-string", "R-object", "R-details"];
+
+        for (msg, want) in cases.into_iter().zip(expected) {
+            let input = json!({
+                "id": "c1",
+                "choices": [{"index": 0, "message": msg, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            });
+            let result = openai_to_anthropic(input).unwrap();
+            let content = result["content"].as_array().unwrap();
+            let thinking = content
+                .iter()
+                .find(|b| b["type"] == "thinking")
+                .unwrap_or_else(|| panic!("no thinking block for reasoning shape yielding {want}"));
+            assert_eq!(thinking["thinking"], want);
+        }
     }
 
     #[test]
