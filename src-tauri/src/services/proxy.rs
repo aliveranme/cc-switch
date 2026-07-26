@@ -1349,7 +1349,11 @@ impl ProxyService {
         //    注意：保留 proxy_config.enabled 状态，下次启动时自动恢复
         if let Ok(mut config) = self.db.get_proxy_config().await {
             config.live_takeover_active = false;
-            let _ = self.db.update_proxy_config(config).await;
+            if let Err(e) = self.db.update_proxy_config(config).await {
+                // 下一步会删掉备份。标志没落盘的话，重启后会认为仍在接管状态，
+                // 但备份已经不在了——这种不一致必须能从日志里看出来。
+                log::warn!("[Takeover] 清除 live_takeover_active 标志失败: {e}");
+            }
         }
 
         // 4. 删除备份（Live 配置已恢复，备份不再需要）
@@ -1694,7 +1698,11 @@ impl ProxyService {
                             ClaudeTakeoverAuthPolicy::PreserveExistingOrAuthToken,
                         );
                     }
-                    let _ = self.write_claude_live(&live_config);
+                    if let Err(e) = self.write_claude_live(&live_config) {
+                        // 保持 best-effort 语义（不让接管整体失败），但必须留痕：
+                        // 写入失败意味着 Claude Code 仍直连原上游，而 UI 已显示接管成功
+                        log::warn!("[Takeover] 写入 Claude Live 配置失败，接管未生效: {e}");
+                    }
                 }
             }
             AppType::Codex => {
@@ -1724,14 +1732,18 @@ impl ProxyService {
                         });
                     }
 
-                    let _ = self.write_gemini_live(&live_config);
+                    if let Err(e) = self.write_gemini_live(&live_config) {
+                        log::warn!("[Takeover] 写入 Gemini Live 配置失败，接管未生效: {e}");
+                    }
                 }
             }
             AppType::GrokBuild => {
                 if let Ok(mut live_config) = self.read_grok_live() {
                     if Self::grok_live_config_supports_takeover(&live_config) {
                         Self::apply_grok_takeover_fields(&mut live_config, &proxy_grok_base_url)?;
-                        let _ = self.write_grok_live(&live_config);
+                        if let Err(e) = self.write_grok_live(&live_config) {
+                            log::warn!("[Takeover] 写入 Grok Build Live 配置失败，接管未生效: {e}");
+                        }
                     } else {
                         log::info!(
                             "Grok Build Live 处于官方登录态（无自定义模型表），跳过代理接管"
