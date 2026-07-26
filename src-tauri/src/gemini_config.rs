@@ -36,7 +36,20 @@ pub fn parse_env_file(content: &str) -> HashMap<String, String> {
 
         // 解析 KEY=VALUE
         if let Some((key, value)) = line.split_once('=') {
-            let key = key.trim().to_string();
+            let mut key = key.trim();
+
+            // Gemini CLI 用 dotenv 加载，它接受可选的 `export ` 前缀。不剥掉的话
+            // key 会带上空格从而校验失败，该行被丢弃；而 write_gemini_env_atomic
+            // 是按这张 map 重写整个文件的，于是用户的 `export FOO=bar` 在下一次
+            // 切换时就永久消失了。
+            if let Some(rest) = key
+                .strip_prefix("export ")
+                .or_else(|| key.strip_prefix("export\t"))
+            {
+                key = rest.trim_start();
+            }
+
+            let key = key.to_string();
             let value = value.trim().to_string();
 
             // 验证 key 是否有效（不为空，只包含字母、数字和下划线）
@@ -94,7 +107,15 @@ pub fn parse_env_file_strict(content: &str) -> Result<HashMap<String, String>, A
 
         // 解析 KEY=VALUE
         if let Some((key, value)) = line.split_once('=') {
-            let key = key.trim();
+            let mut key = key.trim();
+            // 与 parse_env_file 保持一致：dotenv 允许 `export ` 前缀，
+            // 不剥掉会把合法的 .env 判成格式错误并阻塞导入
+            if let Some(rest) = key
+                .strip_prefix("export ")
+                .or_else(|| key.strip_prefix("export\t"))
+            {
+                key = rest.trim_start();
+            }
             let value = value.trim();
 
             // 验证 key 不为空
@@ -647,5 +668,35 @@ KEY_WITH-DASH=value";
         });
 
         assert!(validate_gemini_settings(&settings).is_err());
+    }
+
+    /// dotenv（Gemini CLI 的加载器）允许可选的 `export ` 前缀。
+    ///
+    /// 不剥掉的话 key 会带空格从而校验失败：宽松版静默丢弃该行，而
+    /// write_gemini_env_atomic 按 map 重写整个文件，用户的 export 行会在
+    /// 下一次切换时永久消失；严格版则把合法的 .env 判成格式错误。
+    #[test]
+    fn parse_env_file_accepts_export_prefix() {
+        let content = "export GEMINI_API_KEY=key-1\nGOOGLE_GEMINI_BASE_URL=https://x.example\nexport\tGEMINI_MODEL=m\n";
+
+        let map = parse_env_file(content);
+        assert_eq!(map.get("GEMINI_API_KEY").map(String::as_str), Some("key-1"));
+        assert_eq!(map.get("GEMINI_MODEL").map(String::as_str), Some("m"));
+        assert_eq!(
+            map.get("GOOGLE_GEMINI_BASE_URL").map(String::as_str),
+            Some("https://x.example")
+        );
+        assert!(
+            map.keys().all(|k| !k.contains("export")),
+            "export 前缀必须被剥离，实际键: {:?}",
+            map.keys().collect::<Vec<_>>()
+        );
+
+        let strict = parse_env_file_strict(content).expect("带 export 前缀的 .env 应被接受");
+        assert_eq!(strict.len(), 3);
+        assert_eq!(
+            strict.get("GEMINI_API_KEY").map(String::as_str),
+            Some("key-1")
+        );
     }
 }
