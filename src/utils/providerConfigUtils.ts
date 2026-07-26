@@ -389,7 +389,12 @@ export const hasTomlCommonConfigSnippet = (
 
 // ========== Codex base_url utils ==========
 
-const TOML_SECTION_HEADER_PATTERN = /^\s*\[([^\]\r\n]+)\]\s*$/;
+// 表头：匹配 `[table]`，接受合法 TOML 的尾随注释 `[table] # comment`。
+const TOML_SECTION_HEADER_PATTERN = /^\s*\[([^[\]\r\n]+)\]\s*(?:#.*)?$/;
+// 段边界：除 `[table]` 外还识别 array-of-tables `[[array]]`。凡是判断
+// “下一个段从这里开始” 都用它，否则 `[[x]]` 不被视为边界，它的 body 会被
+// 错误地算进上一个 table，round-trip 时产生重复段。
+const TOML_SECTION_BOUNDARY_PATTERN = /^\s*\[\[?[^[\]\r\n]+\]\]?\s*(?:#.*)?$/;
 const TOML_BASE_URL_PATTERN =
   /^\s*base_url\s*=\s*(?:"((?:\\.|[^"\\\r\n])*)"|'([^'\r\n]*)')\s*(?:#.*)?$/;
 const TOML_EXPERIMENTAL_BEARER_TOKEN_PATTERN =
@@ -449,23 +454,23 @@ const getTomlSectionRange = (
   let headerLineIndex = -1;
 
   for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(TOML_SECTION_HEADER_PATTERN);
-    if (!match) {
-      continue;
-    }
-
+    // 定位目标段仍用 header 正则（捕获名字），但段 body 的终止要用 boundary，
+    // 这样目标段后面若跟着 `[[array]]` 也能正确收尾。
     if (headerLineIndex === -1) {
-      if (match[1] === sectionName) {
+      const match = lines[index].match(TOML_SECTION_HEADER_PATTERN);
+      if (match && match[1] === sectionName) {
         headerLineIndex = index;
       }
       continue;
     }
 
-    return {
-      bodyStartIndex: headerLineIndex + 1,
-      bodyEndIndex: index,
-      headerLineIndex,
-    };
+    if (TOML_SECTION_BOUNDARY_PATTERN.test(lines[index])) {
+      return {
+        bodyStartIndex: headerLineIndex + 1,
+        bodyEndIndex: index,
+        headerLineIndex,
+      };
+    }
   }
 
   if (headerLineIndex === -1) {
@@ -481,7 +486,7 @@ const getTomlSectionRange = (
 
 const getTopLevelEndIndex = (lines: string[]): number => {
   const firstSectionIndex = lines.findIndex((line) =>
-    TOML_SECTION_HEADER_PATTERN.test(line),
+    TOML_SECTION_BOUNDARY_PATTERN.test(line),
   );
   return firstSectionIndex === -1 ? lines.length : firstSectionIndex;
 };
@@ -607,9 +612,12 @@ const findTomlAssignments = (
   let currentSectionName: string | undefined;
 
   lines.forEach((line, index) => {
-    const sectionMatch = line.match(TOML_SECTION_HEADER_PATTERN);
-    if (sectionMatch) {
-      currentSectionName = sectionMatch[1];
+    // 先按 boundary 判断这行是不是段起始：`[[array]]` 也是新段，必须切断
+    // 归属，否则它的 body 会被错误地算进上一个 table。是段起始时，若是普通
+    // `[table]` 就记名字，否则（array-of-tables）置一个非目标 sentinel。
+    if (TOML_SECTION_BOUNDARY_PATTERN.test(line)) {
+      const headerMatch = line.match(TOML_SECTION_HEADER_PATTERN);
+      currentSectionName = headerMatch ? headerMatch[1] : line.trim();
       return;
     }
 

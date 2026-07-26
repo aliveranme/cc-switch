@@ -3,6 +3,8 @@ import {
   codexApiFormatFromWireApi,
   isCodexAnthropicWireApi,
   extractCodexModelName,
+  extractCodexBaseUrl,
+  setCodexBaseUrl,
   isCodexRemoteCompactionEnabled,
   setCodexModelName,
   setCodexRemoteCompaction,
@@ -171,5 +173,48 @@ name = "Example"
 
     const singleQuoted = `model = 'kimi-k2.7'\n`;
     expect(extractCodexModelName(singleQuoted)).toBe("kimi-k2.7");
+  });
+});
+
+describe("TOML section header edge cases", () => {
+  const config = [
+    'model = "gpt-5"',
+    'model_provider = "custom"',
+    "",
+    "[model_providers.custom] # inline comment",
+    'name = "Custom"',
+    'base_url = "https://old.example.com/v1"',
+    'wire_api = "responses"',
+  ].join("\n");
+
+  it("extracts base_url from a section header carrying a trailing comment", () => {
+    // 段头 `[table] # comment` 是合法 TOML；旧正则要求整行只有 [table]，
+    // 于是该段不被识别，base_url 读不出来。
+    expect(extractCodexBaseUrl(config)).toBe("https://old.example.com/v1");
+  });
+
+  it("rewrites base_url in place without duplicating the commented section", () => {
+    const updated = setCodexBaseUrl(config, "https://new.example.com/v1");
+    expect(extractCodexBaseUrl(updated)).toBe("https://new.example.com/v1");
+    // round-trip 不得产生第二个 [model_providers.custom]
+    const headerCount = updated
+      .split("\n")
+      .filter((l) => /^\s*\[model_providers\.custom\]/.test(l)).length;
+    expect(headerCount).toBe(1);
+  });
+
+  it("does not attribute an array-of-tables body to the preceding section", () => {
+    // `[[array]]` 是新段起始；旧实现只认 [table]，会把 [[hooks]] 的 body
+    // 错算进 model_providers.custom。
+    const withArray = [
+      'model_provider = "custom"',
+      "",
+      "[model_providers.custom]",
+      'base_url = "https://a.example/v1"',
+      "",
+      "[[hooks]]",
+      'base_url = "https://should-not-be-picked/v1"',
+    ].join("\n");
+    expect(extractCodexBaseUrl(withArray)).toBe("https://a.example/v1");
   });
 });
