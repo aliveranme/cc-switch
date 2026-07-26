@@ -199,23 +199,25 @@ Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code
 
 **CC Switch** gibt Ihnen eine einzige Desktop-App, um alle unterstützten KI-Werkzeuge zu verwalten. Statt Konfigurationsdateien von Hand zu bearbeiten, erhalten Sie eine visuelle Oberfläche, um Anbieter mit einem Klick zu importieren und sofort zwischen ihnen zu wechseln — mit 50+ integrierten Anbieter-Presets, einheitlicher MCP- und Skills-Verwaltung und schnellem Umschalten über das System-Tray. Das Ganze gestützt auf eine zuverlässige SQLite-Datenbank mit atomaren Schreibvorgängen, die Ihre Konfigurationen vor Beschädigung schützen.
 
-- **Eine App, acht Werkzeuge** — Verwalten Sie Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw und Hermes über eine einzige Oberfläche
-- **Kein manuelles Bearbeiten mehr** — 50+ Anbieter-Presets einschließlich AWS Bedrock, NVIDIA NIM und Community-Relays; einfach auswählen und umschalten
-- **Einheitliche MCP- & Skills-Verwaltung** — Ein Panel zur Verwaltung von MCP-Servern und Skills für Claude, Codex, Gemini, Grok Build, OpenCode und Hermes mit bidirektionaler Synchronisierung
-- **Schnellumschaltung über System-Tray** — Wechseln Sie Anbieter sofort über das Tray-Menü, ohne die vollständige App öffnen zu müssen
-- **Cloud-Synchronisierung** — Synchronisieren Sie Anbieterdaten geräteübergreifend über Dropbox, OneDrive, iCloud oder WebDAV-Server
-- **Plattformübergreifend** — Native Desktop-App für Windows, macOS und Linux, gebaut mit Tauri 2
-- **Integrierte Hilfsprogramme** — Enthält diverse Hilfsprogramme für die Login-Bestätigung beim Erststart, das Umgehen von Signaturen, die Synchronisierung von Plugin-Erweiterungen und mehr
-
 ## Screenshots
 
 |                  Hauptoberfläche                   |                  Anbieter hinzufügen                  |
-| :-----------------------------------------------: | :--------------------------------------------: |
+| :------------------------------------------------: | :---------------------------------------------------: |
 | ![Hauptoberfläche](assets/screenshots/main-en.png) | ![Anbieter hinzufügen](assets/screenshots/add-en.png) |
+
+## So funktioniert es
+
+<p align="center">
+  <img src="./assets/readme/how-it-works.svg" width="100%" alt="So funktioniert CC Switch: Eine einzige SQLite-Datenbank ist die alleinige Datenquelle; beim Umschalten werden die Live-Konfigurationsdateien der Werkzeuge atomar geschrieben, und Änderungen an Live-Dateien werden zurück in die Datenbank synchronisiert">
+</p>
+
+- **Eine Datenbank für alle Werkzeuge** — Anbieter, MCP, Prompts, Skills und Nutzungsdaten liegen in einer einzigen SQLite-Datei (`~/.cc-switch/cc-switch.db`)
+- **Umschalten schreibt die Live-Konfigurationen** — CC Switch führt den aktiven Anbieter in die jeweils eigene Konfigurationsdatei jedes Werkzeugs zusammen, per temporärer Datei + Umbenennen, sodass ein abgebrochener Wechsel nie eine halb geschriebene Datei hinterlässt
+- **Ihre manuellen Änderungen bleiben erhalten** — Wenn Sie die Live-Konfiguration des aktiven Anbieters bearbeiten, wird die Änderung in die Datenbank zurückgeschrieben statt überschrieben
 
 ## Funktionen
 
-[Vollständiges Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v3.16.1-en.md)
+[Vollständiges Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v3.18.0-en.md)
 
 ### Anbieterverwaltung
 
@@ -247,7 +249,9 @@ Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code
 
 - **Cloud-Synchronisierung** — Eigenes Konfigurationsverzeichnis (Dropbox, OneDrive, iCloud, NAS) und WebDAV-Server-Synchronisierung
 - **Deep Link** (`ccswitch://`) — Importieren Sie Anbieter, MCP-Server, Prompts und Skills per URL
+- **Integrierte Hilfsprogramme** — Login-Bestätigung beim Erststart, Umgehen von Signaturen, Synchronisierung von Plugin-Erweiterungen und mehr
 - Dunkles / Helles / System-Theme, automatischer Start, automatischer Updater, atomare Schreibvorgänge, automatische Backups, i18n (zh/zh-TW/en/ja)
+- **Nativ für Windows, macOS und Linux** — gebaut mit Tauri 2
 
 ## FAQ
 

@@ -200,23 +200,25 @@ TeamoRouter 还提供企业级功能，包括集中账单、团队管理、BYOK�
 
 **CC Switch** 为你提供一个桌面应用来管理所有支持的 AI 工具。无需手动编辑配置文件，你将获得一个可视化界面，一键将供应商导入应用，一键在不同的供应商之间进行切换，内置 50+ 供应商预设、统一的 MCP, SKILLS 管理以及系统托盘即时切换功能——所有操作都基于可靠的 SQLite 数据库和原子写入机制，保护你的配置不被损坏。
 
-- **一个应用，八个工具** — 在单一界面中管理 Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw 和 Hermes
-- **告别手动编辑** — 50+ 供应商预设，包括 AWS Bedrock、NVIDIA NIM 和社区中转服务；一键即可切换
-- **统一 MCP, SKILLS 管理** — 一个面板管理 Claude、Codex、Gemini、Grok Build、OpenCode 和 Hermes 的 MCP, SKILLS, 支持双向同步
-- **系统托盘快速切换** — 从托盘菜单即时切换供应商，无需打开完整应用
-- **云同步** — 通过 Dropbox、OneDrive、iCloud 或 WebDAV 服务器在不同设备之间同步供应商数据
-- **跨平台** — 基于 Tauri 2 构建的原生桌面应用，支持 Windows、macOS 和 Linux
-- **小工具** - 内置了多种小工具来解决首次安装登录确认、禁止签名、插件拓展同步等多种功能
-
 ## 界面预览
 
 |                  主界面                   |                  添加供应商                  |
 | :---------------------------------------: | :------------------------------------------: |
 | ![主界面](assets/screenshots/main-zh.png) | ![添加供应商](assets/screenshots/add-zh.png) |
 
+## 工作原理
+
+<p align="center">
+  <img src="./assets/readme/how-it-works.svg" width="100%" alt="CC Switch 工作原理：单一 SQLite 数据库作为唯一数据源，切换时原子写入各工具的实时配置文件，对实时配置的手动修改会回填数据库">
+</p>
+
+- **一个数据库支撑所有工具** — 供应商、MCP、提示词、技能和用量数据都存放在同一个 SQLite 文件中（`~/.cc-switch/cc-switch.db`）
+- **切换即写入实时配置** — CC Switch 把当前供应商合并进各工具自己的配置文件，采用临时文件 + 重命名的方式写入，切换中断也不会留下写了一半的文件
+- **手动修改不会丢失** — 编辑当前供应商的实时配置文件时，改动会回填到数据库，而不是被覆盖
+
 ## 功能特性
 
-[完整更新日志](CHANGELOG.md) | [发布说明](docs/release-notes/v3.16.1-zh.md)
+[完整更新日志](CHANGELOG.md) | [发布说明](docs/release-notes/v3.18.0-zh.md)
 
 ### 供应商管理
 
@@ -248,7 +250,9 @@ TeamoRouter 还提供企业级功能，包括集中账单、团队管理、BYOK�
 
 - **云同步** — 自定义配置目录（Dropbox、OneDrive、iCloud、坚果云、NAS）及 WebDAV 服务器同步
 - **Deep Link** (`ccswitch://`) — 通过 URL 一键导入供应商、MCP 服务器、提示词和技能
+- **内置小工具** — 首次启动登录确认、签名绕过、插件扩展同步等
 - 深色 / 浅色 / 跟随系统主题、开机自启、自动更新、原子写入、自动备份、国际化（简中/繁中/英/日）
+- **原生支持 Windows、macOS 和 Linux** — 基于 Tauri 2 构建
 
 ## 常见问题
 

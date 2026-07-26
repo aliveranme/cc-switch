@@ -2,7 +2,7 @@
 
 <!-- README visual system redesigned with $beautify-github-readme -->
 <p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="CC Switch hero: one manager for Claude Code, Codex, Gemini CLI, Grok Build and Hermes">
+  <img src="./assets/readme/hero.svg" width="100%" alt="CC Switch: switch API providers, MCP, prompts and skills across eight AI coding tools from one desktop app">
 </p>
 
 <p align="center">
@@ -28,45 +28,32 @@
 
 ## What is CC Switch?
 
-Modern AI-powered coding is split across **Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, and Hermes**. Each tool has its own config format, provider setup, and MCP/Skills workflow — so switching providers usually means hand-editing JSON, TOML, or `.env` files.
+AI-powered coding is spread across **Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, and Hermes** — each with its own config format. Switching API providers means hand-editing JSON, TOML, or `.env` files, and there is no unified way to manage MCP and Skills across tools.
 
-**CC Switch** is a single desktop app that unifies all of them: one-click provider presets, instant switching, unified MCP, prompts & skills, usage and cost tracking, and system-tray shortcuts — backed by a SQLite database with atomic writes so your configs never get corrupted.
+**CC Switch** replaces that with one desktop app: pick from 50+ provider presets, switch instantly from the main window or the system tray, and manage MCP, prompts, skills, and usage in the same place.
 
 <p align="center">
   <img src="./assets/screenshots/main-en.png" alt="CC Switch main interface" width="80%">
 </p>
 
-<p align="center">
-  <img src="./assets/readme/why-cc-switch.svg" width="100%" alt="Why CC Switch section header">
-</p>
-
-## Why CC Switch?
-
-Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, and Hermes — but each has its own configuration format. Switching API providers means manually editing JSON, TOML, or `.env` files, and there is no unified way to manage MCP and Skills across multiple tools.
-
-**CC Switch** gives you a single desktop app to manage all supported AI tools. Instead of editing config files by hand, you get a visual interface to import providers with one click, switch between them instantly, with 50+ built-in provider presets, unified MCP and Skills management, and system tray quick switching — all backed by a reliable SQLite database with atomic writes that protect your configs from corruption.
-
-- **One App, Eight Tools** — Manage Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, and Hermes from a single interface
-- **No More Manual Editing** — 50+ provider presets including AWS Bedrock, NVIDIA NIM, and community relays; just pick and switch
-- **Unified MCP & Skills Management** — One panel to manage MCP servers and Skills across Claude, Codex, Gemini, Grok Build, OpenCode, and Hermes with bidirectional sync
-- **System Tray Quick Switch** — Switch providers instantly from the tray menu, no need to open the full app
-- **Cloud Sync** — Sync provider data across devices via Dropbox, OneDrive, iCloud, or WebDAV servers
-- **Cross-Platform** — Native desktop app for Windows, macOS, and Linux, built with Tauri 2
-- **Built-in Utilities** — Includes various utilities for first-launch login confirmation, signature bypass, plugin extension sync, and more
+## How it works
 
 <p align="center">
-  <img src="./assets/readme/features.svg" width="100%" alt="Features section header">
+  <img src="./assets/readme/how-it-works.svg" width="100%" alt="How CC Switch works: one SQLite database is the single source of truth; switching atomically writes each tool's live config file, and edits to live files sync back to the database">
 </p>
+
+- **One database behind every tool** — providers, MCP, prompts, skills, and usage data live in a single SQLite file (`~/.cc-switch/cc-switch.db`)
+- **Switching writes the live files** — CC Switch merges the active provider into each tool's own config, via temp file + rename, so an interrupted switch can never leave a half-written file
+- **Your hand edits are kept** — editing the active provider's live config backfills the database instead of being overwritten
 
 ## Features
 
-[Full Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v3.16.1-en.md)
-
 ### Provider Management
 
-- **8 supported tools, 50+ presets** — Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, Hermes; copy your key and import with one click
 - **Universal providers** — One config syncs to Claude Code, Codex, and Gemini CLI
-- One-click switching, system tray quick access, drag-and-drop sorting, import/export
+- **50+ presets** — AWS Bedrock, NVIDIA NIM, community relays, and more; paste your key and import in one click
+- **System tray quick switch** — Change providers without opening the app
+- One-click switching, drag-and-drop sorting, import/export, and shared config snippets between providers
 
 ### Proxy & Failover
 
@@ -92,17 +79,9 @@ Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex
 
 - **Cloud sync** — Custom config directory (Dropbox, OneDrive, iCloud, NAS) and WebDAV server sync
 - **Deep Link** (`ccswitch://`) — Import providers, MCP servers, prompts, and skills via URL
-- Dark / Light / System theme, auto-launch, auto-updater, atomic writes, auto-backups, i18n (zh/zh-TW/en/ja)
-
-<p align="center">
-  <a href="docs/user-manual/en/README.md"><strong>User Manual →</strong></a>
-  · <a href="CHANGELOG.md">Full Changelog</a>
-  · <a href="docs/release-notes/v3.16.1-en.md">Release Notes</a>
-</p>
-
-<p align="center">
-  <img src="./assets/readme/quick-start.svg" width="100%" alt="Quick Start section header">
-</p>
+- **Built-in utilities** — First-launch login confirmation, signature bypass, plugin extension sync, and more
+- Dark / Light / System theme, auto-launch, auto-updater, auto-backups, i18n (zh/zh-TW/en/ja)
+- **Native on Windows, macOS, and Linux** — built with Tauri 2
 
 ## Quick Start
 
@@ -125,7 +104,9 @@ Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex
 > **Note**: On first launch, you can manually import existing CLI tool configs as the default provider.
 
 <p align="center">
-  <img src="./assets/readme/download.svg" width="100%" alt="Download section header">
+  <a href="docs/user-manual/en/README.md"><strong>User Manual →</strong></a>
+  · <a href="CHANGELOG.md">Full Changelog</a>
+  · <a href="docs/release-notes/v3.18.0-en.md">Release Notes</a>
 </p>
 
 ## Download & Installation
@@ -355,10 +336,6 @@ pnpm test:unit --coverage
 
 </details>
 
-<p align="center">
-  <img src="./assets/readme/faq.svg" width="100%" alt="FAQ section header">
-</p>
-
 ## FAQ
 
 <details>
@@ -426,10 +403,6 @@ CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
 If you launch from a desktop icon, add it to the `.desktop` `Exec=` line (e.g. `env CC_SWITCH_GDK_BACKEND=wayland /path/to/AppImage`) or set it in your session environment. The variable is generic: on tiling Wayland compositors (sway/Hyprland) where clicks don't register, try `CC_SWITCH_GDK_BACKEND=x11` instead. Leaving it unset keeps the default behavior.
 
 </details>
-
-<p align="center">
-  <img src="./assets/readme/sponsors.svg" width="100%" alt="Sponsors section header">
-</p>
 
 ## ❤️Sponsor
 
