@@ -323,7 +323,9 @@ jobs:
           fi
 
           # 2) Collect .app as zip
-          if [ -f "$APP_PATH" ]; then
+          # APP_PATH 来自 find -type d，.app 是 bundle 目录不是文件，
+          # 用 -f 判断会恒为假，macOS .zip 因此从未产出过
+          if [ -d "$APP_PATH" ]; then
             NEW_ZIP="CC-Switch-${VERSION}-macOS.zip"
             ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "release-assets/$NEW_ZIP"
           fi
@@ -333,7 +335,7 @@ jobs:
             NEW_DMG="CC-Switch-${VERSION}-macOS.dmg"
             cp "$DMG_PATH" "release-assets/$NEW_DMG"
             echo "✅ DMG copied from Tauri bundle"
-          elif [ -f "$APP_PATH" ]; then
+          elif [ -d "$APP_PATH" ]; then
             # Tauri 未生成 DMG（可能因无签名），用 hdiutil 创建
             NEW_DMG="CC-Switch-${VERSION}-macOS.dmg"
             DMG_STAGE_DIR="$RUNNER_TEMP/dmg-stage"
