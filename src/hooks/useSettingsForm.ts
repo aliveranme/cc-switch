@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettingsQuery } from "@/lib/query";
+import { ensureLanguage } from "@/i18n";
 import type { Settings } from "@/types";
 
 type Language = "zh" | "zh-TW" | "en" | "ja";
@@ -94,7 +95,7 @@ export function useSettingsForm(): UseSettingsFormResult {
     (lang: Language) => {
       const current = normalizeLanguage(i18n.language);
       if (current !== lang) {
-        void i18n.changeLanguage(lang);
+        void ensureLanguage(lang);
       }
     },
     [i18n],
@@ -200,7 +201,7 @@ export function useSettingsForm(): UseSettingsFormResult {
       };
 
       setSettingsState(normalized);
-      void i18n.changeLanguage(initialLanguageRef.current);
+      void ensureLanguage(initialLanguageRef.current);
     },
     [readPersistedLanguage, i18n],
   );

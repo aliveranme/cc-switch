@@ -55,7 +55,7 @@ describe("useSettingsForm Hook", () => {
     expect(settings.codexConfigDir).toBeUndefined();
     expect(settings.language).toBe("en");
     expect(result.current.initialLanguage).toBe("en");
-    expect(changeLanguageSpy).toHaveBeenCalledWith("en");
+    await waitFor(() => expect(changeLanguageSpy).toHaveBeenCalledWith("en"));
   });
 
   it("should support japanese language preference from server data", async () => {
@@ -78,7 +78,7 @@ describe("useSettingsForm Hook", () => {
     });
 
     expect(result.current.initialLanguage).toBe("ja");
-    expect(changeLanguageSpy).toHaveBeenCalledWith("ja");
+    await waitFor(() => expect(changeLanguageSpy).toHaveBeenCalledWith("ja"));
   });
 
   it("should support traditional chinese language preference aliases", async () => {
@@ -101,7 +101,9 @@ describe("useSettingsForm Hook", () => {
     });
 
     expect(result.current.initialLanguage).toBe("zh-TW");
-    expect(changeLanguageSpy).toHaveBeenCalledWith("zh-TW");
+    await waitFor(() =>
+      expect(changeLanguageSpy).toHaveBeenCalledWith("zh-TW"),
+    );
   });
 
   it("should prioritize reading language from local storage in readPersistedLanguage", () => {
@@ -118,7 +120,7 @@ describe("useSettingsForm Hook", () => {
     expect(changeLanguageSpy).not.toHaveBeenCalled();
   });
 
-  it("should update fields and sync language when language changes in updateSettings", () => {
+  it("should update fields and sync language when language changes in updateSettings", async () => {
     useSettingsQueryMock.mockReturnValue({
       data: null,
       isLoading: false,
@@ -138,7 +140,7 @@ describe("useSettingsForm Hook", () => {
     });
 
     expect(result.current.settings?.language).toBe("en");
-    expect(changeLanguageSpy).toHaveBeenCalledWith("en");
+    await waitFor(() => expect(changeLanguageSpy).toHaveBeenCalledWith("en"));
   });
 
   it("should reset with server data and restore initial language in resetSettings", async () => {
@@ -182,7 +184,7 @@ describe("useSettingsForm Hook", () => {
     expect(settings.codexConfigDir).toBeUndefined();
     expect(settings.language).toBe("zh");
     expect(result.current.initialLanguage).toBe("en");
-    expect(changeLanguageSpy).toHaveBeenCalledWith("en");
+    await waitFor(() => expect(changeLanguageSpy).toHaveBeenCalledWith("en"));
   });
 
   it("should not call changeLanguage repeatedly when language is consistent in syncLanguage", async () => {
