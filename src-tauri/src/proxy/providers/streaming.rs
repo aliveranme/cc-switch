@@ -33,6 +33,10 @@ struct StreamChoice {
 struct Delta {
     #[serde(default)]
     content: Option<String>,
+    // OpenAI 结构化输出的流式拒绝走 delta.refusal。非流式 openai_to_anthropic
+    // 会把它转成文本块，流式此前完全没读，导致拒绝时客户端收到空的成功消息。
+    #[serde(default)]
+    refusal: Option<String>,
     // OpenRouter/Kimi/其它 使用 reasoning，DeepSeek 使用 reasoning_content
     #[serde(default, alias = "reasoning_content")]
     reasoning: Option<String>,
@@ -328,7 +332,22 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                         }
 
                                         // 处理文本内容
-                                        if let Some(content) = &choice.delta.content {
+                                        // content 与 refusal 都映射到 Anthropic 的
+                                        // text 块（非流式路径亦然）；同一 chunk 只会
+                                        // 有其一，故复用同一段逻辑，取非空的那个。
+                                        let text_piece = choice
+                                            .delta
+                                            .content
+                                            .as_deref()
+                                            .filter(|s| !s.is_empty())
+                                            .or_else(|| {
+                                                choice
+                                                    .delta
+                                                    .refusal
+                                                    .as_deref()
+                                                    .filter(|s| !s.is_empty())
+                                            });
+                                        if let Some(content) = text_piece {
                                             if !content.is_empty() {
                                                 if current_non_tool_block_type != Some("text") {
                                                     if let Some(index) = current_non_tool_block_index.take() {
@@ -801,6 +820,27 @@ mod tests {
         assert_eq!(
             map_stop_reason(Some("content_filter")),
             Some("end_turn".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_refusal_becomes_anthropic_text() {
+        // OpenAI 结构化输出的流式拒绝走 delta.refusal。此前完全没读，拒绝时
+        // 客户端收到空的成功消息。现在应转成 text_delta。
+        let input = concat!(
+            "data: {\"id\":\"c1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"refusal\":\"I can't help with that.\"}}]}\n\n",
+            "data: {\"id\":\"c1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let events = collect_anthropic_events(input).await;
+        let text: String = events
+            .iter()
+            .filter(|e| e["type"] == "content_block_delta")
+            .filter_map(|e| e["delta"]["text"].as_str())
+            .collect();
+        assert!(
+            text.contains("I can't help with that."),
+            "流式 refusal 应转成 text_delta，实际事件: {events:?}"
         );
     }
 
