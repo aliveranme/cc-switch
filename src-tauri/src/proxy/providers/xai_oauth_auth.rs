@@ -659,7 +659,15 @@ impl XaiOAuthManager {
             .get_mut(account_id)
             .ok_or_else(|| XaiOAuthError::AccountNotFound(account_id.to_string()))?;
         account.requires_reauth = true;
-        let default_account_id = Self::fallback_default_account_id(&accounts);
+        // 只有当现任 default 本身不再可用时才重算，参照 remove_account 的做法。
+        // 无条件调用 fallback 会让任意一个「非默认」账号刷新失败也把 default
+        // 换掉，用户下次请求就悄悄走了另一个账号。accounts 里已经写入了
+        // requires_reauth，所以 is_usable_account 能正确判定被标记的那个。
+        let stored_default = self.default_account_id.read().await.clone();
+        let default_account_id = match stored_default {
+            Some(id) if Self::is_usable_account(&accounts, &id) => Some(id),
+            _ => Self::fallback_default_account_id(&accounts),
+        };
         self.persist_and_commit(accounts, default_account_id)
             .await?;
         self.access_tokens.write().await.remove(account_id);
