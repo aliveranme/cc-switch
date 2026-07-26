@@ -462,6 +462,15 @@ fn convert_message_to_openai(
                     // OpenAI-compatible path).
                     reasoning_parts.push("[redacted thinking]".to_string());
                 }
+                "document" => {
+                    // 此前落到 `_` 分支被丢弃：附带 PDF 的 Claude Code 请求发给
+                    // OpenAI 兼容模型时，文件整个消失。Chat Completions 支持
+                    // file part（{type:file, file:{filename, file_data}}），转过去。
+                    // Responses 和 Gemini 桥都已处理 document，这里补齐对称性。
+                    if let Some(file_part) = chat_file_part_from_anthropic_document(block) {
+                        content_parts.push(file_part);
+                    }
+                }
                 _ => {}
             }
         }
@@ -515,6 +524,40 @@ fn convert_message_to_openai(
 }
 
 /// 清理工具参数的 JSON schema，并为根 schema 补齐 OpenAI 要求的 object 类型。
+/// Anthropic `document` 块 -> OpenAI Chat `file` content part。
+///
+/// Chat Completions 的 file part 只支持 base64 内嵌（file_data 为 data URL），
+/// 没有承载远程 URL 的字段，因此仅转换 base64 源；其他源返回 None（丢弃优于
+/// 发出上游会拒绝的畸形 part）。与 Responses / Gemini 桥的 document 处理对称。
+fn chat_file_part_from_anthropic_document(block: &Value) -> Option<Value> {
+    let source = block.get("source")?;
+    let filename = block
+        .get("title")
+        .or_else(|| block.get("filename"))
+        .and_then(Value::as_str)
+        .unwrap_or("document.pdf");
+    match source.get("type").and_then(Value::as_str) {
+        Some("base64") => {
+            let data = source.get("data").and_then(Value::as_str)?;
+            if data.is_empty() {
+                return None;
+            }
+            let media_type = source
+                .get("media_type")
+                .and_then(Value::as_str)
+                .unwrap_or("application/pdf");
+            Some(json!({
+                "type": "file",
+                "file": {
+                    "filename": filename,
+                    "file_data": format!("data:{media_type};base64,{data}")
+                }
+            }))
+        }
+        _ => None,
+    }
+}
+
 pub fn clean_schema(schema: Value) -> Value {
     clean_schema_inner(schema, true)
 }
@@ -1279,6 +1322,36 @@ mod tests {
         assert_eq!(messages[1]["role"], "tool");
         assert_eq!(messages[2]["role"], "user");
         assert_eq!(messages[2]["content"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn test_anthropic_to_openai_maps_document_to_file_part() {
+        // 附带 PDF 的用户消息此前整块被丢弃；应转成 Chat 的 file part。
+        let input = json!({
+            "model": "claude-3-opus",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "document", "title": "report.pdf", "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjQK"
+                    }}
+                ]
+            }]
+        });
+        let result = anthropic_to_openai(input).unwrap();
+        let parts = result["messages"][0]["content"].as_array().unwrap();
+        let file = parts
+            .iter()
+            .find(|p| p["type"] == "file")
+            .expect("document should become a file part");
+        assert_eq!(file["file"]["filename"], "report.pdf");
+        assert_eq!(
+            file["file"]["file_data"],
+            "data:application/pdf;base64,JVBERi0xLjQK"
+        );
     }
 
     #[test]
