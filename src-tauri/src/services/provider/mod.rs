@@ -1293,8 +1293,19 @@ requires_openai_auth = true
                 .await
                 .expect("update app proxy config");
         }
+        {
+            // The listen socket comes from the global proxy config, not the
+            // per-app one set above. Left at the 15721 default this binds the
+            // same port a locally running CC Switch already holds and the test
+            // fails with EADDRINUSE, so let the OS assign one.
+            let mut proxy_config = db.get_proxy_config().await.expect("get proxy config");
+            proxy_config.listen_port = 0;
+            db.update_proxy_config(proxy_config)
+                .await
+                .expect("use an ephemeral proxy port");
+        }
 
-        state
+        let proxy_info = state
             .proxy_service
             .start()
             .await
@@ -1342,7 +1353,10 @@ requires_openai_auth = true
         let profile: Value = read_json_file(&profile_path).expect("read desktop profile");
         assert_eq!(
             profile["inferenceGatewayBaseUrl"],
-            json!("http://127.0.0.1:15721/claude-desktop"),
+            json!(format!(
+                "http://127.0.0.1:{}/claude-desktop",
+                proxy_info.port
+            )),
             "desktop profile should stay pointed at the local gateway during takeover"
         );
         assert_eq!(profile["inferenceGatewayAuthScheme"], json!("bearer"));
