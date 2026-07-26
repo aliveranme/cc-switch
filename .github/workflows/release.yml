@@ -194,14 +194,17 @@ jobs:
 
       - name: Prepare Tauri signing key (optional)
         shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          if [ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
+          if [ -z "$SIGNING_KEY" ]; then
             echo "⚠️ TAURI_SIGNING_PRIVATE_KEY 未设置，跳过签名（个人使用模式）"
             # 不设置 TAURI_SIGNING_PRIVATE_KEY（设为空串会让 Tauri 尝试解析并报错）
             exit 0
           fi
 
-          RAW="${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"
+          RAW="$SIGNING_KEY"
           KEY_PATH="$RUNNER_TEMP/tauri_signing.key"
           if echo "$RAW" | head -n1 | grep -q '^untrusted comment:'; then
             printf '%s\n' "$RAW" > "$KEY_PATH"
@@ -234,8 +237,14 @@ jobs:
             exit 1
           fi
           echo "TAURI_SIGNING_PRIVATE_KEY=$KEY_B64" >> "$GITHUB_ENV"
-          if [ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" ]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" >> $GITHUB_ENV
+          if [ -n "$SIGNING_PASSWORD" ]; then
+            # 走 heredoc 分隔符：密码是任意字符串，含换行时用 KEY=VALUE 形式
+            # 写入会截断，剩余行还会被当成额外的环境变量解析
+            {
+              echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD<<__CC_SWITCH_SECRET_EOF__"
+              printf '%s\n' "$SIGNING_PASSWORD"
+              echo "__CC_SWITCH_SECRET_EOF__"
+            } >> "$GITHUB_ENV"
           fi
           echo "✅ Tauri signing key prepared"
 
