@@ -776,6 +776,21 @@ pub fn get_provider(name: &str) -> Result<Option<serde_json::Value>, AppError> {
     Ok(get_providers()?.get(name).cloned())
 }
 
+/// CC Switch 的 Hermes 表单完全拥有的字段。
+///
+/// 这些键出现在 hermesProviderPresets.ts 的类型里、由 HermesFormFields 渲染，
+/// 因此 payload 中缺席意味着用户主动删除，不能从磁盘上的旧值补回。其余字段
+/// （`request_timeout_seconds`、`key_env` 等 Hermes Web UI 侧设置）仍然保留。
+const HERMES_UI_OWNED_KEYS: &[&str] = &[
+    "name",
+    "base_url",
+    "api_key",
+    "api_mode",
+    "model",
+    "models",
+    "rate_limit_delay",
+];
+
 /// Set (upsert) a custom provider by name.
 ///
 /// Upserts into the `custom_providers:` YAML sequence (matched by `name`).
@@ -844,10 +859,19 @@ pub fn set_provider(
         // `key_env`), and users may set those via Hermes Web UI — without
         // this merge, a CC Switch edit to an unrelated field would silently
         // strip them on write-back.
+        //
+        // 但 carry-over 必须跳过 CC Switch 表单自己拥有的字段：对这些字段而言，
+        // "payload 里没有" 表示用户删除了它，无条件补回会让删除操作失效——清空
+        // api_key 或移除一个 model 后保存，磁盘上的旧值又会被写回来。
         if let (Some(existing_map), serde_yaml::Value::Mapping(new_map)) =
             (existing.as_mapping(), &mut yaml_val)
         {
             for (k, v) in existing_map {
+                if k.as_str()
+                    .is_some_and(|s| HERMES_UI_OWNED_KEYS.contains(&s))
+                {
+                    continue;
+                }
                 new_map.entry(k.clone()).or_insert_with(|| v.clone());
             }
         }
@@ -1654,6 +1678,55 @@ custom_providers:
             let provider = get_provider("acme").unwrap().unwrap();
             assert_eq!(provider["base_url"], "https://new.example.com");
             assert_eq!(provider["api_key"], "sk-new");
+            assert_eq!(provider["request_timeout_seconds"], 300);
+            assert_eq!(provider["key_env"], "ACME_API_KEY");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn set_provider_applies_ui_field_deletions() {
+        // carry-over 只能保护 Hermes 侧字段。对 CC Switch 表单拥有的字段，
+        // payload 中缺席表示用户删掉了它——无条件补回会让"清空 api_key"
+        // 或"移除某个 model"保存后原值复活。
+        with_test_home(|| {
+            let yaml = "\
+custom_providers:
+  - name: acme
+    base_url: https://old.example.com
+    api_key: sk-old
+    api_mode: chat_completions
+    model: m-old
+    rate_limit_delay: 1.5
+    request_timeout_seconds: 300
+    key_env: ACME_API_KEY
+    models:
+      m-old:
+        context_length: 8192
+";
+            let config_path = get_hermes_config_path();
+            fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+            fs::write(&config_path, yaml).unwrap();
+
+            // 用户清空了 api_key / rate_limit_delay，并且不再提交 models
+            let update = serde_json::json!({
+                "base_url": "https://new.example.com",
+                "api_mode": "chat_completions"
+            });
+            set_provider("acme", update).unwrap();
+
+            let provider = get_provider("acme").unwrap().unwrap();
+            assert_eq!(provider["base_url"], "https://new.example.com");
+
+            for removed in ["api_key", "rate_limit_delay", "models", "model"] {
+                assert!(
+                    provider.get(removed).is_none(),
+                    "UI 拥有的字段 {removed} 被删除后不应从磁盘恢复，实际: {:?}",
+                    provider.get(removed)
+                );
+            }
+
+            // Hermes 侧字段仍必须保留
             assert_eq!(provider["request_timeout_seconds"], 300);
             assert_eq!(provider["key_env"], "ACME_API_KEY");
         });
