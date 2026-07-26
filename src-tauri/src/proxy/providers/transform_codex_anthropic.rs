@@ -19,7 +19,8 @@ use crate::proxy::error::ProxyError;
 use crate::proxy::json_canonical::canonical_json_string;
 use crate::proxy::sse::{strip_sse_field, take_sse_block};
 use crate::proxy::tool_media::{
-    strip_and_clamp_media_from_tool_value, ToolMediaScope, TOOL_RESULT_MEDIA_ATTACHED_MARKER,
+    clamp_base64ish_strings, strip_and_clamp_media_from_tool_value, ToolMediaScope,
+    TOOL_RESULT_MEDIA_ATTACHED_MARKER,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::{json, Value};
@@ -854,11 +855,16 @@ fn alternate_image_tool_result_content(value: &Value) -> Option<ToolResultConten
     let mut content = Vec::new();
     let mut is_error = false;
     append_sanitized_tool_result_value(&cleaned, &mut content, &mut is_error);
-    content.extend(
-        chat_media_parts
-            .iter()
-            .filter_map(image_block_from_input_image),
-    );
+    // 无法转成 Anthropic image block 的媒体（远程 URL 之外的非法 data URL、
+    // 非图片 MIME 等）不能直接丢：那会让工具结果里的媒体凭空消失。回退成一段
+    // 文本，先 clamp 掉可能残留的巨大 base64 载荷，避免被重新按 token 计费。
+    content.extend(chat_media_parts.iter().map(|part| {
+        image_block_from_input_image(part).unwrap_or_else(|| {
+            let mut fallback = part.clone();
+            clamp_base64ish_strings(&mut fallback);
+            json!({ "type": "text", "text": canonical_json_string(&fallback) })
+        })
+    }));
 
     Some(ToolResultContent {
         content: Value::Array(content),
@@ -1215,6 +1221,11 @@ fn image_block_from_input_image(part: &Value) -> Option<Value> {
         let rest = &url[5..];
         let (meta, data) = rest.split_once(',')?;
         let media_type = meta.split(';').next().unwrap_or("image/png");
+        // 非 image/* 的 data URL 不能塞进 Anthropic image block，否则上游必回
+        // 400。返回 None，让调用方回退到文本表示。
+        if !media_type.to_ascii_lowercase().starts_with("image/") {
+            return None;
+        }
         Some(json!({
             "type": "image",
             "source": {
@@ -2759,6 +2770,47 @@ mod tests {
         assert_eq!(content[1]["type"], "image");
         assert_eq!(content[1]["source"]["media_type"], "image/webp");
         assert_eq!(content[1]["source"]["data"], "MCP_ANTHROPIC_IMAGE_SENTINEL");
+    }
+
+    #[test]
+    fn test_non_image_tool_media_falls_back_to_text_not_dropped() {
+        // 一个 mimeType 非 image/* 的媒体块无法转成 Anthropic image block。
+        // 旧代码用 filter_map 直接丢弃它，工具结果里的这块内容凭空消失。
+        // 现在应回退成文本，且内容（这里用可辨识的 URL 哨兵）不丢。
+        let response = responses_request_to_anthropic(
+            json!({
+                "model": "c",
+                "input": [
+                    {"type": "function_call", "call_id": "c1", "name": "inspect", "arguments": "{}"},
+                    {"type": "function_call_output", "call_id": "c1", "output": [{
+                        "type": "image_url",
+                        "image_url": {"url": "data:application/pdf;base64,SENTINEL_PDF_PAYLOAD"}
+                    }]}
+                ]
+            }),
+            4096,
+        )
+        .unwrap();
+        let content = &response["messages"][2]["content"][0]["content"];
+
+        // 不应有 image block 携带 application/pdf（那会让上游 400）
+        let arr = content.as_array().expect("tool result content is an array");
+        for block in arr {
+            assert_ne!(
+                block["type"], "image",
+                "非图片媒体不应生成 image block: {block}"
+            );
+        }
+        // 必须能在某个文本块里找回它，证明没有被丢弃
+        let joined: String = arr
+            .iter()
+            .filter_map(|b| b["text"].as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            joined.contains("application/pdf"),
+            "非图片媒体应回退成文本而不是被丢弃，实际内容: {joined}"
+        );
     }
 
     #[test]
