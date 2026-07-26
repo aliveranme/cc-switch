@@ -146,8 +146,11 @@ pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, AppError>
                     }
                 }
                 _ => {
+                    // continue 而不是 return：这里在遍历 servers 表的循环内，
+                    // return 会退出整个闭包，导致排在未知类型条目之后的所有
+                    // 合法 MCP server 都被静默丢弃。
                     log::warn!("跳过未知类型 '{typ}' 的 Codex MCP 项 '{id}'");
-                    return changed;
+                    continue;
                 }
             }
 
