@@ -356,17 +356,20 @@ pub fn responses_to_chat_completions_with_reasoning(
 
 fn responses_text_format_to_chat_response_format(body: &Value) -> Option<Value> {
     let format = body.pointer("/text/format")?;
-    if format.get("type").and_then(Value::as_str) != Some("json_schema") {
-        return None;
+    match format.get("type").and_then(Value::as_str) {
+        Some("json_schema") => Some(json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": format.get("name").and_then(Value::as_str).unwrap_or("responses_output"),
+                "strict": format.get("strict").and_then(Value::as_bool).unwrap_or(true),
+                "schema": format.get("schema")?.clone()
+            }
+        })),
+        // 旧式 Responses JSON 模式，此前被丢弃，导致要求 JSON 输出的请求退回自由文本
+        Some("json_object") => Some(json!({ "type": "json_object" })),
+        // "text"(默认)不产生 response_format
+        _ => None,
     }
-    Some(json!({
-        "type": "json_schema",
-        "json_schema": {
-            "name": format.get("name").and_then(Value::as_str).unwrap_or("responses_output"),
-            "strict": format.get("strict").and_then(Value::as_bool).unwrap_or(true),
-            "schema": format.get("schema")?.clone()
-        }
-    }))
 }
 
 fn apply_reasoning_options(
@@ -2002,6 +2005,19 @@ mod tests {
 
         assert_eq!(result["stream"], true);
         assert_eq!(result["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn responses_json_object_format_maps_to_chat_response_format() {
+        // 旧式 Responses JSON 模式 (text.format.type = json_object) 此前被丢弃，
+        // 要求 JSON 输出的请求会退回自由文本。
+        let input = json!({
+            "model": "kimi-k2.6",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
+            "text": {"format": {"type": "json_object"}}
+        });
+        let result = responses_to_chat_completions(input).unwrap();
+        assert_eq!(result["response_format"]["type"], "json_object");
     }
 
     #[test]
