@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { Provider, UsageScript, UsageData, createUsageScript } from "@/types";
-import { usageApi, settingsApi, type AppId } from "@/lib/api";
+import { usageApi, settingsApi, subscriptionApi, type AppId } from "@/lib/api";
 import { copilotGetUsage, copilotGetUsageForAccount } from "@/lib/api/copilot";
 import { useSettingsQuery } from "@/lib/query";
 import { resolveManagedAccountId } from "@/lib/authBinding";
@@ -515,7 +515,6 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
     try {
       // 官方订阅额度模板使用 CLI/OAuth 凭据和官方 API
       if (selectedTemplate === TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION) {
-        const { subscriptionApi } = await import("@/lib/api/subscription");
         const quota = await subscriptionApi.getQuota(appId);
         if (quota.success && quota.tiers.length > 0) {
           const summary = quota.tiers
@@ -539,7 +538,6 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
       if (selectedTemplate === TEMPLATE_TYPES.BALANCE) {
         const baseUrl = providerCredentials.baseUrl ?? "";
         const apiKey = providerCredentials.apiKey ?? "";
-        const { subscriptionApi } = await import("@/lib/api/subscription");
         const result = await subscriptionApi.getBalance(baseUrl, apiKey);
         if (result.success && result.data && result.data.length > 0) {
           const summary = result.data
@@ -578,7 +576,6 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
         const apiKey = isZenMux
           ? (script.apiKey ?? "")
           : (providerCredentials.apiKey ?? "");
-        const { subscriptionApi } = await import("@/lib/api/subscription");
         const quota = await subscriptionApi.getCodingPlanQuota(
           baseUrl,
           apiKey,
