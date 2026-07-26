@@ -1409,7 +1409,11 @@ async fn handle_codex_chat_to_responses_transform(
         return handle_codex_chat_error_response(response, ctx, status).await;
     }
 
-    if is_stream || response.is_sse() {
+    // 镜像 handle_claude_transform(1651)的守卫：SSE 恒走流式转换；仅当客户端
+    // 请求 stream:true 且上游确实不是 JSON 时才按流式处理。若客户端要 stream
+    // 但网关无视它、返回明确的 JSON 200，交给下方非流式聚合(chat_completion_to_
+    // response)去转换并记录用量——否则把一份完整 JSON 当 SSE 解析会失败。
+    if response.is_sse() || (is_stream && !response.is_json()) {
         let stream = response.bytes_stream();
         let sse_stream = create_responses_sse_stream_from_chat_with_context(stream, tool_context);
         let sse_stream = record_responses_sse_stream(sse_stream, state.codex_chat_history.clone());
