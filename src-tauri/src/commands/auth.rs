@@ -150,7 +150,11 @@ pub async fn auth_poll_for_account(
     let auth_provider = ensure_auth_provider(&auth_provider)?;
     match auth_provider {
         AUTH_PROVIDER_GITHUB_COPILOT => {
-            let auth_manager = copilot_state.0.write().await;
+            // read()：poll_for_token 取 &self，内部用细粒度 RwLock 自行串行化
+            // 状态变更。设备码轮询是一次网络往返，用 write() 会在整个往返期间
+            // 独占 auth manager，把 forwarder 的读路径一起卡住。同文件其他轮询
+            // 命令都用 read()，这里对齐。
+            let auth_manager = copilot_state.0.read().await;
             match auth_manager
                 .poll_for_token(&device_code, github_domain.as_deref())
                 .await
@@ -166,7 +170,8 @@ pub async fn auth_poll_for_account(
             }
         }
         AUTH_PROVIDER_CODEX_OAUTH => {
-            let auth_manager = codex_state.0.write().await;
+            // read()：同 copilot 分支，poll_for_token 取 &self 且自管内部锁。
+            let auth_manager = codex_state.0.read().await;
             match auth_manager.poll_for_token(&device_code).await {
                 Ok(account) => {
                     let default_account_id = auth_manager.get_status().await.default_account_id;
@@ -179,7 +184,8 @@ pub async fn auth_poll_for_account(
             }
         }
         AUTH_PROVIDER_XAI_OAUTH => {
-            let auth_manager = xai_state.0.write().await;
+            // read()：同上，poll_for_token 取 &self 且自管内部锁。
+            let auth_manager = xai_state.0.read().await;
             match auth_manager.poll_for_token(&device_code).await {
                 Ok(account) => {
                     let default_account_id = auth_manager.get_status().await.default_account_id;

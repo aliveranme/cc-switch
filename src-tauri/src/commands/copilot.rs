@@ -40,7 +40,9 @@ pub async fn copilot_poll_for_auth(
     github_domain: Option<String>,
     state: State<'_, CopilotAuthState>,
 ) -> Result<bool, String> {
-    let auth_manager = state.0.write().await;
+    // read()：poll_for_token 取 &self 且自管内部锁；轮询是网络往返，用 write()
+    // 会在往返期间独占 auth manager。见 commands/auth.rs 的同类修复。
+    let auth_manager = state.0.read().await;
     match auth_manager
         .poll_for_token(&device_code, github_domain.as_deref())
         .await
@@ -69,7 +71,8 @@ pub async fn copilot_poll_for_account(
     github_domain: Option<String>,
     state: State<'_, CopilotAuthState>,
 ) -> Result<Option<GitHubAccount>, String> {
-    let auth_manager = state.0.write().await;
+    // read()：同 copilot_poll_for_auth，poll_for_token 取 &self 且自管内部锁。
+    let auth_manager = state.0.read().await;
     match auth_manager
         .poll_for_token(&device_code, github_domain.as_deref())
         .await
