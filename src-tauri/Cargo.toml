@@ -111,5 +111,5 @@ panic = "unwind"
 strip = "symbols"
 
 [dev-dependencies]
-serial_test = "3"
+serial_test = "4"
 tempfile = "3"
