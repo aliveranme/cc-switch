@@ -153,6 +153,15 @@ impl ChatToResponsesState {
                 }
             }
 
+            // OpenAI 结构化输出的流式拒绝走 delta.refusal，此前完全没读，导致拒绝
+            // 时 finalize 产出空的 output:[]，客户端收到空的成功响应。把拒绝文本
+            // 当可见内容输出，与非流式 Chat->Responses（refusal part）及聚合器一致。
+            if let Some(refusal) = delta.get("refusal").and_then(|v| v.as_str()) {
+                if !refusal.is_empty() {
+                    events.extend(self.push_content_delta(refusal));
+                }
+            }
+
             if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
                 events.extend(self.flush_inline_think_at_boundary());
                 let reasoning_for_tool_call = self.current_reasoning_text();
@@ -1214,6 +1223,25 @@ mod tests {
         assert!(output.contains("\"status\":\"incomplete\""));
         assert!(output.contains("\"incomplete_details\":{\"reason\":\"max_output_tokens\"}"));
         assert!(!output.contains("event: response.failed"));
+    }
+
+    #[tokio::test]
+    async fn streamed_refusal_is_surfaced_not_dropped() {
+        // 流式安全拒绝走 delta.refusal。此前 handle_chat_chunk 不读它，
+        // finalize 产出空 output，客户端收到空的成功响应。现在拒绝文本
+        // 应作为可见内容出现在流里。
+        let output = collect(vec![
+            "data: {\"id\":\"chatcmpl_r\",\"model\":\"gpt-5.4\",\"choices\":[{\"delta\":{\"refusal\":\"I can't assist with that.\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_r\",\"model\":\"gpt-5.4\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ])
+        .await;
+
+        assert!(
+            output.contains("I can't assist with that."),
+            "流式 refusal 不应被丢弃，实际输出: {output}"
+        );
+        assert!(output.contains("event: response.completed"));
     }
 
     #[tokio::test]
