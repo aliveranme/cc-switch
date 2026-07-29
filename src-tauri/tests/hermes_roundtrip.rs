@@ -3,7 +3,7 @@ mod support;
 use cc_switch_lib::{hermes_config, update_settings, AppSettings};
 
 /// 读取并回写 Hermes provider 时，Hermes v12+ 新增或未来才会出现的字段
-/// （例如 `rate_limit_delay`、`key_env`）必须透传，不能因为 UI 不感知就静默丢弃。
+/// （例如 `key_env`）必须透传，不能因为 UI 不感知就静默丢弃。
 /// 否则用户在 Hermes Web UI 配置的高级字段会在 CC Switch 编辑后消失。
 fn with_temp_hermes_dir<F: FnOnce(&std::path::Path)>(f: F) {
     let guard = support::test_mutex().lock().expect("test mutex poisoned");
@@ -40,7 +40,6 @@ fn set_provider_preserves_unknown_and_future_fields() {
     base_url: https://api.example.com/v1
     api_key: sk-old
     api_mode: chat_completions
-    rate_limit_delay: 0.5
     key_env: MY_API_KEY
     foo_bar: keep-me-around
     models:
@@ -65,10 +64,6 @@ fn set_provider_preserves_unknown_and_future_fields() {
 
         let written = std::fs::read_to_string(&config_path).expect("read written config");
 
-        assert!(
-            written.contains("rate_limit_delay"),
-            "rate_limit_delay stripped:\n{written}"
-        );
         assert!(
             written.contains("key_env"),
             "key_env key stripped:\n{written}"

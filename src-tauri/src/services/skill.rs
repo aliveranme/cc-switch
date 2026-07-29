@@ -3164,6 +3164,18 @@ impl SkillService {
 
         for i in 0..archive.len() {
             let mut file = archive.by_index(i)?;
+
+            // `enclosed_name()` 会在内部消化 `..`（例如 `e/../d/a.txt` -> `d/a.txt`），
+            // 从而绕过下面的 ParentDir 检查。必须先用原始名字把带 `..` 的条目挡掉。
+            let raw_name = file.name();
+            if Path::new(raw_name)
+                .components()
+                .any(|c| c.as_os_str() == "..")
+            {
+                log::warn!("跳过含未消解 `..` 的压缩包条目: {}", raw_name);
+                continue;
+            }
+
             let file_path = match file.enclosed_name() {
                 Some(path) => path.to_owned(),
                 None => continue,
