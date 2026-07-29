@@ -170,9 +170,9 @@ impl Database {
         // authorizer 只覆盖外部 SQL，执行完立刻摘掉：紧随其后的
         // `create_tables_on_conn` / `apply_schema_migrations_on_conn` 是本程序自己的
         // schema 维护语句，不属于需要设防的输入，没必要让它们也过一遍守卫。
-        temp_conn.authorizer(Some(import_authorizer));
+        let _ = temp_conn.authorizer(Some(import_authorizer));
         let batch_result = temp_conn.execute_batch(sql_content);
-        temp_conn.authorizer(
+        let _ = temp_conn.authorizer(
             None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
         );
         batch_result.map_err(|e| AppError::Database(format!("执行 SQL 导入失败: {e}")))?;
