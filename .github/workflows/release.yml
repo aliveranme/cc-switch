@@ -688,7 +688,7 @@ jobs:
           TAG: ${{ needs.resolve-version.outputs.tag }}
         run: |
           set -euxo pipefail
-          gh release upload "$TAG" latest.json --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$GITHUB_REF_NAME" latest.json --clobber --repo "$GITHUB_REPOSITORY"
 
   # Mirror the release assets to Cloudflare R2 so ccswitch.io/download can
   # serve them directly (dl.ccswitch.io). Skips itself when the R2 secrets
