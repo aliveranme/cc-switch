@@ -449,12 +449,13 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        // 目标已存在时沿用它的权限，不去改动用户或对应 CLI 工具的既有设置。
-        // 目标不存在时说明这是 cc-switch 首次落盘：这些文件普遍带着 API key
-        // （~/.claude/settings.json 等），若什么都不做就会落到 umask 的默认
-        // 0644，同机其他用户可读，所以按凭据文件对待，取 0600。
+        // 保留属主位，但强制收紧 group/other 位。目标已存在时不再沿用其
+        // 权限——CLI 工具或早前安装以 umask 默认 0644 创建的文件
+        // （如 ~/.claude/settings.json、~/.codex/config.toml）会把 API key
+        // 暴露给同机其他用户。统一按凭据文件对待：属主位保留，group/other
+        // 无任何权限。目标不存在时按 0600 落盘。
         let mode = fs::metadata(path)
-            .map(|meta| meta.permissions().mode() & 0o777)
+            .map(|meta| meta.permissions().mode() & 0o700)
             .unwrap_or(0o600);
         let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode));
     }
@@ -701,7 +702,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn atomic_write_creates_new_files_owner_only_and_preserves_existing_modes() {
+    fn atomic_write_creates_new_files_owner_only_and_tightens_existing_modes() {
         use std::os::unix::fs::PermissionsExt;
 
         let temp = tempfile::tempdir().expect("tempdir");
@@ -712,13 +713,26 @@ mod tests {
         atomic_write(&fresh, b"{}").expect("write new file");
         assert_eq!(mode_of(&fresh), 0o600, "新建文件应为 0600");
 
-        // 已存在：沿用目标原有权限，不擅自改动 CLI 工具或用户的设置
+        // 已存在：保留属主位，但收紧 group/other——CLI 工具或早前安装
+        // 以 umask 默认 0644 创建的文件（如 ~/.claude/settings.json）会把
+        // API key 暴露给同机其他用户，不能再沿用其宽松权限。
         let existing = temp.path().join("config.toml");
         fs::write(&existing, b"old").expect("seed");
-        fs::set_permissions(&existing, fs::Permissions::from_mode(0o640)).expect("chmod");
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o644)).expect("chmod");
         atomic_write(&existing, b"new").expect("overwrite");
-        assert_eq!(mode_of(&existing), 0o640, "覆写应保留既有权限");
+        assert_eq!(
+            mode_of(&existing),
+            0o600,
+            "已存在的 0644 文件覆写后应收紧到 0600"
+        );
         assert_eq!(fs::read(&existing).unwrap(), b"new", "内容应已更新");
+
+        // 0640（属主读写 + group 读）同样收紧：属主读写保留，group 读被移除
+        let existing2 = temp.path().join("config2.toml");
+        fs::write(&existing2, b"old").expect("seed");
+        fs::set_permissions(&existing2, fs::Permissions::from_mode(0o640)).expect("chmod");
+        atomic_write(&existing2, b"new").expect("overwrite");
+        assert_eq!(mode_of(&existing2), 0o600, "0640 应被收紧为 0600");
     }
 
     #[test]
