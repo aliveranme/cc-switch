@@ -3576,7 +3576,7 @@ fn log_prompt_cache_trace(
     let cache_controls = cache_control_summary(body);
 
     log::debug!(
-        "[CacheTrace] app={}, provider={}, endpoint={}, api_format={}, session_client_provided={}, prompt_cache_key={}, store={}, stream={}, instructions_hash={}, system_hash={}, tools_hash={}, input_hash={}, messages_hash={}, include_hash={}, cache_controls={}, body_hash={}",
+        "[CacheTrace] app={}, provider={}, endpoint={}, api_format={}, session_client_provided={}, prompt_cache_key={}, store={}, stream={}, instructions_hash={}, system_hash={}, tools_hash={}, input_hash={}, messages_hash={}, include_hash={}, cache_controls={}, body_hash={}, max_tokens={}, body_prefix={}",
         app_type.as_str(),
         provider.id,
         // Gemini 的 endpoint 带 ?key=<API_KEY>；脱敏剥掉 query 再落盘。
@@ -3594,6 +3594,8 @@ fn log_prompt_cache_trace(
         short_value_hash(body.get("include")),
         cache_controls,
         short_value_hash(Some(body)),
+            body.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            body_prefix(body),
     );
 }
 
@@ -3635,6 +3637,12 @@ fn cache_control_summary(value: &Value) -> String {
     )
 }
 
+
+    fn body_prefix(body: &Value) -> String {
+        let serialized = serde_json::to_string(body).unwrap_or_default();
+        let prefix: String = serialized.chars().take(200).collect();
+        prefix.replace('\n', "\\n")
+    }
 fn value_for_log(value: &Value) -> String {
     match value {
         Value::Bool(value) => value.to_string(),
