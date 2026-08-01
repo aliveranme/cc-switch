@@ -3638,6 +3638,13 @@ fn cache_control_summary(value: &Value) -> String {
 }
 
 fn body_prefix(body: &Value) -> String {
+    // 仅在 TRACE 级别下序列化请求体。CacheTrace 本身在 DEBUG 级别输出，
+    // 若在此处无条件序列化，每次请求都会把整个 body（agent 场景可达
+    // 900KB+）转成字符串再截取，产生无谓的 CPU/内存开销；TRACE 级别下
+    // 输出前缀用于跨轮对比 system/max_tokens 稳定性（诊断目的）。
+    if !log::log_enabled!(log::Level::Trace) {
+        return String::new();
+    }
     let serialized = serde_json::to_string(body).unwrap_or_default();
     let prefix: String = serialized.chars().take(200).collect();
     prefix.replace('\n', "\\n")
