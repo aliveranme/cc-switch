@@ -55,6 +55,48 @@ pub(crate) fn strip_leading_anthropic_billing_header(text: &str) -> &str {
 
 /// Detect OpenAI o-series reasoning models (o1, o3, o4-mini, etc.)
 /// These models require `max_completion_tokens` instead of `max_tokens`.
+
+/// 剔除 Anthropic billing 头中的 per-request nonce（`cch=<hex>`），保留
+/// `cc_version`、`cc_entrypoint` 等稳定字段。
+///
+/// Claude Code 在每条请求的 system[0] 注入
+/// `x-anthropic-billing-header: cc_version=...; cc_entrypoint=...; cch=<hex>;`，
+/// 其中 `cch=` 值每轮变化。`strip_leading_anthropic_billing_header` 只剥离
+/// 前导的整行 billing 头；若 billing 头出现在文本中间（或剥离不彻底），
+/// nonce 会进入出站前缀并摧毁 DeepSeek 的 byte-level 前缀缓存。
+/// 此函数在任意位置剔除 `cch=<hex>` 段，并清理残留分隔符。
+fn strip_volatile_cch(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let mut scan = 0;
+    let mut last = 0;
+    while scan + 4 <= bytes.len() {
+        if bytes[scan..scan + 4].eq_ignore_ascii_case(b"cch=") {
+            let mut end = scan + 4;
+            while end < bytes.len() && bytes[end].is_ascii_hexdigit() {
+                end += 1;
+            }
+            if end > scan + 4 {
+                // 有实际 nonce 值：跳过 cch=<hex>
+                result.push_str(&text[last..scan]);
+                last = end;
+                scan = end;
+                continue;
+            }
+        }
+        scan += 1;
+    }
+    result.push_str(&text[last..]);
+    // 清理 cch 段被剔除后残留的分隔符（;; 、; ; 、;, 等）
+    result
+        .replace(";;", ";")
+        .replace("; ;", ";")
+        .replace(";,", ",")
+        .replace(" ;", ";")
+        .trim()
+        .to_string()
+}
+
 pub fn is_openai_o_series(model: &str) -> bool {
     model.len() > 1
         && model.starts_with('o')
@@ -153,18 +195,20 @@ pub fn anthropic_to_openai_with_reasoning_content(
     // 处理 system prompt
     if let Some(system) = body.get("system") {
         if let Some(text) = system.as_str() {
-            let text = strip_leading_anthropic_billing_header(text);
-            if !text.is_empty() {
-                messages.push(json!({"role": "system", "content": text}));
+            let stripped = strip_leading_anthropic_billing_header(text);
+            let cleaned = strip_volatile_cch(stripped);
+            if !cleaned.is_empty() {
+                messages.push(json!({"role": "system", "content": cleaned}));
             }
         } else if let Some(arr) = system.as_array() {
             for msg in arr {
                 if let Some(text) = msg.get("text").and_then(|t| t.as_str()) {
-                    let text = strip_leading_anthropic_billing_header(text);
-                    if text.is_empty() {
+                    let stripped = strip_leading_anthropic_billing_header(text);
+                    let cleaned = strip_volatile_cch(stripped);
+                    if cleaned.is_empty() {
                         continue;
                     }
-                    messages.push(json!({"role": "system", "content": text}));
+                    messages.push(json!({"role": "system", "content": cleaned}));
                 }
             }
         }
@@ -313,18 +357,18 @@ fn map_tool_choice_to_chat(tool_choice: &Value) -> Value {
 
 /// Normalize OpenAI Chat system messages for prefix-cache stability.
 ///
-/// Anthropic's top-level ``system`` field produces consecutive leading system
+/// Anthropic's top-level `system` field produces consecutive leading system
 /// messages (one per content block). These are merged into a single system
-/// message at ``messages[0]`` to match OpenAI's convention.
+/// message at `messages[0]` to match OpenAI's convention.
 ///
-/// Mid-conversation ``role=system`` messages (from Anthropic's intra-messages
-/// system instructions, supported on Opus 4.8 / Fable 5+) are preserved at
-/// their original positions. Merging them into the leading system message
-/// would change the cached prefix every turn, breaking DeepSeek's
-/// prefix-based context caching.
+/// Mid-conversation `role=system` messages (from Anthropic's intra-messages
+/// system instructions, supported on Opus 4.8 / Fable 5+) are rewritten to
+/// `role=user`. OpenAI-compatible upstreams (OpenCode, DeepSeek, etc.)
+/// commonly elevate ALL system messages to the prompt prefix, so a new
+/// mid-conversation reminder would rewrite the entire system prefix and
+/// evict every cached token beyond it. Rewriting them to user keeps the
+/// prefix stable while preserving the reminder content in the conversation tail.
 fn normalize_openai_system_messages(messages: &mut Vec<Value>) {
-    // Find where the leading consecutive system messages end.
-    // Only these (from Anthropic's top-level system) should be merged.
     let leading_system_end = messages
         .iter()
         .take_while(|message| {
@@ -337,7 +381,6 @@ fn normalize_openai_system_messages(messages: &mut Vec<Value>) {
     }
 
     // Merge leading consecutive system messages into one at position 0.
-    // Single leading message: already at position 0, nothing to do.
     if leading_system_end > 1 {
         let mut parts = Vec::new();
         for msg in messages.drain(..leading_system_end) {
@@ -358,6 +401,15 @@ fn normalize_openai_system_messages(messages: &mut Vec<Value>) {
         }
         if !parts.is_empty() {
             messages.insert(0, json!({"role": "system", "content": parts.join("\n")}));
+        }
+    }
+
+    // Rewrite any remaining mid-conversation system messages to user.
+    // Upstreams that elevate all system messages to the prefix would
+    // otherwise break the cache on every new reminder.
+    for msg in messages.iter_mut().skip(1) {
+        if msg.get("role").and_then(|value| value.as_str()) == Some("system") {
+            msg["role"] = json!("user");
         }
     }
 }
@@ -2124,7 +2176,7 @@ mod tests {
     // ── normalize_openai_system_messages ──
 
     #[test]
-    fn test_normalize_system_merges_leading_preserves_mid() {
+    fn test_normalize_system_merges_leading_rewrites_mid_to_user() {
         let input = json!({
             "model": "claude-opus-4-7",
             "max_tokens": 1024,
@@ -2147,8 +2199,9 @@ mod tests {
         let mid = msgs
             .iter()
             .position(|m| m.get("content").and_then(|c| c.as_str()) == Some("WS: /tmp"));
-        assert!(mid.is_some(), "mid-conversation system preserved");
-        assert!(mid.unwrap() > 0);
+        let mid_idx = mid.expect("mid-conversation content preserved");
+        assert!(mid_idx > 0, "not at position 0");
+        assert_eq!(msgs[mid_idx]["role"], "user", "rewritten to user role");
     }
 
     #[test]
@@ -2165,5 +2218,22 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[0]["content"], "You are helpful.");
+    }
+
+    #[test]
+    fn strip_volatile_cch_removes_nonce_preserves_stable_fields() {
+        // 独立 billing 头（整行剥离后的残留）或文本中间的 cch= nonce 都应被剔除，
+        // 保留 cc_version / cc_entrypoint 等稳定字段。
+        assert_eq!(
+            strip_volatile_cch("cc_version=2.1.177.c0b; cc_entrypoint=cli; cch=b8e89;"),
+            "cc_version=2.1.177.c0b; cc_entrypoint=cli;"
+        );
+        assert_eq!(
+            strip_volatile_cch("You are Claude Code.\n\nx-anthropic-billing-header: cc_version=1; cch=a1b2c3;\n\nBe concise."),
+            "You are Claude Code.\n\nx-anthropic-billing-header: cc_version=1;\n\nBe concise."
+        );
+        // 无 cch 时原样返回
+        let stable = "You are Claude Code.";
+        assert_eq!(strip_volatile_cch(stable), stable);
     }
 }
