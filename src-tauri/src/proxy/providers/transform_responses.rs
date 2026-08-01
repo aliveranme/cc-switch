@@ -1094,6 +1094,32 @@ mod tests {
     }
 
     #[test]
+    fn test_anthropic_to_responses_strips_mid_text_cch_in_array_part() {
+        // array 分支（Claude Code 实际常见的 system 形态）：某一 part 中部
+        // 含非前导 billing 头时，strip_leading 无效，只有 strip_volatile_cch
+        // 能剥离 cch。此测试锁定 array 分支的修复（review：array 无护栏）。
+        let input = json!({
+            "model": "gpt-4o",
+            "max_tokens": 1024,
+            "system": [
+                {"type": "text", "text": "You are Claude Code."},
+                {"type": "text", "text": "Keep me.\n\nx-anthropic-billing-header: cc_version=1; cch=a1b2c3;\n\nBe concise."}
+            ],
+            "messages": [{"role": "user", "content": "Hello"}]
+        });
+
+        let result = anthropic_to_responses(input, None, false, false).unwrap();
+        let instructions = result["instructions"].as_str().unwrap();
+        assert!(
+            !instructions.contains("cch="),
+            "array part 中部的 cch nonce 应被剥离: {instructions}"
+        );
+        assert!(instructions.contains("cc_version=1;"));
+        assert!(instructions.contains("Keep me."));
+        assert!(instructions.contains("Be concise."));
+    }
+
+    #[test]
     fn test_anthropic_to_responses_with_system_array() {
         let input = json!({
             "model": "gpt-4o",

@@ -2281,6 +2281,39 @@ mod tests {
         assert_eq!(msgs[mid_idx]["role"], "user", "mid system 应被重写为 user");
     }
 
+    /// 单一 leading system + mid reminder：leading 保持 system 不动，
+    /// mid reminder 重写为 user（review：该组合是验证盲区）。
+    #[test]
+    fn test_normalize_system_single_leading_rewrites_mid_to_user() {
+        let input = json!({
+            "model": "claude-opus-4-7",
+            "max_tokens": 1024,
+            "system": "You are helpful.",
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "system", "content": "WS: /tmp"},
+                {"role": "user", "content": "Read file"}
+            ]
+        });
+
+        let result = anthropic_to_openai(input).unwrap();
+        let msgs = result["messages"].as_array().unwrap();
+
+        // 单一 leading system 保留为 system
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[0]["content"], "You are helpful.");
+        // mid reminder 重写为 user（leading_system_end==1 时合并跳过，重写循环仍须生效）
+        let mid = msgs
+            .iter()
+            .position(|m| m.get("content").and_then(|c| c.as_str()) == Some("WS: /tmp"));
+        let mid_idx = mid.expect("mid-conversation content preserved");
+        assert!(mid_idx > 0, "not at position 0");
+        assert_eq!(
+            msgs[mid_idx]["role"], "user",
+            "single leading + mid reminder 应重写为 user"
+        );
+    }
+
     #[test]
     fn strip_volatile_cch_removes_nonce_preserves_stable_fields() {
         // 独立 billing 头（整行剥离后的残留）或文本中间的 cch= nonce 都应被剔除，
@@ -2328,5 +2361,34 @@ mod tests {
         // 用户 system 的缩进/空白原样保留，不 trim
         let text = "  indented system\nwith  double  spaces  ";
         assert_eq!(strip_volatile_cch(text), text);
+    }
+
+    #[test]
+    fn strip_volatile_cch_handles_crlf_billing_line() {
+        // CRLF 结尾的 billing 行也应剥离 cch，且保留 \r\n 换行
+        let text = "x-anthropic-billing-header: cc_version=1; cch=a1b2c3;\r\nYou are helpful.";
+        assert_eq!(
+            strip_volatile_cch(text),
+            "x-anthropic-billing-header: cc_version=1;\r\nYou are helpful."
+        );
+    }
+
+    #[test]
+    fn strip_volatile_cch_matches_uppercase_cch() {
+        // 大写 CCH= 也应被剥离（eq_ignore_ascii_case）
+        assert_eq!(
+            strip_volatile_cch("cc_version=1; CCH=deadbeef;"),
+            "cc_version=1;"
+        );
+    }
+
+    #[test]
+    fn strip_volatile_cch_removes_mid_billing_nonce_keeps_following_field() {
+        // cch 后紧跟下一字段时，cch 段被剔除、下一字段保留
+        // （粘连由 sep 循环处理；此用例锁定行为）
+        assert_eq!(
+            strip_volatile_cch("cc_version=1; cch=a1b2c3; cc_entrypoint=cli;"),
+            "cc_version=1;cc_entrypoint=cli;"
+        );
     }
 }
