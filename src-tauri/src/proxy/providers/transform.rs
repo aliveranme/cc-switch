@@ -328,10 +328,7 @@ fn normalize_openai_system_messages(messages: &mut Vec<Value>) {
     let leading_system_end = messages
         .iter()
         .take_while(|message| {
-            message
-                .get("role")
-                .and_then(|value| value.as_str())
-                == Some("system")
+            message.get("role").and_then(|value| value.as_str()) == Some("system")
         })
         .count();
 
@@ -360,10 +357,7 @@ fn normalize_openai_system_messages(messages: &mut Vec<Value>) {
             }
         }
         if !parts.is_empty() {
-            messages.insert(
-                0,
-                json!({"role": "system", "content": parts.join("\n")}),
-            );
+            messages.insert(0, json!({"role": "system", "content": parts.join("\n")}));
         }
     }
 }
@@ -2127,49 +2121,49 @@ mod tests {
         );
     }
 
-        // ── normalize_openai_system_messages ──
+    // ── normalize_openai_system_messages ──
 
-        #[test]
-        fn test_normalize_system_merges_leading_preserves_mid() {
-            let input = json!({
-                "model": "claude-opus-4-7",
-                "max_tokens": 1024,
-                "system": [
-                    {"type": "text", "text": "You are helpful."},
-                    {"type": "text", "text": "Be concise."}
-                ],
-                "messages": [
-                    {"role": "user", "content": "Hello"},
-                    {"role": "system", "content": [{"type": "text", "text": "WS: /tmp"}]},
-                    {"role": "user", "content": "Read file"}
-                ]
-            });
+    #[test]
+    fn test_normalize_system_merges_leading_preserves_mid() {
+        let input = json!({
+            "model": "claude-opus-4-7",
+            "max_tokens": 1024,
+            "system": [
+                {"type": "text", "text": "You are helpful."},
+                {"type": "text", "text": "Be concise."}
+            ],
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "system", "content": [{"type": "text", "text": "WS: /tmp"}]},
+                {"role": "user", "content": "Read file"}
+            ]
+        });
 
-            let result = anthropic_to_openai(input).unwrap();
-            let msgs = result["messages"].as_array().unwrap();
+        let result = anthropic_to_openai(input).unwrap();
+        let msgs = result["messages"].as_array().unwrap();
 
-            assert_eq!(msgs[0]["role"], "system");
-            assert_eq!(msgs[0]["content"], "You are helpful.\nBe concise.");
-            let mid = msgs.iter().position(|m| {
-                m.get("content").and_then(|c| c.as_str()) == Some("WS: /tmp")
-            });
-            assert!(mid.is_some(), "mid-conversation system preserved");
-            assert!(mid.unwrap() > 0);
-        }
-
-        #[test]
-        fn test_normalize_system_single_leading_unchanged() {
-            let input = json!({
-                "model": "claude-opus-4-7",
-                "max_tokens": 1024,
-                "system": "You are helpful.",
-                "messages": [{"role": "user", "content": "Hello"}]
-            });
-
-            let result = anthropic_to_openai(input).unwrap();
-            let msgs = result["messages"].as_array().unwrap();
-            assert_eq!(msgs.len(), 2);
-            assert_eq!(msgs[0]["role"], "system");
-            assert_eq!(msgs[0]["content"], "You are helpful.");
-        }
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[0]["content"], "You are helpful.\nBe concise.");
+        let mid = msgs
+            .iter()
+            .position(|m| m.get("content").and_then(|c| c.as_str()) == Some("WS: /tmp"));
+        assert!(mid.is_some(), "mid-conversation system preserved");
+        assert!(mid.unwrap() > 0);
     }
+
+    #[test]
+    fn test_normalize_system_single_leading_unchanged() {
+        let input = json!({
+            "model": "claude-opus-4-7",
+            "max_tokens": 1024,
+            "system": "You are helpful.",
+            "messages": [{"role": "user", "content": "Hello"}]
+        });
+
+        let result = anthropic_to_openai(input).unwrap();
+        let msgs = result["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[0]["content"], "You are helpful.");
+    }
+}
