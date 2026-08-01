@@ -3594,13 +3594,14 @@ fn log_prompt_cache_trace(
         short_value_hash(body.get("include")),
         cache_controls,
         short_value_hash(Some(body)),
-        // 出站 body 可能用 max_completion_tokens（o-series）或 max_output_tokens
-        // （Responses/Gemini），只读 max_tokens 恒为 0，跨轮稳定性诊断失效。
-        // 三者都读，保证 CacheTrace 的 max_tokens 字段真正反映预算（review #6）。
-        body.get("max_tokens")
-            .or_else(|| body.get("max_completion_tokens"))
-            .or_else(|| body.get("max_output_tokens"))
-            .and_then(|v| v.as_u64())
+        // 出站 body 的 token 预算字段随格式而异：max_tokens（Anthropic/chat）、
+        // max_completion_tokens（o-series）、max_output_tokens（Responses/Codex）、
+        // 或嵌套的 generationConfig.maxOutputTokens（Gemini 原生）。逐级取第一个
+        // 能解析为 u64 的值（避免 max_tokens 为 null/string 时短路），保证
+        // CacheTrace 的 max_tokens 字段真正反映预算（review #6）。
+        ["/max_tokens", "/max_completion_tokens", "/max_output_tokens", "/generationConfig/maxOutputTokens"]
+            .iter()
+            .find_map(|key| body.pointer(key).and_then(|v| v.as_u64()))
             .unwrap_or(0),
         body_prefix(body),
     );

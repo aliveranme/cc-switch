@@ -2438,11 +2438,15 @@ async fn sniff_response_body_is_json(
         match stream.next().await {
             Some(Ok(chunk)) => {
                 let need = sniff_limit - prefix.len();
-                if chunk.len() <= need {
+                if chunk.len() < need {
+                    // 还没填满嗅探边界：并入前缀继续读
                     prefix.extend_from_slice(&chunk);
                 } else {
-                    // chunk 跨过嗅探边界：前缀用于判断，随后前缀 + chunk 剩余 +
-                    // 剩余流一起重建（缺 prefix 会让重建 body 不完整）。
+                    // chunk 填满或跨过嗅探边界（含恰好对齐 `==need`）：
+                    // 前缀用于判断，随后前缀 + chunk 剩余 + 剩余流合并为
+                    // streamed 重建，保持流式。若恰好对齐走 tail 全缓冲，
+                    // 会把整条剩余流（真 SSE）读入内存、客户端等整个流结束
+                    // 才收到首字节，且无 MAX_BUFFERED_PROXY_BODY_BYTES 上限。
                     prefix.extend_from_slice(&chunk[..need]);
                     let is_json = is_json_head(&prefix);
                     let rest = chunk.slice(need..);
@@ -2464,7 +2468,7 @@ async fn sniff_response_body_is_json(
                 )));
             }
             None => {
-                // 流提前结束：prefix 即完整 body
+                // 流提前结束（前缀 < sniff_limit）：prefix 即完整 body
                 return Ok((
                     is_json_head(&prefix),
                     super::hyper_client::ProxyResponse::buffered(status, headers, prefix.freeze()),
@@ -2472,24 +2476,9 @@ async fn sniff_response_body_is_json(
             }
         }
     }
-
-    // prefix 填满嗅探边界且最后一个 chunk 恰好对齐：读剩余部分并入完整 body
-    let mut tail = BytesMut::new();
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(b) => tail.extend_from_slice(&b),
-            Err(e) => {
-                return Err(ProxyError::ForwardFailed(format!(
-                    "嗅探上游响应体失败: {e}"
-                )));
-            }
-        }
-    }
-    prefix.extend_from_slice(&tail);
-    Ok((
-        is_json_head(&prefix),
-        super::hyper_client::ProxyResponse::buffered(status, headers, prefix.freeze()),
-    ))
+    unreachable!(
+        "循环只可能经 None(EOF) 或 chunk>=need 分支退出，prefix 不可能达到 sniff_limit 而不返回"
+    );
 }
 
 /// 判断响应体是否"看起来像" SSE 文本（#2234 兜底嗅探）。
@@ -3894,5 +3883,33 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         let (is_json, rebuilt) = sniff_response_body_is_json(response, 2048).await.unwrap();
         assert!(!is_json, "空 body 不应被识别为 JSON");
         assert!(rebuilt.bytes_limited(1024).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sniff_aligned_boundary_keeps_streaming() {
+        use crate::proxy::hyper_client::ProxyResponse;
+
+        // 第一 chunk 恰好凑满嗅探边界(2048)且以 { 开头，流仍继续——
+        // 必须返回 Streamed（保持流式）。修复前 `chunk.len() <= need`
+        // 在恰好对齐时走 tail 全缓冲，把整条剩余流读入内存并返回 Buffered，
+        // 破坏真实 SSE 流式且无 MAX_BUFFERED_PROXY_BODY_BYTES 上限。
+        let sniff_limit = 2048;
+        let first = format!("{}{}", "{", "a".repeat(2047));
+        assert_eq!(first.len(), sniff_limit);
+        let headers = axum::http::HeaderMap::new();
+        let stream = futures::stream::iter([
+            Ok::<_, std::io::Error>(Bytes::from(first)),
+            Ok::<_, std::io::Error>(Bytes::from("b")), // 剩余数据
+        ]);
+        let response = ProxyResponse::streamed(StatusCode::OK, headers, stream);
+
+        let (is_json, rebuilt) = sniff_response_body_is_json(response, sniff_limit)
+            .await
+            .unwrap();
+        assert!(is_json, "前缀以 {{ 开头应判为 JSON");
+        assert!(
+            matches!(rebuilt, ProxyResponse::Streamed { .. }),
+            "对齐边界应返回 Streamed 保持流式（修复前返回 Buffered）"
+        );
     }
 }

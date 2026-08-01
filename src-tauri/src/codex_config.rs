@@ -620,11 +620,14 @@ fn codex_catalog_model_entry(
         entry_obj.insert("supports_parallel_tool_calls".to_string(), json!(parallel));
     }
 
-    // ProxyChat providers (third-party via chat-completions relay) inherit
-    // the template's use_responses_lite, which may be true for OpenAI models.
-    // Force false for all third-party providers since the lite format is
-    // OpenAI-specific and not supported by third-party gateways.
-    if profile == CodexCatalogToolProfile::ProxyChat {
+    // 所有走 Responses API 的第三方 profile（ProxyChat 经 cc-switch 转换、
+    // NativeResponses 直连网关）都强制 use_responses_lite=false：lite 格式是
+    // OpenAI 专用、第三方网关不支持，且会把工具调用退化为文本嵌入消息导致
+    // 工具调用无效。模板可能为 true（OpenAI 模型），必须在 catalog 条目层面清零。
+    if matches!(
+        profile,
+        CodexCatalogToolProfile::ProxyChat | CodexCatalogToolProfile::NativeResponses
+    ) {
         entry_obj.insert("use_responses_lite".to_string(), json!(false));
     }
 
