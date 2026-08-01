@@ -311,54 +311,60 @@ fn map_tool_choice_to_chat(tool_choice: &Value) -> Value {
     }
 }
 
+/// Normalize OpenAI Chat system messages for prefix-cache stability.
+///
+/// Anthropic's top-level ``system`` field produces consecutive leading system
+/// messages (one per content block). These are merged into a single system
+/// message at ``messages[0]`` to match OpenAI's convention.
+///
+/// Mid-conversation ``role=system`` messages (from Anthropic's intra-messages
+/// system instructions, supported on Opus 4.8 / Fable 5+) are preserved at
+/// their original positions. Merging them into the leading system message
+/// would change the cached prefix every turn, breaking DeepSeek's
+/// prefix-based context caching.
 fn normalize_openai_system_messages(messages: &mut Vec<Value>) {
-    let system_count = messages
+    // Find where the leading consecutive system messages end.
+    // Only these (from Anthropic's top-level system) should be merged.
+    let leading_system_end = messages
         .iter()
-        .filter(|message| message.get("role").and_then(|value| value.as_str()) == Some("system"))
+        .take_while(|message| {
+            message
+                .get("role")
+                .and_then(|value| value.as_str())
+                == Some("system")
+        })
         .count();
 
-    if system_count == 0 {
+    if leading_system_end == 0 {
         return;
     }
 
-    if system_count == 1 {
-        if let Some(index) = messages.iter().position(|message| {
-            message.get("role").and_then(|value| value.as_str()) == Some("system")
-        }) {
-            if index > 0 {
-                let message = messages.remove(index);
-                messages.insert(0, message);
-            }
-        }
-        return;
-    }
-
-    let mut parts = Vec::new();
-    messages.retain(|message| {
-        if message.get("role").and_then(|value| value.as_str()) != Some("system") {
-            return true;
-        }
-
-        match message.get("content") {
-            Some(Value::String(text)) if !text.is_empty() => parts.push(text.clone()),
-            Some(Value::Array(content_parts)) => {
-                let text = content_parts
-                    .iter()
-                    .filter_map(|part| part.get("text").and_then(|value| value.as_str()))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if !text.is_empty() {
-                    parts.push(text);
+    // Merge leading consecutive system messages into one at position 0.
+    // Single leading message: already at position 0, nothing to do.
+    if leading_system_end > 1 {
+        let mut parts = Vec::new();
+        for msg in messages.drain(..leading_system_end) {
+            match msg.get("content") {
+                Some(Value::String(text)) if !text.is_empty() => parts.push(text.clone()),
+                Some(Value::Array(content_parts)) => {
+                    let text = content_parts
+                        .iter()
+                        .filter_map(|part| part.get("text").and_then(|value| value.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !text.is_empty() {
+                        parts.push(text);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
-
-        false
-    });
-
-    if !parts.is_empty() {
-        messages.insert(0, json!({"role": "system", "content": parts.join("\n")}));
+        if !parts.is_empty() {
+            messages.insert(
+                0,
+                json!({"role": "system", "content": parts.join("\n")}),
+            );
+        }
     }
 }
 
@@ -2120,4 +2126,50 @@ mod tests {
             json!({"type": "function", "function": {"name": "search"}}),
         );
     }
-}
+
+        // ── normalize_openai_system_messages ──
+
+        #[test]
+        fn test_normalize_system_merges_leading_preserves_mid() {
+            let input = json!({
+                "model": "claude-opus-4-7",
+                "max_tokens": 1024,
+                "system": [
+                    {"type": "text", "text": "You are helpful."},
+                    {"type": "text", "text": "Be concise."}
+                ],
+                "messages": [
+                    {"role": "user", "content": "Hello"},
+                    {"role": "system", "content": [{"type": "text", "text": "WS: /tmp"}]},
+                    {"role": "user", "content": "Read file"}
+                ]
+            });
+
+            let result = anthropic_to_openai(input).unwrap();
+            let msgs = result["messages"].as_array().unwrap();
+
+            assert_eq!(msgs[0]["role"], "system");
+            assert_eq!(msgs[0]["content"], "You are helpful.\nBe concise.");
+            let mid = msgs.iter().position(|m| {
+                m.get("content").and_then(|c| c.as_str()) == Some("WS: /tmp")
+            });
+            assert!(mid.is_some(), "mid-conversation system preserved");
+            assert!(mid.unwrap() > 0);
+        }
+
+        #[test]
+        fn test_normalize_system_single_leading_unchanged() {
+            let input = json!({
+                "model": "claude-opus-4-7",
+                "max_tokens": 1024,
+                "system": "You are helpful.",
+                "messages": [{"role": "user", "content": "Hello"}]
+            });
+
+            let result = anthropic_to_openai(input).unwrap();
+            let msgs = result["messages"].as_array().unwrap();
+            assert_eq!(msgs.len(), 2);
+            assert_eq!(msgs[0]["role"], "system");
+            assert_eq!(msgs[0]["content"], "You are helpful.");
+        }
+    }
