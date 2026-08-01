@@ -3637,12 +3637,11 @@ fn cache_control_summary(value: &Value) -> String {
     )
 }
 
-
-    fn body_prefix(body: &Value) -> String {
-        let serialized = serde_json::to_string(body).unwrap_or_default();
-        let prefix: String = serialized.chars().take(200).collect();
-        prefix.replace('\n', "\\n")
-    }
+fn body_prefix(body: &Value) -> String {
+    let serialized = serde_json::to_string(body).unwrap_or_default();
+    let prefix: String = serialized.chars().take(200).collect();
+    prefix.replace('\n', "\\n")
+}
 fn value_for_log(value: &Value) -> String {
     match value {
         Value::Bool(value) => value.to_string(),
