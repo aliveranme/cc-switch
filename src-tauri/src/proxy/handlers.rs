@@ -1440,7 +1440,20 @@ async fn handle_codex_chat_to_responses_transform(
     // 请求 stream:true 且上游确实不是 JSON 时才按流式处理。若客户端要 stream
     // 但网关无视它、返回明确的 JSON 200，交给下方非流式聚合(chat_completion_to_
     // response)去转换并记录用量——否则把一份完整 JSON 当 SSE 解析会失败。
-    if response.is_sse() || (is_stream && !response.is_json()) {
+    //
+    // content-type 无法判定（非 JSON 也非 SSE，如 text/plain）时，嗅探 body
+    // 前缀区分「完整 JSON 但 Content-Type 标错」与「真 SSE」：前者走非流式
+    // 聚合，后者走流式。否则完整 JSON 会被 take_sse_block 取不到帧、整段答案
+    // 在流结束时被丢弃（stream_truncated）。
+    let (sniffed_is_json, response) = if response.is_sse() {
+        (false, response)
+    } else if is_stream && !response.is_json() {
+        sniff_response_body_is_json(response, 2048).await?
+    } else {
+        (true, response)
+    };
+
+    if !sniffed_is_json {
         let stream = response.bytes_stream();
         let sse_stream = create_responses_sse_stream_from_chat_with_context(stream, tool_context);
         let sse_stream = record_responses_sse_stream(sse_stream, state.codex_chat_history.clone());
@@ -2393,6 +2406,92 @@ fn responses_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
     Ok(response)
 }
 
+/// 嗅探 content-type 无法判定的响应体：读前缀判断是完整 JSON 还是 SSE，
+/// 并重建响应体（前缀 + 剩余流）供后续分支使用。
+///
+/// 返回 `(是否为 JSON, 重建后的响应)`。判断规则：去掉 BOM/空白后以 `{`
+/// 开头视为 JSON（Chat Completions 响应体是 JSON 对象）；否则视为 SSE。
+///
+/// 背景：部分网关对 `stream:true` 请求无视并返回完整 JSON，却把 Content-Type
+/// 标成 `text/plain` 等（既非 `application/json` 也非 `text/event-stream`）。
+/// 此时 `is_sse()`/`is_json()` 都判不出来，若不嗅探会把完整 JSON 当 SSE 解析，
+/// `take_sse_block` 取不到帧，整段答案在流结束时被丢弃（stream_truncated）。
+async fn sniff_response_body_is_json(
+    response: super::hyper_client::ProxyResponse,
+    sniff_limit: usize,
+) -> Result<(bool, super::hyper_client::ProxyResponse), ProxyError> {
+    use bytes::BytesMut;
+    use futures::StreamExt;
+
+    let status = response.status();
+    let headers = response.headers().clone();
+    let mut stream = Box::pin(response.bytes_stream());
+    let mut prefix = BytesMut::with_capacity(sniff_limit);
+    let is_json_head = |buf: &BytesMut| -> bool {
+        String::from_utf8_lossy(buf)
+            .trim_start_matches('\u{feff}')
+            .trim_start()
+            .starts_with('{')
+    };
+
+    while prefix.len() < sniff_limit {
+        match stream.next().await {
+            Some(Ok(chunk)) => {
+                let need = sniff_limit - prefix.len();
+                if chunk.len() <= need {
+                    prefix.extend_from_slice(&chunk);
+                } else {
+                    // chunk 跨过嗅探边界：前缀用于判断，随后前缀 + chunk 剩余 +
+                    // 剩余流一起重建（缺 prefix 会让重建 body 不完整）。
+                    prefix.extend_from_slice(&chunk[..need]);
+                    let is_json = is_json_head(&prefix);
+                    let rest = chunk.slice(need..);
+                    let prefix_bytes = prefix.freeze();
+                    let merged = futures::stream::iter([
+                        Ok::<_, std::io::Error>(prefix_bytes),
+                        Ok::<_, std::io::Error>(rest),
+                    ])
+                    .chain(stream);
+                    return Ok((
+                        is_json,
+                        super::hyper_client::ProxyResponse::streamed(status, headers, merged),
+                    ));
+                }
+            }
+            Some(Err(e)) => {
+                return Err(ProxyError::ForwardFailed(format!(
+                    "嗅探上游响应体失败: {e}"
+                )));
+            }
+            None => {
+                // 流提前结束：prefix 即完整 body
+                return Ok((
+                    is_json_head(&prefix),
+                    super::hyper_client::ProxyResponse::buffered(status, headers, prefix.freeze()),
+                ));
+            }
+        }
+    }
+
+    // prefix 填满嗅探边界且最后一个 chunk 恰好对齐：读剩余部分并入完整 body
+    let mut tail = BytesMut::new();
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(b) => tail.extend_from_slice(&b),
+            Err(e) => {
+                return Err(ProxyError::ForwardFailed(format!(
+                    "嗅探上游响应体失败: {e}"
+                )));
+            }
+        }
+    }
+    prefix.extend_from_slice(&tail);
+    Ok((
+        is_json_head(&prefix),
+        super::hyper_client::ProxyResponse::buffered(status, headers, prefix.freeze()),
+    ))
+}
+
 /// 判断响应体是否"看起来像" SSE 文本（#2234 兜底嗅探）。
 ///
 /// 仅在 JSON 解析已失败后调用：合法 JSON 不可能以这些前缀开头，误判面为零。
@@ -2969,7 +3068,8 @@ mod tests {
         build_codex_request_error_response, build_gemini_request_error_response,
         chat_sse_to_response_value, classify_body_for_diagnostics, codex_proxy_error_json,
         parse_json_request_body, responses_sse_to_response_value,
-        should_use_claude_transform_streaming, transform, upstream_body_parse_error,
+        should_use_claude_transform_streaming, sniff_response_body_is_json, transform,
+        upstream_body_parse_error,
     };
     use crate::proxy::ProxyError;
     use axum::http::StatusCode;
@@ -3723,5 +3823,76 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         assert_eq!(body["error"]["provider"], "HCAI");
         assert_eq!(body["error"]["model"], "gpt-5.5");
         assert_eq!(body["error"]["endpoint"], "/responses");
+    }
+
+    // ========================================================================
+    // sniff_response_body_is_json：text/plain 完整 JSON body 嗅探
+    // ========================================================================
+
+    #[tokio::test]
+    async fn sniff_json_body_detects_complete_json() {
+        use crate::proxy::hyper_client::ProxyResponse;
+
+        let headers = axum::http::HeaderMap::new();
+        let body = Bytes::from(r#"{"id":"chatcmpl-1","choices":[{"message":{"content":"hi"}}]}"#);
+        let response = ProxyResponse::buffered(StatusCode::OK, headers, body);
+
+        let (is_json, rebuilt) = sniff_response_body_is_json(response, 2048).await.unwrap();
+        assert!(is_json, "完整 JSON body 应被识别为 JSON");
+
+        // 重建后的响应能读出完整 body，供非流式聚合使用
+        let bytes = rebuilt.bytes_limited(4096).await.unwrap();
+        assert!(bytes.starts_with(b"{"));
+        assert!(String::from_utf8_lossy(&bytes).contains("chatcmpl-1"));
+    }
+
+    #[tokio::test]
+    async fn sniff_sse_body_is_not_json() {
+        use crate::proxy::hyper_client::ProxyResponse;
+
+        let headers = axum::http::HeaderMap::new();
+        let body = Bytes::from("data: {\"id\":\"1\"}\n\ndata: [DONE]\n\n");
+        let response = ProxyResponse::buffered(StatusCode::OK, headers, body);
+
+        let (is_json, rebuilt) = sniff_response_body_is_json(response, 2048).await.unwrap();
+        assert!(!is_json, "SSE body 不应被识别为 JSON");
+
+        // 重建后的流式响应仍能读出原始 SSE 内容
+        let bytes = rebuilt.bytes_limited(4096).await.unwrap();
+        assert!(String::from_utf8_lossy(&bytes).starts_with("data:"));
+    }
+
+    #[tokio::test]
+    async fn sniff_json_body_larger_than_sniff_limit() {
+        use crate::proxy::hyper_client::ProxyResponse;
+
+        // body 超过嗅探边界（2048），且 JSON 从 { 开始 → 仍判为 JSON
+        let json_body = format!(
+            r#"{{"id":"big","choices":[{}]}}"#,
+            vec!["x".repeat(32); 200].join(",")
+        );
+        assert!(json_body.len() > 2048);
+        let headers = axum::http::HeaderMap::new();
+        let response = ProxyResponse::buffered(StatusCode::OK, headers, Bytes::from(json_body));
+
+        let (is_json, rebuilt) = sniff_response_body_is_json(response, 2048).await.unwrap();
+        assert!(is_json, "超过嗅探边界的 JSON 仍应被识别");
+
+        // 重建后 body 完整（前缀 + 剩余拼接无误）
+        let bytes = rebuilt.bytes_limited(8192).await.unwrap();
+        assert!(bytes.starts_with(b"{"));
+        assert!(bytes.ends_with(b"}"));
+    }
+
+    #[tokio::test]
+    async fn sniff_empty_body_is_not_json() {
+        use crate::proxy::hyper_client::ProxyResponse;
+
+        let headers = axum::http::HeaderMap::new();
+        let response = ProxyResponse::buffered(StatusCode::OK, headers, Bytes::new());
+
+        let (is_json, rebuilt) = sniff_response_body_is_json(response, 2048).await.unwrap();
+        assert!(!is_json, "空 body 不应被识别为 JSON");
+        assert!(rebuilt.bytes_limited(1024).await.unwrap().is_empty());
     }
 }
