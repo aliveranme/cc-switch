@@ -3594,8 +3594,15 @@ fn log_prompt_cache_trace(
         short_value_hash(body.get("include")),
         cache_controls,
         short_value_hash(Some(body)),
-            body.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-            body_prefix(body),
+        // 出站 body 可能用 max_completion_tokens（o-series）或 max_output_tokens
+        // （Responses/Gemini），只读 max_tokens 恒为 0，跨轮稳定性诊断失效。
+        // 三者都读，保证 CacheTrace 的 max_tokens 字段真正反映预算（review #6）。
+        body.get("max_tokens")
+            .or_else(|| body.get("max_completion_tokens"))
+            .or_else(|| body.get("max_output_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        body_prefix(body),
     );
 }
 
@@ -3645,9 +3652,13 @@ fn body_prefix(body: &Value) -> String {
     if !log::log_enabled!(log::Level::Trace) {
         return String::new();
     }
-    let serialized = serde_json::to_string(body).unwrap_or_default();
-    let prefix: String = serialized.chars().take(200).collect();
-    prefix.replace('\n', "\\n")
+    // JSON 序列化已把换行转义为 \\n，无需手动 replace（review #7 指出
+    // 此前的 .replace('\n', "\\n") 因序列化后不存在字面换行而从不生效）。
+    serde_json::to_string(body)
+        .unwrap_or_default()
+        .chars()
+        .take(200)
+        .collect()
 }
 fn value_for_log(value: &Value) -> String {
     match value {

@@ -319,13 +319,19 @@ pub fn anthropic_to_responses(
     }
 
     // system → instructions (Responses API 使用 instructions 字段)
+    // 与 chat 路径一致：先剥离前导 billing 头，再剔除残余 cch nonce
+    // （review #3——否则 mid-text billing 头的 cch 会进 instructions 摧毁前缀缓存）
     if let Some(system) = body.get("system") {
         let instructions = if let Some(text) = system.as_str() {
-            super::transform::strip_leading_anthropic_billing_header(text).to_string()
+            let stripped = super::transform::strip_leading_anthropic_billing_header(text);
+            super::transform::strip_volatile_cch(stripped)
         } else if let Some(arr) = system.as_array() {
             arr.iter()
                 .filter_map(|msg| msg.get("text").and_then(|t| t.as_str()))
-                .map(super::transform::strip_leading_anthropic_billing_header)
+                .map(|text| {
+                    let stripped = super::transform::strip_leading_anthropic_billing_header(text);
+                    super::transform::strip_volatile_cch(stripped)
+                })
                 .filter(|text| !text.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n\n")
@@ -1062,6 +1068,29 @@ mod tests {
             result["instructions"],
             "Keep this literal:\nx-anthropic-billing-header: example"
         );
+    }
+
+    #[test]
+    fn test_anthropic_to_responses_strips_mid_text_billing_cch() {
+        // mid-text billing 头的 cch nonce 也应被剔除（review #3）：
+        // 之前 Responses 路径只 strip_leading（前导），mid-text 的 cch 会进
+        // instructions 并摧毁 upstream 的 byte-level 前缀缓存。
+        let input = json!({
+            "model": "gpt-4o",
+            "max_tokens": 1024,
+            "system": "You are Claude Code.\n\nx-anthropic-billing-header: cc_version=1; cch=a1b2c3;\n\nBe concise.",
+            "messages": [{"role": "user", "content": "Hello"}]
+        });
+
+        let result = anthropic_to_responses(input, None, false, false).unwrap();
+        let instructions = result["instructions"].as_str().unwrap();
+        assert!(
+            !instructions.contains("cch="),
+            "mid-text cch nonce 应被剥离: {instructions}"
+        );
+        assert!(instructions.contains("x-anthropic-billing-header: cc_version=1;"));
+        assert!(instructions.contains("You are Claude Code."));
+        assert!(instructions.contains("Be concise."));
     }
 
     #[test]

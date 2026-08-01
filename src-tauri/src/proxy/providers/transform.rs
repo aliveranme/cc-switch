@@ -61,37 +61,72 @@ pub(crate) fn strip_leading_anthropic_billing_header(text: &str) -> &str {
 /// 其中 `cch=` 值每轮变化。`strip_leading_anthropic_billing_header` 只剥离
 /// 前导的整行 billing 头；若 billing 头出现在文本中间（或剥离不彻底），
 /// nonce 会进入出站前缀并摧毁 DeepSeek 的 byte-level 前缀缓存。
-/// 此函数在任意位置剔除 `cch=<hex>` 段，并清理残留分隔符。
-fn strip_volatile_cch(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    let bytes = text.as_bytes();
+///
+/// 本函数**只在 billing 行内**剔除 `cch=` 段（含空 nonce），其余文本（含
+/// 用户 system prompt 里的 `;;`、`cch=` 相似 token、缩进空白等）原样保留——
+/// 不做全局标点归一化或 trim，避免像早期实现那样破坏用户 prompt 内容。
+/// `pub(crate)` 供 Responses 变换路径复用（review #3：双变换路径需一致剥离 cch）。
+pub(crate) fn strip_volatile_cch(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for segment in text.split_inclusive('\n') {
+        let (line, newline) = match segment.strip_suffix('\n') {
+            Some(body) => (body, "\n"),
+            None => (segment, ""),
+        };
+        if is_billing_line(line) {
+            out.push_str(&strip_cch_field_in_line(line));
+        } else {
+            out.push_str(line);
+        }
+        out.push_str(newline);
+    }
+    out
+}
+
+/// 判断一行是否属于 Anthropic billing 头（含 header 名或稳定字段名）。
+/// `cc_version` / `cc_entrypoint` 是 Anthropic 专用字段名，用户文本几乎
+/// 不可能出现，用作限定「哪里可以安全剥离 cch」的范围是可靠的。
+fn is_billing_line(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("x-anthropic-billing-header")
+        || lower.contains("cc_version=")
+        || lower.contains("cc_entrypoint=")
+}
+
+/// 在 billing 行内剔除 `cch=<hex>`（含空 nonce `cch=`）字段及其分隔符。
+/// 只作用于 billing 行（由 `is_billing_line` 保证），用户文本不会被触碰。
+/// 保留 cch 前一个 `;` 分隔符，避免产生 `cc_version=1 cch=` 这类粘连。
+fn strip_cch_field_in_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let bytes = line.as_bytes();
     let mut scan = 0;
     let mut last = 0;
     while scan + 4 <= bytes.len() {
         if bytes[scan..scan + 4].eq_ignore_ascii_case(b"cch=") {
+            // 定位 cch=<hex>（或空 nonce cch=）的结束
             let mut end = scan + 4;
             while end < bytes.len() && bytes[end].is_ascii_hexdigit() {
                 end += 1;
             }
-            if end > scan + 4 {
-                // 有实际 nonce 值：跳过 cch=<hex>
-                result.push_str(&text[last..scan]);
-                last = end;
-                scan = end;
-                continue;
+            // 只剔除 cch 前的空格，保留前面的 `;` 分隔符
+            let mut cut_start = scan;
+            while cut_start > last && bytes[cut_start - 1] == b' ' {
+                cut_start -= 1;
             }
+            out.push_str(&line[last..cut_start]);
+            // 跳过 cch=<hex> 及紧随的分隔符（`;` 与空格）
+            let mut sep = end;
+            while sep < bytes.len() && (bytes[sep] == b';' || bytes[sep] == b' ') {
+                sep += 1;
+            }
+            last = sep;
+            scan = sep;
+            continue;
         }
         scan += 1;
     }
-    result.push_str(&text[last..]);
-    // 清理 cch 段被剔除后残留的分隔符（;; 、; ; 、;, 等）
-    result
-        .replace(";;", ";")
-        .replace("; ;", ";")
-        .replace(";,", ",")
-        .replace(" ;", ";")
-        .trim()
-        .to_string()
+    out.push_str(&line[last..]);
+    out
 }
 
 /// Detect OpenAI o-series reasoning models (o1, o3, o4-mini, etc.)
@@ -375,11 +410,8 @@ fn normalize_openai_system_messages(messages: &mut Vec<Value>) {
         })
         .count();
 
-    if leading_system_end == 0 {
-        return;
-    }
-
     // Merge leading consecutive system messages into one at position 0.
+    // （无 leading system 时跳过合并，但下方重写循环仍需执行。）
     if leading_system_end > 1 {
         let mut parts = Vec::new();
         for msg in messages.drain(..leading_system_end) {
@@ -404,8 +436,10 @@ fn normalize_openai_system_messages(messages: &mut Vec<Value>) {
     }
 
     // Rewrite any remaining mid-conversation system messages to user.
-    // Upstreams that elevate all system messages to the prefix would
-    // otherwise break the cache on every new reminder.
+    // 无论是否有 leading system 都执行：当对话无 top-level system、中途出现
+    // system reminder 时（review #4），若 early-return 跳过此处，reminder 会
+    // 保持 role=system，upstream 每轮把它提升到前缀导致缓存逐出。旧实现正是
+    // 在这里提前返回，构成回归。注意只重写 index>=1，不移动消息顺序。
     for msg in messages.iter_mut().skip(1) {
         if msg.get("role").and_then(|value| value.as_str()) == Some("system") {
             msg["role"] = json!("user");
@@ -2219,6 +2253,34 @@ mod tests {
         assert_eq!(msgs[0]["content"], "You are helpful.");
     }
 
+    /// 无 top-level system 时，对话中间的 system reminder 也应被重写为 user
+    /// （保持 upstream 前缀缓存稳定），且不得移动消息顺序（review #4 回归）。
+    #[test]
+    fn test_normalize_system_rewrites_mid_system_without_leading_system() {
+        let input = json!({
+            "model": "claude-opus-4-7",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "system", "content": "WS: /tmp"},
+                {"role": "user", "content": "Read file"}
+            ]
+        });
+
+        let result = anthropic_to_openai(input).unwrap();
+        let msgs = result["messages"].as_array().unwrap();
+
+        // index 0 保持 user（顺序不变）
+        assert_eq!(msgs[0]["role"], "user");
+        // mid-conversation system 被重写为 user
+        let mid = msgs
+            .iter()
+            .position(|m| m.get("content").and_then(|c| c.as_str()) == Some("WS: /tmp"));
+        let mid_idx = mid.expect("mid-conversation content preserved");
+        assert!(mid_idx > 0, "not at position 0");
+        assert_eq!(msgs[mid_idx]["role"], "user", "mid system 应被重写为 user");
+    }
+
     #[test]
     fn strip_volatile_cch_removes_nonce_preserves_stable_fields() {
         // 独立 billing 头（整行剥离后的残留）或文本中间的 cch= nonce 都应被剔除，
@@ -2234,5 +2296,37 @@ mod tests {
         // 无 cch 时原样返回
         let stable = "You are Claude Code.";
         assert_eq!(strip_volatile_cch(stable), stable);
+    }
+
+    // ── strip_volatile_cch：不得破坏用户 system prompt（review #1/#2/#5）──
+
+    #[test]
+    fn strip_volatile_cch_preserves_shell_code_with_double_semicolons() {
+        // shell 代码中的 `;;` 是合法语法，绝不能被归一化
+        let shell = "case $x in a) echo hi;; esac";
+        assert_eq!(strip_volatile_cch(shell), shell);
+    }
+
+    #[test]
+    fn strip_volatile_cch_preserves_user_text_with_cch_like_token() {
+        // 用户自撰文本里的 cch= 不是 billing nonce，不应被剥离
+        let user_text = "I set cch=deadbeef as the checksum";
+        assert_eq!(strip_volatile_cch(user_text), user_text);
+    }
+
+    #[test]
+    fn strip_volatile_cch_removes_empty_nonce_in_billing_line() {
+        // 空 nonce（cch= 无 hex 值）也应被剥离（review #5）
+        assert_eq!(
+            strip_volatile_cch("x-anthropic-billing-header: cc_version=1; cch=;"),
+            "x-anthropic-billing-header: cc_version=1;"
+        );
+    }
+
+    #[test]
+    fn strip_volatile_cch_preserves_non_billing_whitespace() {
+        // 用户 system 的缩进/空白原样保留，不 trim
+        let text = "  indented system\nwith  double  spaces  ";
+        assert_eq!(strip_volatile_cch(text), text);
     }
 }
