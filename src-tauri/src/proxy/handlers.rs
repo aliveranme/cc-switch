@@ -197,6 +197,11 @@ async fn handle_messages_for_app(
             ctx.request_model
         );
 
+        // 分类器协议模式（block/severity），决定响应转换输出哪个裁决标签
+        let classifier_mode = ctx
+            .classifier_mode
+            .unwrap_or(super::classifier::ClassifierMode::Block);
+
         let raw_endpoint = uri
             .path_and_query()
             .map(|path_and_query| path_and_query.as_str())
@@ -230,7 +235,10 @@ async fn handle_messages_for_app(
                     err.error
                 );
                 // 上游不可用时兜底放行，避免阻塞用户操作
-                let fallback = super::classifier::build_classifier_success_body(&ctx.request_model);
+                let fallback = super::classifier::build_classifier_success_body(
+                    &ctx.request_model,
+                    classifier_mode,
+                );
                 return Ok((StatusCode::OK, Json(fallback)).into_response());
             }
         };
@@ -238,9 +246,18 @@ async fn handle_messages_for_app(
         ctx.outbound_model = result.outbound_model.take();
         ctx.provider = result.provider;
 
-        // 3. 读取上游响应体（失败时兜底放行，不阻塞用户）
-        let body_result =
-            read_decoded_body(result.response, ctx.tag, std::time::Duration::ZERO).await;
+        // 3. 读取上游响应体（失败时兜底放行，不阻塞用户）。
+        //    复用与其他非流式路径一致的 body 超时策略：配置了
+        //    non_streaming_timeout 且开启 failover 时设超时，否则不设
+        //    （等待自然完成）。避免上游发完响应头后 body 卡住时
+        //    整个 auto-mode 工具调用无限挂起。
+        let body_timeout =
+            if ctx.app_config.auto_failover_enabled && ctx.app_config.non_streaming_timeout > 0 {
+                std::time::Duration::from_secs(ctx.app_config.non_streaming_timeout as u64)
+            } else {
+                std::time::Duration::ZERO
+            };
+        let body_result = read_decoded_body(result.response, ctx.tag, body_timeout).await;
 
         let (mut resp_headers, _status, body_bytes) = match body_result {
             Ok(v) => v,
@@ -250,7 +267,10 @@ async fn handle_messages_for_app(
                     tag,
                     e
                 );
-                let fallback = super::classifier::build_classifier_success_body(&ctx.request_model);
+                let fallback = super::classifier::build_classifier_success_body(
+                    &ctx.request_model,
+                    classifier_mode,
+                );
                 return Ok((StatusCode::OK, Json(fallback)).into_response());
             }
         };
@@ -281,13 +301,20 @@ async fn handle_messages_for_app(
 
         // 4. 转回分类器兼容格式
         let classifier_body = match serde_json::from_slice::<Value>(&body_bytes) {
-            Ok(json) => super::classifier::transform_classifier_response(&json, &ctx.request_model),
+            Ok(json) => super::classifier::transform_classifier_response(
+                &json,
+                &ctx.request_model,
+                classifier_mode,
+            ),
             Err(_) => {
                 log::warn!(
                     "[{}] [Classifier] 无法解析上游响应 JSON, 使用 ALLOWED 兜底",
                     tag
                 );
-                super::classifier::build_classifier_success_body(&ctx.request_model)
+                super::classifier::build_classifier_success_body(
+                    &ctx.request_model,
+                    classifier_mode,
+                )
             }
         };
 

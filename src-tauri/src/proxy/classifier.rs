@@ -51,6 +51,24 @@ pub struct ClassifierDetection {
     pub stage: Option<ClassifierStage>,
     /// 置信度（0.0 - 1.0）
     pub confidence: f32,
+    /// 检测到的分类器协议模式（block/severity/未知）
+    pub mode: Option<ClassifierMode>,
+}
+
+/// 分类器协议模式
+///
+/// 来自 Claude Code 源码（2.1.219）逆向：
+/// - `Block`（默认）: 响应用 `<block>yes|no</block>` 标签。CC 的解析器
+///   `xBs` 去掉 `<thinking>` 后取**第一个** `<block>(yes|no)` 匹配，闭合标签可选。
+/// - `Severity`: 响应用 `<severity>N</severity>`（N 为 0-100 数值），CC 的 `Piy`
+///   要求**恰好一个**该标签并解析数值，与配置阈值 t1/t2 比较。severity 需显式
+///   配置 `tengu_auto_mode_config.severityByModel`，默认关闭。
+/// - `Unknown`: 无法确定（fast 单阶段无 stop_sequences 且 system prompt 不含输出格式时）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassifierMode {
+    Block,
+    Severity,
+    Unknown,
 }
 
 /// 分类器阶段
@@ -66,41 +84,57 @@ pub enum ClassifierStage {
 
 /// 检测请求是否为安全分类器请求
 ///
-/// 分类器请求的特征（来自逆向分析）：
-/// - 强特征 1: `stop_sequences` 包含 `"</block>"` — 分类器特有关闭标签
-/// - 强特征 2: system prompt 包含 2+ 安全分类器身份关键词
+/// 基于 Claude Code 源码（@cometix/claude-code 2.1.219）逆向确认的协议特征：
+/// - `stop_sequences` 含 `"</block>"`（block 模式）或 `"</severity>"`（severity 模式）：
+///   both/thinking 阶段（默认 `twoStageClassifier="both"`）必带其一。这是协议级特征。
+/// - fast 单阶段（显式配置 `twoStageClassifier="fast"`）**不带 stop_sequences**，
+///   只能靠「分类器 system prompt 强身份句 + `<transcript>` 消息结构」双重确认。
 ///
-/// 只有发现强特征时才认为是安全分类器请求，避免误判正常请求。
-/// 弱特征（非流式+thinking、非流式+小max_tokens、block+action等）
-/// 不作为判定依据，仅用于阶段推理（区分 Fast/Thinking stage）。
+/// 检测优先级：
+/// 1. `</block>` / `</severity>` stop_sequence → 分类器（模式由标签决定）
+/// 2. 分类器身份句 + `<transcript>` 包裹 → fast 单阶段分类器
+/// 3. 其余一律不是分类器（关键词不能单独触发——安全主题的普通 system prompt
+///    会命中 "prompt injection" 等词，若不要求强特征会把正常非流式请求误判为
+///    分类器并毁掉：system prompt 被替换、stream 被强制 false）。
 pub fn detect_classifier_request(body: &Value) -> ClassifierDetection {
+    let not_classifier = || ClassifierDetection {
+        is_classifier: false,
+        stage: None,
+        confidence: 0.0,
+        mode: None,
+    };
+
     // 快速短路：流式请求绝不可能是分类器（分类器永远是非流式 side-query）。
     // 这必须在任何分配（extract_system_text / to_lowercase）之前检查，
     // 避免让 80-90% 的流量付出无用开销。
     if body.get("stream").and_then(|s| s.as_bool()) == Some(true) {
-        return ClassifierDetection {
-            is_classifier: false,
-            stage: None,
-            confidence: 0.0,
-        };
+        return not_classifier();
     }
 
-    // 强特征 1: stop_sequences 包含 "</block>" — 分类器特有标签
-    let has_block_tag = body
-        .get("stop_sequences")
-        .and_then(|s| s.as_array())
+    let system_text = extract_system_text(body);
+    let system_lower = system_text.to_lowercase();
+
+    // 协议级 stop_sequences 标签：both/thinking 阶段的分类器必带其一。
+    // 源码：stop_sequences: [u ? "</severity>" : "</block>"]（u = severity 模式布尔）。
+    let stop_sequences = body.get("stop_sequences").and_then(|s| s.as_array());
+    let has_block_tag = stop_sequences
         .map(|arr| {
             arr.iter()
                 .any(|s| s.as_str().is_some_and(|s| s.contains("</block>")))
         })
         .unwrap_or(false);
+    let has_severity_tag = stop_sequences
+        .map(|arr| {
+            arr.iter()
+                .any(|s| s.as_str().is_some_and(|s| s.contains("</severity>")))
+        })
+        .unwrap_or(false);
+    let has_stop_tag = has_block_tag || has_severity_tag;
 
-    // 强特征 2: system prompt 包含 2+ 安全分类器身份关键词
-    let system_text = extract_system_text(body);
+    // 辅助特征: system prompt 命中分类器身份关键词（仅用于置信度增强）
     let keyword_matches = if system_text.is_empty() {
         0
     } else {
-        let system_lower = system_text.to_lowercase();
         let classifier_keywords = [
             "security monitor",
             "auto mode classifier",
@@ -116,51 +150,109 @@ pub fn detect_classifier_request(body: &Value) -> ClassifierDetection {
             .count()
     };
 
-    // 无强特征 → 不是分类器（置信度 0）
-    if !has_block_tag && keyword_matches < 2 {
+    // 分类器 system prompt 强身份句：源码 oPo() 的固定开头
+    // "You are a security monitor for autonomous AI coding agents."
+    let is_classifier_prompt = system_lower
+        .contains("security monitor for autonomous ai coding agents")
+        || system_lower.contains("you are a security monitor");
+
+    // `<transcript>` 包裹结构：分类器把待分类的对话历史用该标签包在
+    // 末条 user 消息里（源码：L = [{type:"text",text:"<transcript>\n"},...n,{type:"text",text:"</transcript>"}]）。
+    let has_transcript = body
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .is_some_and(|arr| {
+            let mut has_open = false;
+            let mut has_close = false;
+            for msg in arr {
+                match msg.get("content") {
+                    Some(Value::String(s)) => {
+                        has_open |= s.contains("<transcript>");
+                        has_close |= s.contains("</transcript>");
+                    }
+                    Some(Value::Array(blocks)) => {
+                        for block in blocks {
+                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                has_open |= text.contains("<transcript>");
+                                has_close |= text.contains("</transcript>");
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            has_open && has_close
+        });
+
+    // 1) 协议级 stop 标签命中 → 分类器（必要特征，block/severity 任一）
+    if has_stop_tag {
+        let has_thinking = body.get("thinking").is_some();
+        let max_tokens = body.get("max_tokens").and_then(|m| m.as_u64()).unwrap_or(0);
+
+        let stage = if has_thinking && max_tokens > 256 {
+            // Stage 2: 深度分类（thinking + 较大 budget）
+            Some(ClassifierStage::Thinking)
+        } else if max_tokens > 0 && max_tokens <= 256 {
+            // Stage 1: 快速分类（无 thinking，极小 max_tokens）
+            Some(ClassifierStage::Fast)
+        } else {
+            Some(ClassifierStage::Unknown)
+        };
+
+        // 置信度：协议标签是决定性的，关键词命中进一步确认
+        let confidence = if keyword_matches >= 2 {
+            0.99 // 协议标签 + 关键词双重确认，确定无疑
+        } else {
+            0.95 // 协议标签命中，单独即可确定
+        };
+
+        // 模式由 stop 标签决定：</severity> → severity，</block> → block
+        let mode = if has_severity_tag {
+            ClassifierMode::Severity
+        } else {
+            ClassifierMode::Block
+        };
+
+        log::info!(
+            "[Classifier] 检测到安全分类器请求 (confidence={:.2}, stage={:?}, mode={:?}, block_tag={}, severity_tag={}, keywords={})",
+            confidence,
+            stage,
+            mode,
+            has_block_tag,
+            has_severity_tag,
+            keyword_matches,
+        );
+
         return ClassifierDetection {
-            is_classifier: false,
-            stage: None,
-            confidence: 0.0,
+            is_classifier: true,
+            stage,
+            confidence,
+            mode: Some(mode),
         };
     }
 
-    // 有强特征 → 确定分类器阶段和置信度
-    let has_thinking = body.get("thinking").is_some();
-    let max_tokens = body.get("max_tokens").and_then(|m| m.as_u64()).unwrap_or(0);
-
-    let stage = if has_thinking && max_tokens > 256 {
-        // Stage 2: 深度分类（thinking + 较大 budget）
-        Some(ClassifierStage::Thinking)
-    } else if max_tokens > 0 && max_tokens <= 256 {
-        // Stage 1: 快速分类（无 thinking，极小 max_tokens）
-        Some(ClassifierStage::Fast)
-    } else {
-        Some(ClassifierStage::Unknown)
-    };
-
-    // 置信度基于命中强特征的数量
-    let confidence = if has_block_tag && keyword_matches >= 2 {
-        0.99 // 两个强特征都命中，确定无疑
-    } else if has_block_tag {
-        0.95 // 核心强特征命中
-    } else {
-        0.90 // keyword_matches >= 2 但无 </block>（理论上不太可能单独出现）
-    };
-
-    log::info!(
-        "[Classifier] 检测到安全分类器请求 (confidence={:.2}, stage={:?}, block_tag={}, keywords={})",
-        confidence,
-        stage,
-        has_block_tag,
-        keyword_matches,
-    );
-
-    ClassifierDetection {
-        is_classifier: true,
-        stage,
-        confidence,
+    // 2) fast 单阶段（twoStageClassifier="fast"）：无 stop_sequences。
+    //    需 system prompt 强身份句 + `<transcript>` 结构双重确认，避免误判正常请求。
+    if is_classifier_prompt && has_transcript {
+        // 模式从原始 system prompt 的输出格式推断：
+        // severity 版 system（kiy 替换 Output Format）含 `<severity>`，block 版含 `<block>`。
+        let mode = if system_lower.contains("<severity>") {
+            ClassifierMode::Severity
+        } else if system_lower.contains("<block>") {
+            ClassifierMode::Block
+        } else {
+            // 异常 system（无输出格式说明）：Unknown，响应转换兜底走 block 格式
+            ClassifierMode::Unknown
+        };
+        return ClassifierDetection {
+            is_classifier: true,
+            stage: Some(ClassifierStage::Fast),
+            confidence: 0.95,
+            mode: Some(mode),
+        };
     }
+
+    not_classifier()
 }
 
 /// 提取 system prompt 文本
@@ -250,10 +342,19 @@ fn extract_response_text(body: &Value) -> Option<String> {
 fn determine_classification_result(text: &str) -> (&str, &str) {
     let lower = text.to_lowercase();
 
-    // 优先精确匹配 <block> 标签（Claude Code 原生格式）
-    // 使用 rfind 匹配最后出现的 <block> 标签（这是分类结果，而非上游模型
-    // 在解释输出格式时提到的示例），避免第一个 <block> 标签被上游文本误匹配。
-    if let Some(start) = lower.rfind("<block>") {
+    // 1) 优先匹配独立成行的 <block>yes|no</block> 标签。
+    //    上游被要求以该格式输出裁决，标签单独成行（trim 后整行等于标签）。
+    //    reason 中引用的假设性标签（"would be <block>yes</block>"）通常在
+    //    句子行内出现，不会单独成行，因此独立行标签是可靠的裁决信号。
+    if let Some(verdict) = extract_line_tag(&lower) {
+        return verdict;
+    }
+
+    // 2) 兜底：匹配第一个 <block> 标签。
+    //    使用 find 而非 rfind：reason 可能引用假设性的 "<block>yes</block>"
+    //    场景（"if it modified files it would be <block>yes</block>"），
+    //    最后一个标签不可靠；prompt 要求结果标签先行，取第一个更符合协议。
+    if let Some(start) = lower.find("<block>") {
         let after_tag = &lower[start + 7..].trim_start();
         let end = after_tag
             .find(|c: char| !is_word_char(c))
@@ -271,19 +372,21 @@ fn determine_classification_result(text: &str) -> (&str, &str) {
         return ("yes", "The action could not be confidently classified.");
     }
 
-    // 无 <block> 标签：保守启发式
-    // 检测到不安全信号 → 拦截
-    // 使用 is_word_char 做词边界检查，避免 false positive：
-    // - "block" 仅作为独立词匹配（b"block" 不是 "blocked" 的子串，
-    //   但 "block this action" 是独立词 → 匹配）
-    // - "blocked" 单独保留，因为这是极强的安全信号，几乎不会出现在
-    //   良性描述中（如 "the operation should be blocked" → BLOCK 正确）
-    // - "not safe"、"unsafe"、"malicious"、"harmful" 直接用 contains
+    // 3) 无 <block> 标签：启发式兜底。
+    //    只匹配明确的拦截措辞与不安全信号。不用裸的 contains("blocked")：
+    //    否定句 "nothing was blocked" 描述的是未发生拦截，不含拦截意图，
+    //    用 "should/must/will/needs to be blocked" 这类主动拦截措辞替代。
     let has_unsafe_signal = lower.contains("not safe")
         || lower.contains("unsafe")
-        || lower.contains("blocked")
         || lower.contains("malicious")
         || lower.contains("harmful")
+        || lower.contains("dangerous")
+        || lower.contains("forbidden")
+        || lower.contains("should be blocked")
+        || lower.contains("must be blocked")
+        || lower.contains("will be blocked")
+        || lower.contains("needs to be blocked")
+        || lower.contains("block this")
         || is_word_boundary_contain(&lower, "block");
 
     if has_unsafe_signal {
@@ -295,6 +398,29 @@ fn determine_classification_result(text: &str) -> (&str, &str) {
         // 无明确不安全信号 → 放行（避免误拦截）
         ("no", "The action appears safe based on heuristic analysis.")
     }
+}
+
+/// 从文本中提取独立成行的 `<block>yes|no</block>` 标签。
+///
+/// 上游被要求以该格式开头输出裁决；独立成行（trim 后整行等于标签）的
+/// 标签是裁决本身，而 reason 中引用的假设性标签通常出现在句子行内，
+/// 不会单独成行。
+fn extract_line_tag(lower: &str) -> Option<(&'static str, &'static str)> {
+    for line in lower.lines() {
+        match line.trim() {
+            "<block>no</block>" => {
+                return Some(("no", "The action has been classified as safe."));
+            }
+            "<block>yes</block>" => {
+                return Some((
+                    "yes",
+                    "The action has been classified as potentially unsafe.",
+                ));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// `\w` 字符判断：字母数字 + 下划线，与正则 `\b` 语义对齐
@@ -309,15 +435,32 @@ fn is_word_boundary_contain(text: &str, keyword: &str) -> bool {
     if kw_len == 0 || text.len() < kw_len {
         return false;
     }
-    // 在 text 中每找到一次 keyword 出现位置就检查边界
+    // 在 text 中每找到一次 keyword 出现位置就检查边界。
+    // 前/后字符必须用完整 char 判断（is_word_char 需要字符而非字节）：
+    // 直接对 text.as_bytes()[i] as char 会把多字节字符的单个字节误判为
+    // 词字符，导致 CJK/emoji 前的边界判断错误
+    // （见 test_word_boundary_contain_cjk_prefix_is_word_char）。
     let mut start = 0;
-    while let Some(pos) = text[start..].find(keyword) {
-        let abs_pos = start + pos;
+    while let Some(rel) = text[start..].find(keyword) {
+        let abs_pos = start + rel;
         // 前一个字符（不在开头）必须是词边界
-        let prev_ok = abs_pos == 0 || !is_word_char(text.as_bytes()[abs_pos - 1] as char);
+        let prev_ok = if abs_pos == 0 {
+            true
+        } else {
+            match text[..abs_pos].chars().next_back() {
+                Some(c) => !is_word_char(c),
+                None => true,
+            }
+        };
         // 后一个字符（不在结尾）必须是词边界
-        let next_ok = abs_pos + kw_len >= text.len()
-            || !is_word_char(text.as_bytes()[abs_pos + kw_len] as char);
+        let next_ok = if abs_pos + kw_len >= text.len() {
+            true
+        } else {
+            match text[abs_pos + kw_len..].chars().next() {
+                Some(c) => !is_word_char(c),
+                None => true,
+            }
+        };
         if prev_ok && next_ok {
             return true;
         }
@@ -335,7 +478,11 @@ fn is_word_boundary_contain(text: &str, keyword: &str) -> bool {
 /// 响应中必须包含 `<block>no</block>` 或 `<block>yes</block>` 标签，
 /// 这是 Claude Code auto-mode 分类器投票系统解析的唯一识别格式。
 /// 同时保留上游原始文本作为分析依据。
-pub fn transform_classifier_response(upstream_body: &Value, request_model: &str) -> Value {
+pub fn transform_classifier_response(
+    upstream_body: &Value,
+    request_model: &str,
+    mode: ClassifierMode,
+) -> Value {
     let upstream_text = extract_response_text(upstream_body).unwrap_or_default();
 
     // 从上游响应中提取真实用量（如果用不到则兜底为默认值）
@@ -346,14 +493,37 @@ pub fn transform_classifier_response(upstream_body: &Value, request_model: &str)
         (1u32, 10u32)
     };
 
-    // 构建含 <block> 标签的响应文本（分类器只认这个格式）
+    // 构建分类器兼容的裁决文本（按协议模式输出对应标签）
     let response_text = if upstream_text.is_empty() {
-        "<block>no</block>\n<reason>No upstream classification available, allowing by default.</reason>".to_string()
+        // 上游无文本：按模式输出兜底放行
+        match mode {
+            ClassifierMode::Severity => {
+                "<severity>0</severity>\n<reason>No upstream classification available, allowing by default.</reason>".to_string()
+            }
+            _ => {
+                "<block>no</block>\n<reason>No upstream classification available, allowing by default.</reason>".to_string()
+            }
+        }
     } else {
         let (block, summary) = determine_classification_result(&upstream_text);
-        format!(
-            "<block>{block}</block>\n<reason>{summary}</reason>\n\nUpstream analysis:\n{upstream_text}"
-        )
+        let verdict_line = match mode {
+            // severity 模式：CC 的 Piy 解析恰好一个 `<severity>` 数值并与配置阈值
+            // t1/t2（[0,100]）比较。proxy 不知阈值，用极值传达语义：
+            // 0 ≤ 任意合法阈值 → allow；1000 > 任意合法阈值 → block。
+            // reason/upstream 文本不得含第二个 `<severity>` 标签（Piy 要求恰好一个）。
+            ClassifierMode::Severity => {
+                if block == "yes" {
+                    "<severity>1000</severity>".to_string()
+                } else {
+                    "<severity>0</severity>".to_string()
+                }
+            }
+            // block 模式（默认）：CC 的 xBs 取第一个 `<block>(yes|no)` 匹配。
+            ClassifierMode::Block | ClassifierMode::Unknown => {
+                format!("<block>{block}</block>")
+            }
+        };
+        format!("{verdict_line}\n<reason>{summary}</reason>\n\nUpstream analysis:\n{upstream_text}")
     };
 
     serde_json::json!({
@@ -379,8 +549,16 @@ pub fn transform_classifier_response(upstream_body: &Value, request_model: &str)
 /// 构建分类器请求的安全兜底响应体
 ///
 /// 当上游转发失败时，返回允许响应避免阻塞用户操作。
-/// 包含 `<block>no</block>` 标签让分类器投票系统正确识别为 ALLOW。
-pub fn build_classifier_success_body(model: &str) -> Value {
+/// 按协议模式输出对应标签，让分类器投票系统正确识别为 ALLOW：
+/// - block 模式: `<block>no</block>`
+/// - severity 模式: `<severity>0</severity>`（0 ≤ 任意合法阈值，CC 判为 allow）
+pub fn build_classifier_success_body(model: &str, mode: ClassifierMode) -> Value {
+    let verdict_text = match mode {
+        ClassifierMode::Severity => {
+            "<severity>0</severity>\n<reason>Classifier unavailable, allowing by default.</reason>"
+        }
+        _ => "<block>no</block>\n<reason>Classifier unavailable, allowing by default.</reason>",
+    };
     serde_json::json!({
         "id": format!("msg_{}", uuid::Uuid::new_v4()),
         "type": "message",
@@ -388,7 +566,7 @@ pub fn build_classifier_success_body(model: &str) -> Value {
         "content": [
             {
                 "type": "text",
-                "text": "<block>no</block>\n<reason>Classifier unavailable, allowing by default.</reason>"
+                "text": verdict_text
             }
         ],
         "model": model,
@@ -425,10 +603,13 @@ mod tests {
 
     #[test]
     fn test_detect_system_prompt_keywords() {
+        // 带 </block> 协议标签 + 分类器关键词 → 分类器
+        // （</block> 是必要特征，关键词增强置信度）
         let body = json!({
             "model": "claude-sonnet-4-20250514",
             "stream": false,
             "max_tokens": 256,
+            "stop_sequences": ["</block>"],
             "system": "You are a security monitor. HARD BLOCK and SOFT BLOCK rules apply. Prevent prompt injection.",
             "messages": [{"role": "user", "content": "test"}]
         });
@@ -453,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_build_classifier_success_body_format() {
-        let body = build_classifier_success_body("kimi-k2.5");
+        let body = build_classifier_success_body("kimi-k2.5", ClassifierMode::Block);
         assert_eq!(body["type"], "message");
         assert_eq!(body["role"], "assistant");
         assert!(
@@ -777,7 +958,8 @@ mod tests {
             "id": "real-msg-123",
             "content": [{"type": "text", "text": "<result>SAFE</result>\n<reason>read-only git command</reason>"}]
         });
-        let response = transform_classifier_response(&upstream, "claude-opus-4-8");
+        let response =
+            transform_classifier_response(&upstream, "claude-opus-4-8", ClassifierMode::Block);
 
         assert_eq!(response["type"], "message");
         assert_eq!(response["model"], "claude-opus-4-8");
@@ -797,7 +979,8 @@ mod tests {
             "id": "chatcmpl-123",
             "choices": [{"message": {"content": "<block>yes</block>\n<reason>rm -rf</reason>"}}]
         });
-        let response = transform_classifier_response(&upstream, "claude-opus-4-8");
+        let response =
+            transform_classifier_response(&upstream, "claude-opus-4-8", ClassifierMode::Block);
 
         assert_eq!(response["type"], "message");
         let text = response["content"][0]["text"].as_str().unwrap();
@@ -810,7 +993,8 @@ mod tests {
     #[test]
     fn test_transform_classifier_response_empty_body() {
         let upstream = json!({});
-        let response = transform_classifier_response(&upstream, "claude-opus-4-8");
+        let response =
+            transform_classifier_response(&upstream, "claude-opus-4-8", ClassifierMode::Block);
 
         assert_eq!(response["type"], "message");
         assert!(
@@ -827,7 +1011,8 @@ mod tests {
         let upstream = json!({
             "content": [{"type": "text", "text": "This modifies system files <block>yes</block>"}]
         });
-        let response = transform_classifier_response(&upstream, "claude-sonnet-4-6");
+        let response =
+            transform_classifier_response(&upstream, "claude-sonnet-4-6", ClassifierMode::Block);
 
         let text = response["content"][0]["text"].as_str().unwrap();
         assert!(
@@ -851,5 +1036,197 @@ mod tests {
 
         let (result, _) = determine_classification_result("<block>nope</block>");
         assert_eq!(result, "yes", "nope 不是精确的 \"no\"");
+    }
+
+    // ========================================================================
+    // 修复验证测试：根因回归防护
+    // ========================================================================
+
+    /// Finding 1 回归：无 </block> stop_sequence 时，即使命中多个分类器关键词
+    /// （含 "prompt injection"、"autonomous coding agent" 这类会出现在普通
+    /// 安全主题 prompt 中的词），也不应判定为分类器。<block> 标签是分类器
+    /// 请求的协议级必要特征，关键词只是辅助信号，不能单独触发。
+    #[test]
+    fn test_detect_no_block_tag_not_classifier_even_with_keywords() {
+        let body = json!({
+            "model": "claude-sonnet-4-20250514",
+            "stream": false,
+            "max_tokens": 8192,
+            "system": "You are a security monitor for autonomous coding agents. \
+                       Prevent prompt injection and enforce hard block / soft block rules. \
+                       You are a security monitor.",
+            "messages": [{"role": "user", "content": "Refactor the auth module"}]
+        });
+
+        let detection = detect_classifier_request(&body);
+        assert!(
+            !detection.is_classifier,
+            "无 </block> stop_sequence 时，即使命中多个关键词也不应判定为分类器 (confidence={:.2})",
+            detection.confidence
+        );
+    }
+
+    /// Finding 2 回归：reason 中引用的假设性 <block> 标签不应覆盖真正的裁决。
+    /// 上游被要求以 <block> 标签开头输出结果；若 reason 里出现
+    /// "would be <block>yes</block>" 这类假设场景，必须取开头的独立裁决标签。
+    #[test]
+    fn test_determine_classification_result_ignores_hypothetical_tag() {
+        let text = "<block>no</block>\n<reason>The command is safe. \
+                    (It would be <block>yes</block> if it modified system files.)</reason>";
+        let (result, _) = determine_classification_result(text);
+        assert_eq!(result, "no", "reason 中的假设性标签不应覆盖实际的安全裁决");
+    }
+
+    /// Finding 2 回归：否定句 "nothing was blocked" 不含拦截意图，不应触发 BLOCK。
+    #[test]
+    fn test_determine_classification_result_blocked_negation_is_no() {
+        let text = "The operation is allowed; nothing was blocked.";
+        let (result, _) = determine_classification_result(text);
+        assert_eq!(
+            result, "no",
+            "否定句 'nothing was blocked' 不应判定为 BLOCK"
+        );
+    }
+
+    /// Finding 3 回归：UTF-8 多字节字符前的词边界判断必须基于完整字符，
+    /// 而非原始字节。'中block' 中 '中' 是 Unicode 字母（word char），
+    /// 因此 block 不是独立词，不应匹配。
+    #[test]
+    fn test_word_boundary_contain_cjk_prefix_is_word_char() {
+        assert!(
+            !is_word_boundary_contain("中block 是危险操作", "block"),
+            "CJK 字符是 word char，'中block' 中 block 不应视为独立词"
+        );
+    }
+
+    /// Finding 3 回归：ASCII 标点/空格前的 block 是真正的词边界 → 应匹配。
+    #[test]
+    fn test_word_boundary_contain_space_prefix_matches() {
+        assert!(
+            is_word_boundary_contain(" this block is bad", "block"),
+            "'block' 前是空格应为词边界"
+        );
+    }
+
+    // ========================================================================
+    // 源码对齐测试：Claude Code 2.1.219 协议（@cometix/claude-code 逆向确认）
+    // ========================================================================
+
+    /// severity 模式：stop_sequences 用 ["</severity>"]
+    /// （源码：stop_sequences: [u ? "</severity>" : "</block>"]，需配置 severityByModel）
+    #[test]
+    fn test_detect_severity_stop_sequence() {
+        let body = json!({
+            "model": "claude-sonnet-4-20250514",
+            "stream": false,
+            "max_tokens": 8192,
+            "stop_sequences": ["</severity>"],
+            "system": "You are a security monitor for autonomous AI coding agents.",
+            "messages": [{"role": "user", "content": "test"}]
+        });
+
+        let detection = detect_classifier_request(&body);
+        assert!(detection.is_classifier);
+        assert_eq!(detection.mode, Some(ClassifierMode::Severity));
+    }
+
+    /// fast 单阶段（twoStageClassifier="fast"）：无 stop_sequences，
+    /// 靠「分类器身份句 + <transcript> 包裹」识别。
+    #[test]
+    fn test_detect_fast_stage_transcript() {
+        let body = json!({
+            "model": "claude-sonnet-4-20250514",
+            "stream": false,
+            "max_tokens": 256,
+            "system": "You are a security monitor for autonomous AI coding agents. \
+                       If the action should be blocked output <block>yes</block>, otherwise <block>no</block>.",
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "text", "text": "<transcript>\n..."},
+                    {"type": "text", "text": "</transcript>"}
+                ]}
+            ]
+        });
+
+        let detection = detect_classifier_request(&body);
+        assert!(
+            detection.is_classifier,
+            "fast 单阶段分类器（身份句 + <transcript>）应被识别"
+        );
+        assert_eq!(detection.mode, Some(ClassifierMode::Block));
+    }
+
+    /// 防误判：只有 <transcript> 但 system 非分类器 → 不是分类器
+    #[test]
+    fn test_detect_no_false_positive_transcript_only() {
+        let body = json!({
+            "model": "claude-sonnet-4-20250514",
+            "stream": false,
+            "system": "You are a helpful assistant.",
+            "messages": [{"role": "user", "content": "wrap this in <transcript> tags </transcript>"}]
+        });
+
+        let detection = detect_classifier_request(&body);
+        assert!(!detection.is_classifier);
+    }
+
+    /// 防误判：只有分类器身份句但无 <transcript> → 不是分类器
+    #[test]
+    fn test_detect_no_false_positive_prompt_only() {
+        let body = json!({
+            "model": "claude-sonnet-4-20250514",
+            "stream": false,
+            "system": "You are a security monitor for autonomous AI coding agents.",
+            "messages": [{"role": "user", "content": "Please review this diff"}]
+        });
+
+        let detection = detect_classifier_request(&body);
+        assert!(!detection.is_classifier);
+    }
+
+    /// severity 响应转换：BLOCK → <severity>1000</severity>（> 任意合法阈值 100）
+    #[test]
+    fn test_transform_classifier_response_severity_block() {
+        let upstream = json!({
+            "content": [{"type": "text", "text": "<block>yes</block> deletes system files"}]
+        });
+        let response =
+            transform_classifier_response(&upstream, "claude-opus-4-8", ClassifierMode::Severity);
+
+        let text = response["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("<severity>1000</severity>"),
+            "severity 模式下 BLOCK 应输出 <severity>1000</severity>"
+        );
+    }
+
+    /// severity 响应转换：ALLOW → <severity>0</severity>，且恰好一个 <severity> 标签
+    #[test]
+    fn test_transform_classifier_response_severity_allow() {
+        let upstream = json!({
+            "content": [{"type": "text", "text": "<block>no</block> read-only command"}]
+        });
+        let response =
+            transform_classifier_response(&upstream, "claude-opus-4-8", ClassifierMode::Severity);
+
+        let text = response["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("<severity>0</severity>"),
+            "severity 模式下 ALLOW 应输出 <severity>0</severity>"
+        );
+        // CC 的 Piy 要求恰好一个 <severity> 标签，reason/upstream 不得引入第二个
+        assert_eq!(text.matches("<severity>").count(), 1);
+    }
+
+    /// severity 兜底 body：<severity>0</severity>
+    #[test]
+    fn test_build_classifier_success_body_severity() {
+        let body = build_classifier_success_body("kimi-k2.5", ClassifierMode::Severity);
+        let text = body["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("<severity>0</severity>"),
+            "severity 兜底应输出 <severity>0</severity>"
+        );
+        assert_eq!(text.matches("<severity>").count(), 1);
     }
 }

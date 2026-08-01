@@ -72,6 +72,8 @@ pub struct RequestContext {
     pub copilot_optimizer_config: CopilotOptimizerConfig,
     /// 是否为安全分类器请求（Claude Code auto mode classifier）
     pub is_classifier_request: bool,
+    /// 分类器协议模式（block/severity/未知），非分类器请求为 None
+    pub classifier_mode: Option<super::classifier::ClassifierMode>,
 }
 
 impl RequestContext {
@@ -164,10 +166,11 @@ impl RequestContext {
         let is_classifier_request = classifier_detection.is_classifier;
         if is_classifier_request {
             log::info!(
-                "[{}] [Classifier] 检测到安全分类器请求 (confidence={:.2}, stage={:?}), model={}",
+                "[{}] [Classifier] 检测到安全分类器请求 (confidence={:.2}, stage={:?}, mode={:?}), model={}",
                 tag,
                 classifier_detection.confidence,
                 classifier_detection.stage,
+                classifier_detection.mode,
                 request_model
             );
         }
@@ -189,6 +192,7 @@ impl RequestContext {
             optimizer_config,
             copilot_optimizer_config,
             is_classifier_request,
+            classifier_mode: classifier_detection.mode,
         })
     }
 
