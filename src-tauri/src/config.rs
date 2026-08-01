@@ -457,7 +457,11 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
         let mode = fs::metadata(path)
             .map(|meta| meta.permissions().mode() & 0o700)
             .unwrap_or(0o600);
-        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode));
+        // chmod 失败时记日志而不是静默吞掉——否则在 FAT/exFAT/FUSE 等不支持
+        // 权限位的挂载上收紧会永久失效，文件停留在 umask 默认 0644。
+        if let Err(e) = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode)) {
+            log::warn!("无法收紧 {} 的文件权限: {e}", tmp.display());
+        }
     }
 
     // Windows 上 rename 目标存在会失败，先移除再重命名。rename 同样可能因穿过
