@@ -53,9 +53,6 @@ pub(crate) fn strip_leading_anthropic_billing_header(text: &str) -> &str {
     }
 }
 
-/// Detect OpenAI o-series reasoning models (o1, o3, o4-mini, etc.)
-/// These models require `max_completion_tokens` instead of `max_tokens`.
-
 /// 剔除 Anthropic billing 头中的 per-request nonce（`cch=<hex>`），保留
 /// `cc_version`、`cc_entrypoint` 等稳定字段。
 ///
@@ -97,6 +94,8 @@ fn strip_volatile_cch(text: &str) -> String {
         .to_string()
 }
 
+/// Detect OpenAI o-series reasoning models (o1, o3, o4-mini, etc.)
+/// These models require `max_completion_tokens` instead of `max_tokens`.
 pub fn is_openai_o_series(model: &str) -> bool {
     model.len() > 1
         && model.starts_with('o')
