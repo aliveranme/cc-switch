@@ -5,6 +5,14 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.19.1-b] - 2026-08-03
+
+Fork 版本：字母后缀标记，不与上游版本号重合。携带 opencode zen/go 网关层缓存三旋钮补丁（cache_control 断点保留 + 会话级 prompt_cache_key + 24h retention），Windows MSI 版本号同步递增到 3.19.1.2。
+
+### Added
+
+- **OpenCode Go 网关层缓存三旋钮（cache_control / prompt_cache_key / prompt_cache_retention）**: Claude Code 走 `opencode.ai/zen/*` 渠道时，Anthropic→OpenAI 格式转换不再剥离 cache_control 断点（system/messages/tools 全保留，5m TTL 提升到 1h），并注入会话级 `prompt_cache_key`（客户端会话 ID，仅客户端提供时）与 `prompt_cache_retention: "24h"`。该网关在网关层实现缓存（见 https://opencode.ai/docs/go），OpenAI 格式请求体同样接受这三个字段；缓存读价比输入便宜 50 倍（deepseek-v4-flash $0.0028 vs $0.14/M）且写入免费，命中率从依赖 5 分钟自动缓存提升到显式断点分段缓存。仅按 base_url 匹配 `opencode.ai/zen/*` 特化，其它 OpenAI 兼容上游（openrouter、glm、kimi 等）维持原有剥离行为，严格后端仍不会收到未知字段（gh#3805 回归防护）。
+
 ## [3.19.1-a] - 2026-08-02
 
 Fork release of the fork, versioned `3.19.1-a` (letter-suffixed so it never collides with upstream releases). It carries the DeepSeek reasoner tool-calling fix and the upstream Hermes prompt-file correction merged from farion1231/cc-switch.

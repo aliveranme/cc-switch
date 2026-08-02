@@ -376,6 +376,29 @@ fn should_preserve_reasoning_content_for_openai_chat(provider: &Provider, body: 
         .any(is_reasoning_vendor_identifier)
 }
 
+/// 是否 opencode zen/go 网关（OpenCode Go 订阅渠道）。
+///
+/// 该网关在网关层实现缓存：接受 OpenAI 格式请求体中的 cache_control 断点、
+/// prompt_cache_key（会话级缓存 key）与 prompt_cache_retention（缓存保留时长），
+/// 见 https://opencode.ai/docs/go 与社区实测（pi-opencode-go-cache）。
+/// 仅对 opencode.ai/zen/* 特化，其它 OpenAI 兼容上游保持原有的断点剥离行为。
+pub(crate) fn is_opencode_go_gateway(provider: &Provider) -> bool {
+    let settings = &provider.settings_config;
+    let base_urls = [
+        settings
+            .get("env")
+            .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
+            .and_then(|v| v.as_str()),
+        settings.get("base_url").and_then(|v| v.as_str()),
+        settings.get("baseURL").and_then(|v| v.as_str()),
+        settings.get("apiEndpoint").and_then(|v| v.as_str()),
+    ];
+
+    base_urls.into_iter().flatten().any(|url| {
+        url.contains("opencode.ai") && url.contains("/zen/")
+    })
+}
+
 pub fn transform_claude_request_for_api_format(
     body: serde_json::Value,
     provider: &Provider,
@@ -480,6 +503,10 @@ pub fn transform_claude_request_for_api_format(
         "openai_chat" => {
             let preserve_reasoning_content =
                 should_preserve_reasoning_content_for_openai_chat(provider, &body);
+            // opencode zen/go 网关层缓存特化：保留 Claude Code 的 cache_control
+            // 断点，并注入会话级 prompt_cache_key + 24h retention。仅该网关适用，
+            // 其它 OpenAI 兼容上游继续剥离断点（严格后端会 400 拒收未知字段）。
+            let opencode_go = is_opencode_go_gateway(provider);
             // DeepSeek reasoner 兼容：V4/reasoner 系列默认常开 thinking，仅接受
             // tool_choice "auto"/"none"；V3.x 显式开启 thinking 时同样受限。
             // Claude Code 的 WebSearch 等内置工具会强制具名 tool_choice，转换后为
@@ -492,6 +519,7 @@ pub fn transform_claude_request_for_api_format(
             let mut result = super::transform::anthropic_to_openai_with_reasoning_content(
                 body,
                 preserve_reasoning_content,
+                opencode_go,
             )?;
             // Inject prompt_cache_key only if explicitly configured in meta
             if let Some(key) = provider
@@ -500,6 +528,22 @@ pub fn transform_claude_request_for_api_format(
                 .and_then(|m| m.prompt_cache_key.as_deref())
             {
                 result["prompt_cache_key"] = serde_json::json!(key);
+            }
+            // opencode-go：会话级缓存 key（显式 meta key > 客户端会话 ID，截 64
+            // 字符）+ 缓存保留时长（默认 24h，网关 schema 枚举 in_memory|24h）。
+            if opencode_go {
+                if result.get("prompt_cache_key").is_none() {
+                    if let Some(key) = cache_key.as_deref() {
+                        let key: String = key.chars().take(64).collect();
+                        result["prompt_cache_key"] = serde_json::json!(key);
+                    }
+                }
+                let retention = provider
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.prompt_cache_retention.as_deref())
+                    .unwrap_or("24h");
+                result["prompt_cache_retention"] = serde_json::json!(retention);
             }
             // 流式请求必须注入 stream_options.include_usage，否则 OpenAI 兼容上游
             // 不在 SSE 末尾吐 usage → 转换出的 Anthropic message_delta 全 0 →
@@ -1983,6 +2027,95 @@ mod tests {
             transform_claude_request_for_api_format(body, &provider, "openai_chat", None, None)
                 .unwrap();
         assert!(transformed.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn test_transform_claude_request_openai_chat_opencode_go_injects_cache_knobs() {
+        let provider = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://opencode.ai/zen/go/v1" }
+        }));
+        let body = json!({
+            "model": "deepseek-v4-flash",
+            "system": [
+                {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}
+            ],
+            "messages": [{ "role": "user", "content": "hi" }],
+            "max_tokens": 128,
+            "stream": true
+        });
+        let transformed = transform_claude_request_for_api_format(
+            body,
+            &provider,
+            "openai_chat",
+            Some("uuid-session-123"),
+            None,
+        )
+        .unwrap();
+        // 会话级缓存 key + 24h retention
+        assert_eq!(transformed["prompt_cache_key"], "uuid-session-123");
+        assert_eq!(transformed["prompt_cache_retention"], "24h");
+        // cache_control 断点保留（仅 opencode 网关路径）
+        assert_eq!(
+            transformed["messages"][0]["cache_control"],
+            json!({"type": "ephemeral"})
+        );
+    }
+
+    #[test]
+    fn test_transform_claude_request_openai_chat_non_opencode_keeps_stripping() {
+        // 非 opencode 上游：即使客户端传了 session，也不注入会话级缓存 key/retention
+        let provider = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://openrouter.ai/api/v1" }
+        }));
+        let body = json!({
+            "model": "moonshotai/kimi-k2",
+            "system": [
+                {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}
+            ],
+            "messages": [{ "role": "user", "content": "hi" }],
+            "max_tokens": 128
+        });
+        let transformed = transform_claude_request_for_api_format(
+            body,
+            &provider,
+            "openai_chat",
+            Some("uuid-session-123"),
+            None,
+        )
+        .unwrap();
+        assert!(transformed.get("prompt_cache_key").is_none());
+        assert!(transformed.get("prompt_cache_retention").is_none());
+        assert!(transformed["messages"][0].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn test_is_opencode_go_gateway_detection() {
+        // 命中：env.ANTHROPIC_BASE_URL / base_url / zen(非 go) 均识别
+        let go = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://opencode.ai/zen/go/v1" }
+        }));
+        assert!(is_opencode_go_gateway(&go));
+        let zen = create_provider(json!({
+            "base_url": "https://opencode.ai/zen/v1"
+        }));
+        assert!(is_opencode_go_gateway(&zen));
+        let api_endpoint = create_provider(json!({
+            "apiEndpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+        }));
+        assert!(is_opencode_go_gateway(&api_endpoint));
+        // 不命中：其它 OpenAI 兼容 / 官方端点
+        let openrouter = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://openrouter.ai/api/v1" }
+        }));
+        assert!(!is_opencode_go_gateway(&openrouter));
+        let official = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://api.anthropic.com" }
+        }));
+        assert!(!is_opencode_go_gateway(&official));
+        let proxy_agnostic = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:15721" }
+        }));
+        assert!(!is_opencode_go_gateway(&proxy_agnostic));
     }
 
     #[test]

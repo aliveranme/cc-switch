@@ -205,7 +205,7 @@ pub fn resolve_reasoning_effort(body: &Value) -> Option<&'static str> {
 /// 消费者），但保留其转换逻辑与下方测试套件，供代理转换路径复用 / 未来接线。
 #[allow(dead_code)]
 pub fn anthropic_to_openai(body: Value) -> Result<Value, ProxyError> {
-    anthropic_to_openai_with_reasoning_content(body, false)
+    anthropic_to_openai_with_reasoning_content(body, false, false)
 }
 
 /// Anthropic 请求 → OpenAI Chat Completions 请求
@@ -213,9 +213,15 @@ pub fn anthropic_to_openai(body: Value) -> Result<Value, ProxyError> {
 /// `preserve_reasoning_content` 仅用于明确需要 Moonshot/Kimi/DeepSeek
 /// `reasoning_content` 兼容字段的 provider。默认转换保持通用 OpenAI-compatible
 /// 请求体，避免向严格后端发送未知字段。
+///
+/// `preserve_cache_control` 仅用于网关层实现缓存断点的 OpenAI 兼容上游
+/// （目前只有 opencode zen/go）：保留 Anthropic 请求中的 cache_control 断点
+/// （system/messages/tools），并把 5m TTL 提升到网关认可的上限 1h。
+/// 其它上游保持剥离，避免严格后端 400 拒收未知字段（见 gh#3805）。
 pub fn anthropic_to_openai_with_reasoning_content(
     body: Value,
     preserve_reasoning_content: bool,
+    preserve_cache_control: bool,
 ) -> Result<Value, ProxyError> {
     let mut result = json!({});
 
@@ -227,6 +233,7 @@ pub fn anthropic_to_openai_with_reasoning_content(
     let mut messages = Vec::new();
 
     // 处理 system prompt
+    let mut system_cache_control = None;
     if let Some(system) = body.get("system") {
         if let Some(text) = system.as_str() {
             let stripped = strip_leading_anthropic_billing_header(text);
@@ -236,6 +243,11 @@ pub fn anthropic_to_openai_with_reasoning_content(
             }
         } else if let Some(arr) = system.as_array() {
             for msg in arr {
+                if preserve_cache_control && system_cache_control.is_none() {
+                    if let Some(cc) = msg.get("cache_control") {
+                        system_cache_control = Some(cc.clone());
+                    }
+                }
                 if let Some(text) = msg.get("text").and_then(|t| t.as_str()) {
                     let stripped = strip_leading_anthropic_billing_header(text);
                     let cleaned = strip_volatile_cch(stripped);
@@ -253,12 +265,28 @@ pub fn anthropic_to_openai_with_reasoning_content(
         for msg in msgs {
             let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
             let content = msg.get("content");
-            let converted = convert_message_to_openai(role, content, preserve_reasoning_content)?;
+            let converted = convert_message_to_openai(
+                role,
+                content,
+                preserve_reasoning_content,
+                preserve_cache_control,
+            )?;
             messages.extend(converted);
         }
     }
 
     normalize_openai_system_messages(&mut messages);
+    // 网关层缓存上游：合并后的首条 system 消息挂断点（合并前挂会被
+    // normalize_openai_system_messages 丢弃）。
+    if preserve_cache_control {
+        if let Some(cc) = system_cache_control {
+            if let Some(first) = messages.first_mut() {
+                if first.get("role").and_then(|v| v.as_str()) == Some("system") {
+                    first["cache_control"] = rewrite_cache_control_ttl(cc);
+                }
+            }
+        }
+    }
     result["messages"] = json!(messages);
 
     // 转换参数 — o-series 模型需要 max_completion_tokens
@@ -296,14 +324,20 @@ pub fn anthropic_to_openai_with_reasoning_content(
             .iter()
             .filter(|t| t.get("type").and_then(|v| v.as_str()) != Some("BatchTool"))
             .map(|t| {
-                json!({
+                let mut tool = json!({
                     "type": "function",
                     "function": {
                         "name": t.get("name").and_then(|n| n.as_str()).unwrap_or(""),
                         "description": t.get("description"),
                         "parameters": clean_schema(t.get("input_schema").cloned().unwrap_or(json!({})))
                     }
-                })
+                });
+                if preserve_cache_control {
+                    if let Some(cc) = t.get("cache_control") {
+                        tool["cache_control"] = rewrite_cache_control_ttl(cc.clone());
+                    }
+                }
+                tool
             })
             .collect();
 
@@ -483,6 +517,7 @@ fn convert_message_to_openai(
     role: &str,
     content: Option<&Value>,
     preserve_reasoning_content: bool,
+    preserve_cache_control: bool,
 ) -> Result<Vec<Value>, ProxyError> {
     let mut result = Vec::new();
 
@@ -508,8 +543,16 @@ fn convert_message_to_openai(
         // reasoning_parts: 仅在兼容 Moonshot/Kimi/DeepSeek thinking tool-call 路径时
         // 生成 reasoning_content，通用 OpenAI-compatible 路径不发送该非标准字段。
         let mut reasoning_parts = Vec::new();
+        // 网关层缓存上游：保留源消息首个 cache_control 断点（Anthropic 约定
+        // 一条消息至多一个断点，取第一个即可）。
+        let mut cache_control = None;
 
         for block in blocks {
+            if preserve_cache_control && cache_control.is_none() {
+                if let Some(cc) = block.get("cache_control") {
+                    cache_control = Some(cc.clone());
+                }
+            }
             let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
             match block_type {
@@ -634,7 +677,23 @@ fn convert_message_to_openai(
                 msg["reasoning_content"] = json!(reasoning_content);
             }
 
+            if preserve_cache_control {
+                if let Some(cc) = cache_control {
+                    msg["cache_control"] = rewrite_cache_control_ttl(cc);
+                }
+            }
+
             result.push(msg);
+        } else if preserve_cache_control {
+            // 纯 tool_result 消息没有独立 role 消息（无 content_parts/tool_calls），
+            // 断点退化为落到首条 tool 消息上，保持“缓存到本消息为止”的语义。
+            if let Some(cc) = cache_control {
+                if let Some(first) = result.first_mut() {
+                    if first.get("cache_control").is_none() {
+                        first["cache_control"] = rewrite_cache_control_ttl(cc);
+                    }
+                }
+            }
         }
 
         return Ok(result);
@@ -678,6 +737,16 @@ fn chat_file_part_from_anthropic_document(block: &Value) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+/// 网关层缓存上游（如 opencode zen/go）按断点 TTL 决定缓存存活时长。
+/// Anthropic 默认 5m；Go 网关 cache write 免费、cache read 便宜数十倍，
+/// 保留断点时把 5m 提升到网关认可的上限 1h（其余值原样保留）。
+fn rewrite_cache_control_ttl(mut cache_control: Value) -> Value {
+    if cache_control.get("ttl").and_then(Value::as_str) == Some("5m") {
+        cache_control["ttl"] = json!("1h");
+    }
+    cache_control
 }
 
 pub fn clean_schema(schema: Value) -> Value {
@@ -1212,7 +1281,7 @@ mod tests {
             }]
         });
 
-        let result = anthropic_to_openai_with_reasoning_content(input, true).unwrap();
+        let result = anthropic_to_openai_with_reasoning_content(input, true, false).unwrap();
         let msg = &result["messages"][0];
         assert_eq!(msg["role"], "assistant");
         assert_eq!(msg["reasoning_content"], "I should call the tool.");
@@ -1233,7 +1302,7 @@ mod tests {
             }]
         });
 
-        let result = anthropic_to_openai_with_reasoning_content(input, true).unwrap();
+        let result = anthropic_to_openai_with_reasoning_content(input, true, false).unwrap();
         let msg = &result["messages"][0];
         assert_eq!(msg["role"], "assistant");
         assert_eq!(msg["reasoning_content"], "tool call");
@@ -1255,7 +1324,7 @@ mod tests {
             }]
         });
 
-        let result = anthropic_to_openai_with_reasoning_content(input, true).unwrap();
+        let result = anthropic_to_openai_with_reasoning_content(input, true, false).unwrap();
         let msg = &result["messages"][0];
         assert_eq!(msg["reasoning_content"], "[redacted thinking]");
         assert_eq!(msg["tool_calls"][0]["id"], "call_123");
@@ -1675,7 +1744,7 @@ mod tests {
                 "content": anthropic_response["content"].clone()
             }]
         });
-        let replayed = anthropic_to_openai_with_reasoning_content(follow_up_request, true).unwrap();
+        let replayed = anthropic_to_openai_with_reasoning_content(follow_up_request, true, false).unwrap();
         let msg = &replayed["messages"][0];
 
         assert_eq!(
@@ -1740,6 +1809,73 @@ mod tests {
         assert_eq!(result["messages"][1]["content"], "Hello");
         // Tool: no cache_control
         assert!(result["tools"][0].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn test_anthropic_to_openai_preserves_cache_control_when_requested() {
+        let input = json!({
+            "model": "deepseek-v4-flash",
+            "max_tokens": 1024,
+            "system": [
+                {"type": "text", "text": "System A", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "System B"}
+            ],
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+                ]
+            }],
+            "tools": [{
+                "name": "get_weather",
+                "description": "Get weather",
+                "input_schema": {"type": "object"},
+                "cache_control": {"type": "ephemeral"}
+            }]
+        });
+
+        let result = anthropic_to_openai_with_reasoning_content(input, false, true).unwrap();
+        // 多块 system 合并后，断点挂在首条 system 消息上
+        assert_eq!(
+            result["messages"][0]["cache_control"],
+            json!({"type": "ephemeral"})
+        );
+        assert_eq!(result["messages"][0]["content"], "System A\nSystem B");
+        // 消息级断点保留，5m TTL 提升到 1h
+        assert_eq!(
+            result["messages"][1]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"})
+        );
+        // 工具断点保留
+        assert_eq!(
+            result["tools"][0]["cache_control"],
+            json!({"type": "ephemeral"})
+        );
+    }
+
+    #[test]
+    fn test_anthropic_to_openai_pure_tool_result_message_breakpoint_falls_back() {
+        // 纯 tool_result 的 user 消息无独立 role 消息，断点退化为首条 tool 消息
+        let input = json!({
+            "model": "deepseek-v4-flash",
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": "42",
+                    "cache_control": {"type": "ephemeral"}
+                }]
+            }],
+            "max_tokens": 64
+        });
+
+        let result = anthropic_to_openai_with_reasoning_content(input, false, true).unwrap();
+        assert_eq!(result["messages"][0]["role"], "tool");
+        assert_eq!(
+            result["messages"][0]["cache_control"],
+            json!({"type": "ephemeral"})
+        );
     }
 
     /// 精确复现 Issue #3805 报告的 400 错误场景:
