@@ -2549,11 +2549,9 @@ mod tests {
             "tools": [{"type": "function", "name": "get_weather", "description": "weather"}],
             "tool_choice": {"type": "function", "name": "get_weather"}
         });
-        let result = responses_to_chat_completions_with_reasoning(
-            input,
-            Some(&deepseek_reasoning_config()),
-        )
-        .unwrap();
+        let result =
+            responses_to_chat_completions_with_reasoning(input, Some(&deepseek_reasoning_config()))
+                .unwrap();
         assert_eq!(result["thinking"]["type"], "enabled");
         assert_eq!(result["tool_choice"], "auto");
     }
@@ -2568,11 +2566,9 @@ mod tests {
             "tools": [{"type": "function", "name": "get_weather", "description": "weather"}],
             "tool_choice": {"type": "function", "name": "get_weather"}
         });
-        let result = responses_to_chat_completions_with_reasoning(
-            input,
-            Some(&deepseek_reasoning_config()),
-        )
-        .unwrap();
+        let result =
+            responses_to_chat_completions_with_reasoning(input, Some(&deepseek_reasoning_config()))
+                .unwrap();
         assert_eq!(result["thinking"]["type"], "enabled");
         assert_eq!(result["tool_choice"], "auto");
     }
@@ -2587,11 +2583,9 @@ mod tests {
             "tools": [{"type": "function", "name": "get_weather", "description": "weather"}],
             "tool_choice": {"type": "function", "name": "get_weather"}
         });
-        let result = responses_to_chat_completions_with_reasoning(
-            input,
-            Some(&deepseek_reasoning_config()),
-        )
-        .unwrap();
+        let result =
+            responses_to_chat_completions_with_reasoning(input, Some(&deepseek_reasoning_config()))
+                .unwrap();
         assert_eq!(result["thinking"]["type"], "disabled");
         assert_eq!(
             result["tool_choice"],
@@ -2617,8 +2611,7 @@ mod tests {
             "tools": [{"type": "function", "name": "get_weather", "description": "weather"}],
             "tool_choice": {"type": "function", "name": "get_weather"}
         });
-        let result =
-            responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
+        let result = responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
         assert_eq!(
             result["tool_choice"],
             json!({"type": "function", "function": {"name": "get_weather"}})

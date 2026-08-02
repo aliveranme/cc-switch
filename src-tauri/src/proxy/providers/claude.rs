@@ -1759,7 +1759,10 @@ mod tests {
         .unwrap();
         assert_eq!(transformed["tool_choice"], json!("auto"));
         // 工具列表本身不受影响
-        assert_eq!(transformed["tools"][0]["function"]["name"], json!("web_search"));
+        assert_eq!(
+            transformed["tools"][0]["function"]["name"],
+            json!("web_search")
+        );
     }
 
     #[test]
@@ -1783,14 +1786,9 @@ mod tests {
         let mut body = deepseek_forced_tool_body("deepseek-chat");
         body["thinking"] = json!({ "type": "disabled" });
         let provider = create_provider(json!({}));
-        let transformed = transform_claude_request_for_api_format(
-            body,
-            &provider,
-            "openai_chat",
-            None,
-            None,
-        )
-        .unwrap();
+        let transformed =
+            transform_claude_request_for_api_format(body, &provider, "openai_chat", None, None)
+                .unwrap();
         assert_eq!(
             transformed["tool_choice"],
             json!({"type": "function", "function": {"name": "web_search"}})
@@ -1824,14 +1822,9 @@ mod tests {
         }));
         // 模型名非 deepseek 家族 → 靠 base_url + thinking 状态命中降级分支
         let body = deepseek_forced_tool_body("claude-sonnet-4-5");
-        let transformed = transform_claude_request_for_api_format(
-            body,
-            &provider,
-            "openai_chat",
-            None,
-            None,
-        )
-        .unwrap();
+        let transformed =
+            transform_claude_request_for_api_format(body, &provider, "openai_chat", None, None)
+                .unwrap();
         assert_eq!(transformed["tool_choice"], json!("auto"));
     }
 
