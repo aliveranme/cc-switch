@@ -9,8 +9,8 @@
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![Downloads](https://img.shields.io/github/downloads/farion1231/cc-switch/total)](https://github.com/farion1231/cc-switch/releases/latest)
 
-<a href="https://trendshift.io/repositories/15372" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15372" alt="farion1231%2Fcc-switch | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-<a href="https://www.star-history.com/#farion1231/cc-switch&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=farion1231/cc-switch&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=farion1231/cc-switch" width="196" height="55" /></picture></a>
+<a href="https://trendshift.io/repositories/15372" target="_blank"><img src="./assets/readme/trendshift-badge.svg" alt="farion1231%2Fcc-switch | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+<a href="https://www.star-history.com/#farion1231/cc-switch&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="./assets/readme/star-history-badge-dark.svg" /><img alt="Star History Rank" src="./assets/readme/star-history-badge.svg" width="196" height="55" /></picture></a>
 
 ### 🌐 Die einzige offizielle Website: **[ccswitch.io](https://ccswitch.io)**
 
@@ -25,7 +25,7 @@
 <details open>
 <summary>Zum Einklappen klicken</summary>
 
-[![Kimi K2.7 Code](https://gcdn.moonshot.cn/growth-cdn/sponsor/kimi-en.png)](https://platform.kimi.ai?aff=cc-switch)
+[![Kimi K2.7 Code](assets/partners/banners/kimi-banner-en.png)](https://platform.kimi.ai?aff=cc-switch)
 
 Kimi K3 ist das bislang leistungsstärkste Modell von Moonshot AI und das weltweit erste offene Modell der 3T-Klasse. Mit 2,8 Billionen Parametern, nativen visuellen Fähigkeiten und einem Kontextfenster von 1 Million Token liefert K3 Spitzenleistung bei langfristigen Programmieraufgaben, Wissensarbeit und Reasoning. Mit CC Switch lässt sich Kimi in den verschiedensten Agenten-Tools bequem konfigurieren und umschalten. **[Hier klicken, um Kimi zu nutzen](https://platform.kimi.ai?aff=cc-switch)**
 
@@ -591,7 +591,7 @@ Eröffnen Sie für neue Funktionen bitte vor dem Einreichen eines PR ein Issue z
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=farion1231/cc-switch&type=Date)](https://www.star-history.com/#farion1231/cc-switch&Date)
+[![GitHub Stars](https://img.shields.io/github/stars/farion1231/cc-switch?style=social&label=Stars)](https://github.com/farion1231/cc-switch)
 
 ## Lizenz
 
