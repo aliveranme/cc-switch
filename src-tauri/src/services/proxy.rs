@@ -2989,7 +2989,10 @@ impl ProxyService {
                 )
             })
             .transpose()
-            .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
+            .map_err(|e| format!("写入 Codex 配置失败: {e}"))?
+            // 写盘前迁移存量 wire_api = "chat"（上游 Codex 已移除 Chat wire API，
+            // 遇 "chat" 反序列化直接报错；旧版 CC Switch 模板可能残留该值）
+            .map(|text| crate::codex_config::migrate_codex_wire_api_in_toml(&text));
 
         match (auth, prepared_cfg.as_deref()) {
             (Some(auth), Some(cfg)) => {

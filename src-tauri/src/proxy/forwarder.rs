@@ -449,6 +449,10 @@ impl RequestForwarder {
 
             // PRE-SEND 优化器：每个 provider 独立决定是否优化
             // clone 仅在需要写时进行；所有 optimizer 禁用时直接透传原 body
+            // 注意：cache_injection 与 thinking_optimizer 均仅对 Bedrock provider
+            // 生效（types.rs OptimizerConfig 文档声明）。缓存断点注入会把 Anthropic
+            // 形状的 system 数组化、给 tools 加 cache_control 未知字段，逃逸到
+            // Codex/Gemini 等非 Anthropic 上游会被严格网关 400 拒收。
             let mut provider_body =
                 if self.optimizer_config.enabled && is_bedrock_provider(provider) {
                     let mut b = body.clone();
@@ -458,10 +462,6 @@ impl RequestForwarder {
                     if self.optimizer_config.cache_injection {
                         super::cache_injector::inject(&mut b, &self.optimizer_config);
                     }
-                    b
-                } else if self.optimizer_config.cache_injection {
-                    let mut b = body.clone();
-                    super::cache_injector::inject(&mut b, &self.optimizer_config);
                     b
                 } else {
                     body.clone()
