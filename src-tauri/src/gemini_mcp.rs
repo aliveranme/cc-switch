@@ -127,10 +127,9 @@ pub fn set_mcp_servers_map(
 
         // Timeout 转换：Claude/Codex 使用 startup_timeout_sec/tool_timeout_sec
         // Gemini CLI 只支持 timeout（单位 ms）
-        // 默认值：startup=10s, tool=60s
-        const DEFAULT_STARTUP_MS: u64 = 10_000;
-        const DEFAULT_TOOL_MS: u64 = 60_000;
-
+        // 未配置任何超时时**不写** timeout 字段，交给 Gemini 官方默认
+        // （600_000ms / 10 分钟）——强制写 60s 会把长耗时工具调用（首次 npx
+        // 冷启动、大文件操作）提前掐断。
         let extract_timeout =
             |obj: &mut Map<String, Value>, key: &str, multiplier: u64| -> Option<u64> {
                 obj.remove(key).and_then(|val| {
@@ -140,17 +139,28 @@ pub fn set_mcp_servers_map(
                 })
             };
 
-        // 分别收集 startup 和 tool timeout，未设置时使用默认值
+        // 分别收集 startup 和 tool timeout，两者都未配置时省略 timeout 字段
         let startup_ms = extract_timeout(&mut obj, "startup_timeout_sec", 1000)
-            .or_else(|| extract_timeout(&mut obj, "startup_timeout_ms", 1))
-            .unwrap_or(DEFAULT_STARTUP_MS);
+            .or_else(|| extract_timeout(&mut obj, "startup_timeout_ms", 1));
         let tool_ms = extract_timeout(&mut obj, "tool_timeout_sec", 1000)
-            .or_else(|| extract_timeout(&mut obj, "tool_timeout_ms", 1))
-            .unwrap_or(DEFAULT_TOOL_MS);
+            .or_else(|| extract_timeout(&mut obj, "tool_timeout_ms", 1));
 
-        // 取最大值作为 Gemini timeout
-        let final_timeout = startup_ms.max(tool_ms);
-        obj.insert("timeout".to_string(), Value::Number(final_timeout.into()));
+        match (startup_ms, tool_ms) {
+            (Some(startup), Some(tool)) => {
+                obj.insert("timeout".to_string(), Value::Number(startup.max(tool).into()));
+            }
+            (Some(startup), None) => {
+                obj.insert("timeout".to_string(), Value::Number(startup.into()));
+            }
+            (None, Some(tool)) => {
+                obj.insert("timeout".to_string(), Value::Number(tool.into()));
+            }
+            (None, None) => {
+                log::debug!(
+                    "[Gemini MCP] 未配置 startup/tool timeout，省略 timeout 字段走 Gemini 默认"
+                );
+            }
+        }
 
         out.insert(id.clone(), Value::Object(obj));
     }

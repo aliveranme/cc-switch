@@ -751,7 +751,7 @@ impl UniversalProvider {
         let models = self.models.claude.as_ref();
         let model = models
             .and_then(|m| m.model.clone())
-            .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
+            .unwrap_or_else(|| "claude-sonnet-5".to_string());
         let haiku = models
             .and_then(|m| m.haiku_model.clone())
             .unwrap_or_else(|| model.clone());
@@ -798,7 +798,7 @@ impl UniversalProvider {
         let models = self.models.codex.as_ref();
         let model = models
             .and_then(|m| m.model.clone())
-            .unwrap_or_else(|| "gpt-4o".to_string());
+            .unwrap_or_else(|| "gpt-5.6-sol".to_string());
         let reasoning_effort = models
             .and_then(|m| m.reasoning_effort.clone())
             .unwrap_or_else(|| "high".to_string());
@@ -822,13 +822,11 @@ impl UniversalProvider {
             r#"model_provider = "custom"
 model = "{model}"
 model_reasoning_effort = "{reasoning_effort}"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "NewAPI"
 base_url = "{codex_base_url}"
-wire_api = "responses"
-requires_openai_auth = true"#
+wire_api = "responses""#
         );
 
         let settings_config = serde_json::json!({
@@ -863,7 +861,7 @@ requires_openai_auth = true"#
         let models = self.models.gemini.as_ref();
         let model = models
             .and_then(|m| m.model.clone())
-            .unwrap_or_else(|| "gemini-2.5-pro".to_string());
+            .unwrap_or_else(|| "gemini-3.6-flash".to_string());
 
         let settings_config = serde_json::json!({
             "env": {
@@ -1310,7 +1308,7 @@ mod tests {
                 .settings_config
                 .pointer("/env/GEMINI_MODEL")
                 .and_then(|item| item.as_str()),
-            Some("gemini-2.5-pro")
+            Some("gemini-3.6-flash")
         );
     }
 

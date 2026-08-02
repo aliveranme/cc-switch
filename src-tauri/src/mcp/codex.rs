@@ -615,41 +615,45 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
 
     let mut t = Table::new();
     let typ = spec.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
-    t["type"] = toml_edit::value(typ);
+    // 注意：Codex RawMcpServerConfig 没有 `type` 字段——传输类型由 command
+    // （stdio）/ url（streamable HTTP）推断。写 type 会被 serde 忽略（无害但
+    // 冗余），此处不写，避免误导。
 
     // 定义核心字段（已在下方处理，跳过通用转换）
     let core_fields = match typ {
-        "stdio" => vec!["type", "command", "args", "env", "cwd"],
-        "http" | "sse" => vec!["type", "url", "headers", "http_headers"],
+        "stdio" => vec!["type", "command", "args", "env", "cwd", "env_vars"],
+        "http" | "sse" => vec![
+            "type",
+            "url",
+            "headers",
+            "http_headers",
+            "env_http_headers",
+        ],
         _ => vec!["type"],
     };
 
-    // 定义扩展字段白名单（Codex 常见可选字段）
+    // 定义扩展字段白名单：仅 Codex RawMcpServerConfig 实际支持的字段
+    // （mcp_types.rs），其余键（debug/log_level/shell/retry_* 等）会被 serde
+    // 静默忽略，用户设置的超时/重试在 Codex 上无声失效。
     let extended_fields = [
-        // 通用字段
-        "timeout",
-        "timeout_ms",
         "startup_timeout_ms",
         "startup_timeout_sec",
-        "connection_timeout",
-        "read_timeout",
-        "debug",
-        "log_level",
-        "disabled",
-        // stdio 特有
-        "shell",
-        "encoding",
-        "working_dir",
-        "restart_on_exit",
-        "max_restart_count",
-        // http/sse 特有
-        "retry_count",
-        "max_retry_attempts",
-        "retry_delay",
-        "cache_tools_list",
-        "verify_ssl",
-        "insecure",
-        "proxy",
+        "tool_timeout_sec",
+        "enabled",
+        "required",
+        "supports_parallel_tool_calls",
+        "default_tools_approval_mode",
+        "enabled_tools",
+        "disabled_tools",
+        "bearer_token",
+        "bearer_token_env_var",
+        "environment_id",
+        "auth",
+        "scopes",
+        "oauth",
+        "oauth_resource",
+        "tools",
+        "cwd",
     ];
 
     // 1. 处理核心字段（强类型）
@@ -687,6 +691,16 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
             }
         }
         "http" | "sse" => {
+            if typ == "sse" {
+                // Codex 不支持 SSE 传输（仅 stdio 与 streamable HTTP）。
+                // 保留 url 尽力连接（部分网关同时支持两种协议），但必须留痕，
+                // 否则 SSE-only 端点静默失败且无任何提示。
+                log::warn!(
+                    "Codex 不支持 SSE MCP 传输：'{}' 将按 streamable HTTP 连接，\
+                     SSE-only 端点可能失败，请改用 http 端点或 stdio 包装",
+                    spec.get("name").and_then(|v| v.as_str()).unwrap_or("")
+                );
+            }
             let url = spec.get("url").and_then(|v| v.as_str()).unwrap_or("");
             t["url"] = toml_edit::value(url);
 
@@ -713,16 +727,27 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
                 continue;
             }
 
-            // 尝试使用通用转换器
-            if let Some(toml_item) = json_value_to_toml_item(value, key) {
-                t[&key[..]] = toml_item;
-
-                // 只记录字段名：未知字段同样可能携带 token / secret。
-                if extended_fields.contains(&key.as_str()) {
-                    log::debug!("已转换扩展字段 '{key}'（值已省略）");
-                } else {
-                    log::debug!("已转换自定义字段 '{key}'（值已省略）");
+            // Claude 风格 `timeout`（秒）→ Codex `startup_timeout_ms`（毫秒）：
+            // 直接透传 timeout 会被 serde 忽略，用户设置静默失效。
+            if key == "timeout" && extended_fields.contains(&"startup_timeout_ms") {
+                if let Some(secs) = value.as_u64().or_else(|| value.as_f64().map(|f| f as u64)) {
+                    t["startup_timeout_ms"] =
+                        toml_edit::value(secs.saturating_mul(1000) as i64);
+                    log::debug!("已转换 timeout={secs}s → startup_timeout_ms");
                 }
+                continue;
+            }
+
+            // 尝试使用通用转换器（仅白名单字段）
+            if extended_fields.contains(&key.as_str()) {
+                if let Some(toml_item) = json_value_to_toml_item(value, key) {
+                    t[&key[..]] = toml_item;
+                    log::debug!("已转换扩展字段 '{key}'（值已省略）");
+                }
+            } else {
+                log::debug!(
+                    "跳过字段 '{key}': Codex RawMcpServerConfig 不支持该键，写入会被 serde 静默忽略"
+                );
             }
         }
     }
@@ -842,9 +867,16 @@ mod tests {
             table.get("headers").is_none(),
             "legacy headers must not be emitted a second time"
         );
+        // Claude 风格 timeout（秒）必须转换为 Codex 的 startup_timeout_ms（毫秒）
+        assert!(
+            table.get("timeout").is_none(),
+            "timeout 必须转换为 startup_timeout_ms，不得原样写入（Codex 会静默忽略）"
+        );
         assert_eq!(
-            table.get("timeout").and_then(|item| item.as_integer()),
-            Some(30)
+            table
+                .get("startup_timeout_ms")
+                .and_then(|item| item.as_integer()),
+            Some(30_000)
         );
     }
 }

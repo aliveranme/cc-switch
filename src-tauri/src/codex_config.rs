@@ -243,9 +243,9 @@ pub fn write_codex_live_atomic(
         None
     };
 
-    // 准备写入内容
+    // 准备写入内容（写盘前迁移存量 wire_api = "chat"）
     let cfg_text = match config_text_opt {
-        Some(s) => s.to_string(),
+        Some(s) => migrate_codex_wire_api_in_toml(s),
         None => String::new(),
     };
     if !cfg_text.trim().is_empty() {
@@ -320,7 +320,8 @@ pub(crate) fn is_custom_codex_model_provider_id(id: &str) -> bool {
 pub fn write_codex_live_config_atomic(config_text_opt: Option<&str>) -> Result<(), AppError> {
     let config_path = get_codex_config_path();
     let cfg_text = match config_text_opt {
-        Some(config_text) => config_text.to_string(),
+        // 写盘前迁移存量 wire_api = "chat"（上游已移除 Chat wire API）
+        Some(config_text) => migrate_codex_wire_api_in_toml(config_text),
         None => String::new(),
     };
 
@@ -1588,15 +1589,26 @@ fn set_codex_experimental_bearer_token(config_text: &str, token: &str) -> Result
         .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
 
     let Some(provider_id) = active_codex_model_provider_id(&doc) else {
-        doc["experimental_bearer_token"] = toml_edit::value(token);
-        return Ok(doc.to_string());
+        // 当前 Codex 的 experimental_bearer_token 只存在于 [model_providers.<id>]
+        // 表内（ModelProviderInfo 字段）；顶层写盘会被 serde 静默忽略，鉴权注入
+        // 落空后请求以 ChatGPT 登录态打到第三方 base_url → 认证失败且无报错。
+        // 显式报错让调用方提示用户补充 model_provider 路由，而不是静默写无效键。
+        return Err(AppError::localized(
+            "provider.codex.bearer_token_needs_provider",
+            "Codex 配置缺少 model_provider 路由：experimental_bearer_token 只能写入 [model_providers.<id>] 表，请先为供应商配置自定义 model_provider",
+            "Codex config has no model_provider route: experimental_bearer_token can only live inside [model_providers.<id>]; configure a custom model_provider for this provider first",
+        ));
     };
 
     if !is_custom_codex_model_provider_id(&provider_id) {
-        // Reserved Codex provider IDs are owned by the CLI. Keep third-party
-        // bearer tokens at the top level so we do not shadow built-in tables.
-        doc["experimental_bearer_token"] = toml_edit::value(token);
-        return Ok(doc.to_string());
+        // Reserved Codex provider IDs are owned by the CLI. Writing the token at
+        // the top level is silently ignored by current Codex, so fail loudly
+        // instead of shipping a credential that never reaches the upstream.
+        return Err(AppError::localized(
+            "provider.codex.bearer_token_reserved_provider",
+            format!("Codex 当前 model_provider 是保留供应商（{provider_id}）：experimental_bearer_token 无法注入，请切换到自定义 model_provider"),
+            format!("Codex model_provider '{provider_id}' is a reserved provider: experimental_bearer_token cannot be injected; switch to a custom model_provider"),
+        ));
     }
 
     if let Some(model_providers) = doc
@@ -1612,8 +1624,35 @@ fn set_codex_experimental_bearer_token(config_text: &str, token: &str) -> Result
         }
     }
 
-    doc["experimental_bearer_token"] = toml_edit::value(token);
-    Ok(doc.to_string())
+    // 自定义 model_provider 存在但 [model_providers.<id>] 表缺失（例如用户手写
+    // model_provider 引用却漏建表）。自动补建表并写入 token——顶层写入会被
+    // 当前 Codex 静默忽略，不能作为兜底。
+    let provider_table = doc
+        .entry("model_providers")
+        .or_insert_with(|| toml_edit::table().into())
+        .as_table_like_mut()
+        .and_then(|providers| {
+            providers
+                .entry(provider_id.as_str())
+                .or_insert_with(|| toml_edit::table().into())
+                .as_table_like_mut()
+        });
+    if let Some(provider_table) = provider_table {
+        provider_table.insert(
+            "experimental_bearer_token",
+            toml_edit::value(token),
+        );
+        log::warn!(
+            "[Codex] [model_providers.{provider_id}] 表缺失，已自动补建并写入 bearer token"
+        );
+        Ok(doc.to_string())
+    } else {
+        Err(AppError::localized(
+            "provider.codex.bearer_token_table_unavailable",
+            "Codex config.toml 的 model_providers 不是表，无法写入 experimental_bearer_token",
+            "Codex config.toml model_providers is not a table; cannot write experimental_bearer_token",
+        ))
+    }
 }
 
 pub fn remove_codex_experimental_bearer_token_if(
@@ -1710,6 +1749,64 @@ fn codex_official_provider_table(
 
 fn codex_unified_official_provider_table() -> toml_edit::Table {
     codex_official_provider_table(None, true)
+}
+
+/// 归一化 `wire_api` 值。上游 Codex 已移除 `"chat"` wire API（反序列化遇
+/// `"chat"` 直接报错，见 openai/codex `model-provider-info` 的
+/// `CHAT_WIRE_API_REMOVED_ERROR`），官方枚举仅剩 `"responses"`。
+/// 存量供应商模板 / 用户手写配置里的旧值必须迁移，否则 Codex 启动即失败。
+pub fn normalize_codex_wire_api(value: &str) -> &str {
+    match value.trim() {
+        "chat" | "chat_completions" => "responses",
+        other => other,
+    }
+}
+
+/// 迁移 Codex config.toml 中所有位置的存量 `wire_api = "chat"`（顶层与
+/// `[model_providers.*]` 表内），语法保留式改写。非 `"responses"` 的其它
+/// 值原样保留并告警，避免静默改写用户有意为之的未知值。
+pub fn migrate_codex_wire_api_in_toml(toml_str: &str) -> String {
+    let Ok(mut doc) = toml_str.parse::<DocumentMut>() else {
+        return toml_str.to_string();
+    };
+    let mut migrated_any = false;
+
+    // 顶层 wire_api
+    if let Some(item) = doc.get_mut("wire_api") {
+        if let Some(value) = item.as_str() {
+            let normalized = normalize_codex_wire_api(value);
+            if normalized != value {
+                *item = toml_edit::value(normalized);
+                migrated_any = true;
+            }
+        }
+    }
+
+    // [model_providers.<id>].wire_api
+    if let Some(providers) = doc.get_mut("model_providers").and_then(toml_edit::Item::as_table_like_mut) {
+        for (_, provider) in providers.iter_mut() {
+            if let Some(table) = provider.as_table_like_mut() {
+                if let Some(item) = table.get_mut("wire_api") {
+                    if let Some(value) = item.as_str() {
+                        let normalized = normalize_codex_wire_api(value);
+                        if normalized != value {
+                            *item = toml_edit::value(normalized);
+                            migrated_any = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if migrated_any {
+        log::warn!(
+            "[Codex] 检测到已移除的 wire_api = \"chat\"，已自动迁移为 \"responses\"（上游 Codex 不再支持 Chat Completions wire API）"
+        );
+        doc.to_string()
+    } else {
+        toml_str.to_string()
+    }
 }
 
 fn remove_codex_proxy_placeholders_from_providers(providers: &mut toml_edit::Table) {
@@ -2143,6 +2240,13 @@ pub fn update_codex_toml_field(toml_str: &str, field: &str, value: &str) -> Resu
 
     match field {
         "base_url" | "wire_api" => {
+            // wire_api 已移除 "chat" 值：写入前归一化，避免存量模板写回即失败
+            let trimmed = if field == "wire_api" {
+                normalize_codex_wire_api(trimmed).to_string()
+            } else {
+                trimmed.to_string()
+            };
+            let trimmed = trimmed.as_str();
             let model_provider = doc
                 .get("model_provider")
                 .and_then(|item| item.as_str())
@@ -2578,25 +2682,19 @@ base_url = "https://single.example.com/v1"
     }
 
     #[test]
-    fn prepare_provider_live_config_uses_top_level_token_for_reserved_provider() {
+    fn prepare_provider_live_config_rejects_reserved_provider_for_bearer_token() {
+        // 当前 Codex 的 experimental_bearer_token 只存在于 [model_providers.<id>]
+        // 表内；保留 provider（openai 等）顶层写入会被 serde 静默忽略，鉴权注入
+        // 落空。显式报错优于静默写无效键。
         let input = r#"model_provider = "openai"
 model = "gpt-5"
 "#;
 
-        let output =
-            prepare_codex_provider_live_config(&json!({"OPENAI_API_KEY": "sk-test"}), input)
-                .expect("prepare live config");
-        let parsed: toml::Value = toml::from_str(&output).expect("parse output");
-
-        assert_eq!(
-            parsed
-                .get("experimental_bearer_token")
-                .and_then(|v| v.as_str()),
-            Some("sk-test")
-        );
+        let result =
+            prepare_codex_provider_live_config(&json!({"OPENAI_API_KEY": "sk-test"}), input);
         assert!(
-            parsed.get("model_providers").is_none(),
-            "reserved provider tables should not be synthesized"
+            result.is_err(),
+            "reserved provider 的 bearer token 注入必须显式失败而非静默写顶层"
         );
     }
 
@@ -2705,7 +2803,9 @@ experimental_bearer_token = "stale-table-key"
     }
 
     #[test]
-    fn prepare_provider_live_config_does_not_create_incomplete_provider_table() {
+    fn prepare_provider_live_config_creates_missing_provider_table_for_bearer_token() {
+        // 自定义 model_provider 引用存在但 [model_providers.<id>] 表缺失：
+        // 自动补建表并写入 token（顶层写入会被当前 Codex 静默忽略）。
         let input = r#"model_provider = "vendor_x"
 model = "gpt-5"
 "#;
@@ -2717,13 +2817,16 @@ model = "gpt-5"
 
         assert_eq!(
             parsed
-                .get("experimental_bearer_token")
+                .get("model_providers")
+                .and_then(|v| v.get("vendor_x"))
+                .and_then(|v| v.get("experimental_bearer_token"))
                 .and_then(|v| v.as_str()),
-            Some("sk-test")
+            Some("sk-test"),
+            "缺失的 [model_providers.vendor_x] 表应被自动补建并写入 token"
         );
         assert!(
-            parsed.get("model_providers").is_none(),
-            "missing provider tables should not be synthesized without endpoint fields"
+            parsed.get("experimental_bearer_token").is_none(),
+            "不得写顶层 experimental_bearer_token（当前 Codex 会静默忽略）"
         );
     }
 
@@ -2939,6 +3042,85 @@ model_providers = { any = { name = "any", base_url = "https://old.api/v1", wire_
             parsed["model_providers"]["any"]["wire_api"].as_str(),
             Some("responses"),
             "sibling fields must survive"
+        );
+    }
+
+    // ========================================================================
+    // wire_api "chat" 迁移（上游 Codex 已移除 Chat wire API）
+    // ========================================================================
+
+    #[test]
+    fn normalize_codex_wire_api_migrates_removed_chat_values() {
+        assert_eq!(normalize_codex_wire_api("chat"), "responses");
+        assert_eq!(normalize_codex_wire_api("chat_completions"), "responses");
+        assert_eq!(normalize_codex_wire_api(" chat "), "responses");
+        assert_eq!(normalize_codex_wire_api("responses"), "responses");
+        assert_eq!(normalize_codex_wire_api("anthropic"), "anthropic");
+    }
+
+    #[test]
+    fn migrate_codex_wire_api_migrates_top_level_and_provider_tables() {
+        let input = r#"model_provider = "legacy"
+model = "gpt-4"
+wire_api = "chat"
+
+[model_providers.legacy]
+name = "Legacy"
+base_url = "https://legacy.example/v1"
+wire_api = "chat"
+
+[model_providers.ok]
+name = "OK"
+wire_api = "responses"
+"#;
+        let migrated = migrate_codex_wire_api_in_toml(input);
+        let parsed: toml::Value = toml::from_str(&migrated).unwrap();
+
+        assert_eq!(
+            parsed.get("wire_api").and_then(|v| v.as_str()),
+            Some("responses"),
+            "top-level chat must migrate to responses"
+        );
+        assert_eq!(
+            parsed["model_providers"]["legacy"]["wire_api"].as_str(),
+            Some("responses"),
+            "provider-table chat must migrate to responses"
+        );
+        assert_eq!(
+            parsed["model_providers"]["ok"]["wire_api"].as_str(),
+            Some("responses"),
+            "already-correct values must be untouched"
+        );
+    }
+
+    #[test]
+    fn migrate_codex_wire_api_preserves_unknown_values_and_syntax() {
+        let input = r#"# comment kept
+model_provider = "custom"
+wire_api = "future_value"
+
+[model_providers.custom]
+name = "Custom"
+wire_api = "responses"
+"#;
+        let migrated = migrate_codex_wire_api_in_toml(input);
+        assert_eq!(migrated, input, "no chat value present → text unchanged");
+        assert!(migrated.contains("# comment kept"), "comments preserved");
+    }
+
+    #[test]
+    fn update_codex_toml_field_normalizes_chat_wire_api_value() {
+        let input = r#"model_provider = "chat_only"
+
+[model_providers.chat_only]
+name = "Chat Only"
+"#;
+        let result = update_codex_toml_field(input, "wire_api", "chat").unwrap();
+        let parsed: toml::Value = toml::from_str(&result).unwrap();
+        assert_eq!(
+            parsed["model_providers"]["chat_only"]["wire_api"].as_str(),
+            Some("responses"),
+            "writing wire_api=chat must be normalized to responses"
         );
     }
 

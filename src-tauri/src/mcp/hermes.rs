@@ -93,6 +93,12 @@ fn convert_to_hermes_format(spec: &Value) -> Result<Value, AppError> {
                     result.insert("headers".into(), headers.clone());
                 }
             }
+            // Hermes 远程传输默认 Streamable HTTP；SSE-only 端点必须显式声明
+            // transport: "sse"（Hermes 没有 type 字段，传输靠 transport 区分），
+            // 否则 Hermes 按 Streamable HTTP 连接 SSE-only 端点直接失败。
+            if typ == "sse" {
+                result.insert("transport".into(), json!("sse"));
+            }
         }
         _ => {
             return Err(AppError::McpValidation(format!("Unknown MCP type: {typ}")));

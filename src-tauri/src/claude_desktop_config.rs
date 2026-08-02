@@ -60,7 +60,9 @@ pub const DEFAULT_PROXY_ROUTES: &[ClaudeDesktopDefaultRoute] = &[
     ClaudeDesktopDefaultRoute {
         route_id: "claude-haiku-4-5",
         env_key: "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        supports_1m: true,
+        // Haiku 档（claude-haiku-4-5）官方上下文 200K，不支持 1M；
+        // 与前端 claudeDesktopProviderPresets 的 haiku 档位保持一致
+        supports_1m: false,
     },
     // fable 置于末尾：next_catalog_safe_route_id 给非安全品牌 route 借用合法
     // 角色名时仍按 sonnet→opus→haiku 顺序分配（向后兼容既有 catalog），不会把
