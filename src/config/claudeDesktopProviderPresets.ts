@@ -76,7 +76,9 @@ const passthroughRoutes = (supports1m = false): ClaudeDesktopRoutePreset[] => [
   {
     routeId: CLAUDE_DESKTOP_ROLE_ROUTE_IDS.haiku,
     upstreamModel: CLAUDE_DESKTOP_ROLE_ROUTE_IDS.haiku,
-    supports1m,
+    // Haiku 档（claude-haiku-4-5）官方上下文 200K，不支持 1M：
+    // 标记 supports1m 会让 Desktop 以 1M 上下文发起请求 → 上游 400/截断
+    supports1m: false,
   },
 ];
 
@@ -99,7 +101,8 @@ const mappedRoutes = (
   {
     routeId: CLAUDE_DESKTOP_ROLE_ROUTE_IDS.haiku,
     upstreamModel: haiku,
-    supports1m,
+    // Haiku 档不支持 1M（与 passthroughRoutes 一致）
+    supports1m: false,
   },
 ];
 
@@ -123,7 +126,8 @@ const brandedRoutes = (
       routeId,
       upstreamModel,
       labelOverride: upstreamModel,
-      supports1m,
+      // Haiku 档不支持 1M（与 passthroughRoutes/mappedRoutes 一致）
+      supports1m: routeId === CLAUDE_DESKTOP_ROLE_ROUTE_IDS.haiku ? false : supports1m,
     }))
     .filter((route) => {
       if (seenUpstream.has(route.upstreamModel)) {
@@ -175,7 +179,11 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
     baseUrl: "https://api.kimi.com/coding/",
     mode: "proxy",
     apiFormat: "anthropic",
-    modelRoutes: passthroughRoutes(),
+    modelRoutes: brandedRoutes(
+      "kimi-for-coding",
+      "kimi-for-coding",
+      "kimi-for-coding",
+    ),
     icon: "kimi",
     iconColor: "#6366F1",
   },

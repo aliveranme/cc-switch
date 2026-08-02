@@ -67,13 +67,12 @@ export function generateThirdPartyConfig(
   return `model_provider = "custom"
 model = ${tomlString(modelName)}
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = ${tomlString(providerName)}
 base_url = ${tomlString(baseUrl)}
 wire_api = "responses"
-requires_openai_auth = true`;
+`;
 }
 
 function modelCatalog(
@@ -241,13 +240,12 @@ export const codexProviderPresets: CodexProviderPreset[] = [
 model = "gpt-5.6-sol"
 review_model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "APINebula"
 base_url = "https://apinebula.ai/v1"
 wire_api = "responses"
-requires_openai_auth = true`,
+`,
     endpointCandidates: ["https://apinebula.ai/v1"],
     apiFormat: "openai_responses",
     isPartner: true,
@@ -395,13 +393,12 @@ requires_openai_auth = true`,
 model = "gpt-5.6-sol"
 review_model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "APIKEY.FUN"
 base_url = "https://api.apikey.fun/v1"
 wire_api = "responses"
-requires_openai_auth = true`,
+`,
     endpointCandidates: [
       "https://api.apikey.fun/v1",
       "https://slb.apikey.fun/v1",
@@ -641,13 +638,12 @@ requires_openai_auth = true`,
     auth: generateThirdPartyAuth(""),
     config: `model_provider = "custom"
 model = "zai-org/glm-5.1"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "AtlasCloud"
 base_url = "https://api.atlascloud.ai/v1"
 wire_api = "responses"
-requires_openai_auth = true`,
+`,
     endpointCandidates: ["https://api.atlascloud.ai/v1"],
     apiFormat: "openai_chat",
     modelCatalog: modelCatalog([
@@ -869,13 +865,12 @@ requires_openai_auth = true`,
 model = "gpt-5.6-sol"
 review_model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "SudoCode"
 base_url = "https://api.sudocode.chat/v1"
 wire_api = "responses"
-requires_openai_auth = true`,
+`,
     endpointCandidates: ["https://api.sudocode.chat/v1"],
     apiFormat: "openai_responses",
     isPartner: true,
@@ -892,14 +887,13 @@ requires_openai_auth = true`,
 model = "gpt-5.6-sol"
 review_model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 model_verbosity = "high"
 
 [model_providers.custom]
 name = "sudocode"
 base_url = "https://sudocode.us/v1"
 wire_api = "responses"
-requires_openai_auth = true`,
+`,
     endpointCandidates: ["https://sudocode.us/v1", "https://sudocode.run/v1"],
     apiFormat: "openai_responses",
     isPartner: true,
@@ -930,7 +924,6 @@ requires_openai_auth = true`,
     config: `model_provider = "custom"
 model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "Azure OpenAI"
@@ -938,7 +931,7 @@ base_url = "https://YOUR_RESOURCE_NAME.openai.azure.com/openai"
 env_key = "OPENAI_API_KEY"
 query_params = { "api-version" = "2025-04-01-preview" }
 wire_api = "responses"
-requires_openai_auth = true`,
+`,
     endpointCandidates: ["https://YOUR_RESOURCE_NAME.openai.azure.com/openai"],
     theme: {
       icon: "codex",
@@ -1613,7 +1606,6 @@ requires_openai_auth = true`,
     config: `model_provider = "custom"
 model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 personality = "pragmatic"
 model_context_window = 1000000
 model_auto_compact_token_limit = 900000
@@ -1622,7 +1614,7 @@ model_auto_compact_token_limit = 900000
 name = "E-FlowCode"
 base_url = "https://e-flowcode.cc/v1"
 wire_api = "responses"
-requires_openai_auth = true`,
+`,
     modelCatalog: modelCatalog([
       {
         model: "gpt-5.5",
@@ -1645,12 +1637,10 @@ requires_openai_auth = true`,
     config: `model_provider = "custom"
 model = "gpt-5.6-sol"
 model_reasoning_effort = "medium"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "PIPELLM"
 wire_api = "responses"
-requires_openai_auth = true
 base_url = "https://cc-api.pipellm.ai/v1"`,
     category: "aggregator",
     endpointCandidates: ["https://cc-api.pipellm.ai/v1"],
