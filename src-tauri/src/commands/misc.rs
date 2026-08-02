@@ -2997,7 +2997,13 @@ fn write_claude_config(
     let config_json =
         serde_json::to_string_pretty(&config_obj).map_err(|e| format!("序列化配置失败: {e}"))?;
 
-    std::fs::write(config_file, config_json).map_err(|e| format!("写入配置文件失败: {e}"))
+    std::fs::write(config_file, config_json).map_err(|e| format!("写入配置文件失败: {e}"))?;
+
+    // 配置文件包含明文 API Key，且位于系统临时目录（默认 0644 同机其他用户可读），
+    // 必须收紧到 0600；Windows 由用户目录 ACL 保护，此函数在非 unix 平台为空实现。
+    crate::config::harden_secret_file(config_file);
+
+    Ok(())
 }
 
 /// macOS: 根据用户首选终端启动
@@ -3828,6 +3834,34 @@ mod tests {
         assert_eq!(
             build_final_shell_cd_command("/bin/bash", Some(Path::new("/tmp/project O'Brien"))),
             "cd '/tmp/project O'\"'\"'Brien' || exit 1\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_claude_config_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        let config_file = temp.path().join("claude_test_123.json");
+
+        write_claude_config(
+            &config_file,
+            &[(
+                "ANTHROPIC_AUTH_TOKEN".to_string(),
+                "sk-test-secret".to_string(),
+            )],
+        )
+        .expect("config should be written");
+
+        let mode = std::fs::metadata(&config_file)
+            .expect("config file should exist")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "temp config file containing API keys must not be readable by group/other: {mode:o}"
         );
     }
 
