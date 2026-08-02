@@ -400,6 +400,12 @@ pub fn anthropic_to_responses(
 
     if let Some(v) = body.get("tool_choice") {
         result["tool_choice"] = map_tool_choice_to_responses(v);
+        // Anthropic `disable_parallel_tool_use: true`（强制串行工具调用）对应
+        // OpenAI Responses 的请求级 `parallel_tool_calls: false`。转换时保留
+        // 语义，否则要求串行执行的 agent 逻辑会被并行调用破坏。
+        if v.get("disable_parallel_tool_use").and_then(Value::as_bool) == Some(true) {
+            result["parallel_tool_calls"] = json!(false);
+        }
     }
 
     // Inject prompt_cache_key for improved cache routing on OpenAI-compatible endpoints
@@ -1257,6 +1263,31 @@ mod tests {
         let result = anthropic_to_responses(input, None, false, false).unwrap();
         assert_eq!(result["tool_choice"]["type"], "function");
         assert_eq!(result["tool_choice"]["name"], "get_weather");
+    }
+
+    #[test]
+    fn test_anthropic_to_responses_preserves_disable_parallel_tool_use() {
+        // Anthropic disable_parallel_tool_use=true 对应 Responses 的
+        // parallel_tool_calls=false，语义必须保留（串行工具调用约束）。
+        let input = json!({
+            "model": "gpt-4o",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "Step by step"}],
+            "tool_choice": {"type": "auto", "disable_parallel_tool_use": true}
+        });
+
+        let result = anthropic_to_responses(input, None, false, false).unwrap();
+        assert_eq!(result["parallel_tool_calls"], json!(false));
+
+        // 未设置时不得写入（非 Codex OAuth 路径不应注入默认值）
+        let input2 = json!({
+            "model": "gpt-4o",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tool_choice": {"type": "auto"}
+        });
+        let result2 = anthropic_to_responses(input2, None, false, false).unwrap();
+        assert!(result2.get("parallel_tool_calls").is_none());
     }
 
     #[test]

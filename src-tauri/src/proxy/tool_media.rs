@@ -422,10 +422,17 @@ fn chat_image_part(part: &Value) -> Option<Value> {
     }
 }
 
+/// 仅接受 http(s) 或 data: 的 image_url（OpenAI 格式）。本地路径/内网 URL
+/// 不得透传（与 typed_image_url 的 scheme 过滤一致）。
+fn is_forwardable_image_url(url: &str) -> bool {
+    let url = url.trim_start();
+    url.starts_with("http://") || url.starts_with("https://") || url.starts_with("data:")
+}
+
 fn normalized_image_url(part: &Value) -> Option<Value> {
     let image_url = part.get("image_url")?;
     let mut object = match image_url {
-        Value::String(url) if !url.trim().is_empty() => {
+        Value::String(url) if !url.trim().is_empty() && is_forwardable_image_url(url) => {
             let mut object = Map::new();
             object.insert("url".to_string(), Value::String(url.clone()));
             object
@@ -434,7 +441,7 @@ fn normalized_image_url(part: &Value) -> Option<Value> {
             if object
                 .get("url")
                 .and_then(Value::as_str)
-                .is_some_and(|url| !url.trim().is_empty()) =>
+                .is_some_and(|url| !url.trim().is_empty() && is_forwardable_image_url(url)) =>
         {
             object.clone()
         }
@@ -503,6 +510,12 @@ fn typed_image_url(part: &Value) -> Option<Value> {
             .get("url")
             .and_then(Value::as_str)
             .filter(|url| !url.trim().is_empty())
+            // 仅 http(s)：本地路径 / 内网 URL（file://、http://127.0.0.1 等）
+            // 不得进入模型上下文（隐私泄漏）或触发上游拉取 400；
+            // 与 Responses 桥（transform_responses.rs）的过滤口径一致。
+            .filter(|url| {
+                url.trim_start().starts_with("http://") || url.trim_start().starts_with("https://")
+            })
         {
             let mut image_url = Map::new();
             image_url.insert("url".to_string(), Value::String(url.to_string()));

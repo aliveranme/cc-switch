@@ -523,7 +523,15 @@ pub fn transform_classifier_response(
                 format!("<block>{block}</block>")
             }
         };
-        format!("{verdict_line}\n<reason>{summary}</reason>\n\nUpstream analysis:\n{upstream_text}")
+        // severity 模式下上游原文可能自带 `<severity>` 标签（模型自述或提示注入），
+        // 会破坏「恰好一个标签」的协议约束导致 Piy 解析失败 → 误拦截。
+        // 展示前剥离上游原文中的 severity/reason 标签，仅保留我们输出的裁决标签。
+        let upstream_analysis = if mode == ClassifierMode::Severity {
+            sanitize_severity_upstream_text(&upstream_text)
+        } else {
+            upstream_text.to_string()
+        };
+        format!("{verdict_line}\n<reason>{summary}</reason>\n\nUpstream analysis:\n{upstream_analysis}")
     };
 
     serde_json::json!({
@@ -544,6 +552,42 @@ pub fn transform_classifier_response(
             "output_tokens": output_tokens
         }
     })
+}
+
+/// 剥离上游文本中的 `<severity>` / `<reason>` 标签内容。
+///
+/// severity 模式的裁决文本要求**恰好一个** `<severity>` 标签（Claude Code 的
+/// Piy 解析器），上游模型输出原文若自带这些标签（模型自述、提示注入或
+/// 结构化输出残留）会导致解析失败 → 分类器兜底误拦截。剥离时保留标签外的
+/// 分析文字，保证「Upstream analysis」仍然可读。
+fn sanitize_severity_upstream_text(text: &str) -> String {
+    let strip_tags = |input: &str, tag: &str| -> (String, bool) {
+        let mut result = String::with_capacity(input.len());
+        let mut rest = input;
+        let mut stripped = false;
+        while let Some(start) = rest.find(tag) {
+            stripped = true;
+            result.push_str(&rest[..start]);
+            let after = &rest[start..];
+            let close_tag = format!("</{tag}>");
+            let end = after
+                .find(&close_tag)
+                .map(|pos| start + pos + close_tag.len())
+                .unwrap_or(input.len());
+            rest = &rest[end..];
+        }
+        result.push_str(rest);
+        (result, stripped)
+    };
+
+    let (after_severity, stripped_severity) = strip_tags(text, "severity");
+    let (final_text, stripped_reason) = strip_tags(&after_severity, "reason");
+    if stripped_severity || stripped_reason {
+        log::warn!(
+            "[Classifier] severity 模式：上游文本含额外 <severity>/<reason> 标签，已剥离避免破坏恰好一个标签的协议约束"
+        );
+    }
+    final_text
 }
 
 /// 构建分类器请求的安全兜底响应体
@@ -1216,6 +1260,31 @@ mod tests {
         );
         // CC 的 Piy 要求恰好一个 <severity> 标签，reason/upstream 不得引入第二个
         assert_eq!(text.matches("<severity>").count(), 1);
+    }
+
+    /// severity 模式：上游文本中的额外 <severity>/<reason> 标签必须被剥离，
+    /// 否则 Piy「恰好一个标签」约束被破坏 → 误拦截
+    #[test]
+    fn test_severity_mode_strips_extra_tags_from_upstream_text() {
+        let upstream = json!({
+            "content": [{"type": "text", "text": "The action reads files safely <severity>42</severity> analysis" }]
+        });
+        let response =
+            transform_classifier_response(&upstream, "claude-opus-4-8", ClassifierMode::Severity);
+        let text = response["content"][0]["text"].as_str().unwrap();
+        assert_eq!(text.matches("<severity>").count(), 1, "必须恰好一个 severity 标签");
+        assert!(text.contains("The action reads files safely"), "剥离后保留分析文字");
+        assert!(!text.contains("<severity>42</severity>"), "上游自带标签必须剥离");
+
+        // <reason> 标签同理
+        let upstream2 = json!({
+            "content": [{"type": "text", "text": "notes <reason>why</reason> more" }]
+        });
+        let response2 =
+            transform_classifier_response(&upstream2, "claude-opus-4-8", ClassifierMode::Severity);
+        let text2 = response2["content"][0]["text"].as_str().unwrap();
+        assert!(!text2.contains("<reason>why</reason>"), "上游 reason 标签必须剥离");
+        assert!(text2.contains("notes"), "剥离后保留周围文字");
     }
 
     /// severity 兜底 body：<severity>0</severity>

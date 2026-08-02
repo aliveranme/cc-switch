@@ -699,6 +699,14 @@ async fn log_usage_internal(
     }
 }
 
+/// SSE 事件解析缓冲上限。
+///
+/// 上游若返回压缩 SSE 流（`content-encoding` 非 identity）或使用非标准
+/// 分隔（如 LF-only，`take_sse_block` 永不命中），`buffer` 会随整个流无界
+/// 增长。超过上限后停止本地解析（usage 收集降级为缺失），但字节流仍原样
+/// 透传客户端，不影响对话功能。
+const MAX_SSE_PARSE_BUFFER_BYTES: usize = 1024 * 1024;
+
 /// 创建带日志记录和超时控制的透传流
 pub fn create_logged_passthrough_stream(
     stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
@@ -716,6 +724,7 @@ pub fn create_logged_passthrough_stream(
         let inspect_sse_events =
             collector.is_some() || log::log_enabled!(log::Level::Debug);
         let mut is_first_chunk = true;
+        let mut overflow_logged = false;
 
         // 超时配置
         let first_byte_timeout = if timeout_config.first_byte_timeout > 0 {
@@ -766,6 +775,19 @@ pub fn create_logged_passthrough_stream(
                     }
                     is_first_chunk = false;
                     if inspect_sse_events {
+                        // 缓冲超限保护：非标准分隔 / 压缩流下 `take_sse_block` 可能
+                        // 永不命中，buffer 无界增长会随长会话耗尽内存。超限后放弃
+                        // 本地解析（usage 降级），字节流仍原样透传。
+                        if buffer.len() >= MAX_SSE_PARSE_BUFFER_BYTES {
+                            if !overflow_logged {
+                                overflow_logged = true;
+                                log::warn!(
+                                    "[{tag}] SSE 解析缓冲超过 {MAX_SSE_PARSE_BUFFER_BYTES} 字节（上游流未按 \\n\\n 分帧或带压缩），停止本地 usage 解析，仅透传"
+                                );
+                            }
+                            buffer.clear();
+                            utf8_remainder.clear();
+                        } else {
                         crate::proxy::sse::append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
 
                         // 尝试解析并记录完整的 SSE 事件
@@ -797,6 +819,7 @@ pub fn create_logged_passthrough_stream(
                                     }
                                 }
                             }
+                        }
                         }
                     }
 

@@ -518,6 +518,99 @@ fn spawn_claude_usage_log(
     });
 }
 
+/// 将上游 HTTP 状态码映射为 Anthropic 标准错误类型（与 Anthropic 错误规范对齐，
+/// 供 Claude Code SDK 的分类重试/登录逻辑识别）。
+fn map_upstream_status_to_anthropic_error_type(status: u16) -> &'static str {
+    match status {
+        400 | 422 => "invalid_request_error",
+        401 | 403 => "authentication_error",
+        404 => "not_found_error",
+        429 => "rate_limit_error",
+        503 => "overloaded_error",
+        500 | 502 | 504 => "api_error",
+        _ => "api_error",
+    }
+}
+
+/// 提取上游错误响应的 message：兼容 OpenAI（`error.message` / `message` /
+/// `error` 字符串）与 Anthropic（`error.message`）两种 envelope。
+fn upstream_error_message(body: &Value) -> Option<String> {
+    body.pointer("/error/message")
+        .or_else(|| body.pointer("/message"))
+        .or_else(|| body.pointer("/error"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|message| !message.trim().is_empty())
+}
+
+/// 转换路径上的上游错误响应：读取错误体（有限长度），按状态码映射为
+/// Anthropic 标准错误 envelope，**保留上游状态码**。Anthropic 对流式请求的
+/// 错误响应同样是非流式 JSON，故不区分 stream。
+async fn handle_claude_transform_upstream_error(
+    response: super::hyper_client::ProxyResponse,
+    ctx: &RequestContext,
+    status: http::StatusCode,
+    connection_guard: Option<ActiveConnectionGuard>,
+) -> Result<axum::response::Response, ProxyError> {
+    // 错误路径不再透传上游连接：守卫随函数返回即释放
+    drop(connection_guard);
+    let error_type = map_upstream_status_to_anthropic_error_type(status.as_u16());
+    // 429 限流语义：先取 retry-after（body 消费后 headers 仍可读，但提前
+    // 保存更清晰）
+    let retry_after = response
+        .headers()
+        .get(axum::http::header::RETRY_AFTER)
+        .cloned();
+
+    let message = match response
+        .bytes_limited(super::hyper_client::MAX_BUFFERED_PROXY_BODY_BYTES)
+        .await
+    {
+        Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
+            .ok()
+            .and_then(|body| upstream_error_message(&body))
+            .unwrap_or_else(|| {
+                let text = String::from_utf8_lossy(&bytes);
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    format!("上游返回 HTTP {}", status.as_u16())
+                } else {
+                    // 非 JSON 错误体：截断后透传原文，避免把整段 HTML 塞进错误消息
+                    text.chars().take(500).collect::<String>()
+                }
+            }),
+        Err(e) => format!("读取上游错误响应失败: {e}"),
+    };
+
+    log::warn!(
+        "[{}] 上游转换路径错误: status={}, type={error_type}, message={}",
+        ctx.tag,
+        status.as_u16(),
+        message.chars().take(200).collect::<String>()
+    );
+
+    let mut builder = axum::response::Response::builder().status(status);
+    // 429 限流语义：透传上游 retry-after，让 Claude Code 的退避重试按
+    // 上游给出的时间窗口执行
+    if let Some(retry_after) = retry_after {
+        builder = builder.header(axum::http::header::RETRY_AFTER, retry_after);
+    }
+    let body = serde_json::to_vec(&json!({
+        "type": "error",
+        "error": {
+            "type": error_type,
+            "message": message,
+        }
+    }))
+    .map_err(|e| ProxyError::Internal(format!("序列化错误响应失败: {e}")))?;
+    Ok(builder
+        .body(axum::body::Body::from(body))
+        .map_err(|e| {
+            log::error!("[{}] 构建错误响应失败: {e}", ctx.tag);
+            ProxyError::Internal(format!("Failed to build error response: {e}"))
+        })?)
+}
+
 async fn handle_claude_transform(
     response: super::hyper_client::ProxyResponse,
     ctx: &RequestContext,
@@ -528,6 +621,17 @@ async fn handle_claude_transform(
     connection_guard: Option<ActiveConnectionGuard>,
 ) -> Result<axum::response::Response, ProxyError> {
     let status = response.status();
+
+    // 非 2xx：保留上游状态码与错误类型，转成 Anthropic 错误 envelope 返回。
+    // Claude Code SDK 依据 HTTP 状态码 + error.type 触发退避重试（429 →
+    // rate_limit_error）与重新登录（401 → authentication_error）；此前错误体
+    // 被当正常响应转换，429/401/5xx 一律变成 HTTP 200 + response_transform_error，
+    // 客户端的重试与登录失效逻辑全部失效。
+    if !status.is_success() {
+        return handle_claude_transform_upstream_error(response, ctx, status, connection_guard)
+            .await;
+    }
+
     let is_codex_oauth = ctx
         .provider
         .meta
@@ -1456,7 +1560,11 @@ async fn handle_codex_chat_to_responses_transform(
     if !sniffed_is_json {
         let stream = response.bytes_stream();
         let sse_stream = create_responses_sse_stream_from_chat_with_context(stream, tool_context);
-        let sse_stream = record_responses_sse_stream(sse_stream, state.codex_chat_history.clone());
+        let sse_stream = record_responses_sse_stream(
+            sse_stream,
+            state.codex_chat_history.clone(),
+            ctx.session_id.clone(),
+        );
 
         let usage_collector = if usage_logging_enabled(state) {
             let state = state.clone();
@@ -1592,7 +1700,7 @@ async fn handle_codex_chat_to_responses_transform(
     })?;
     state
         .codex_chat_history
-        .record_response(&responses_response)
+        .record_response(&responses_response, &ctx.session_id)
         .await;
 
     // 上游非流式 Chat 省略 usage 时，chat_usage_to_responses_usage 会合成全 0 usage
@@ -3076,6 +3184,62 @@ mod tests {
             axum::response::IntoResponse::into_response(err).status(),
             axum::http::StatusCode::BAD_REQUEST
         );
+    }
+
+    #[test]
+    fn upstream_status_maps_to_anthropic_error_types() {
+        // 转换路径错误映射：Claude Code SDK 依据状态码 + error.type 分类重试
+        assert_eq!(super::map_upstream_status_to_anthropic_error_type(429), "rate_limit_error");
+        assert_eq!(
+            super::map_upstream_status_to_anthropic_error_type(401),
+            "authentication_error"
+        );
+        assert_eq!(
+            super::map_upstream_status_to_anthropic_error_type(403),
+            "authentication_error"
+        );
+        assert_eq!(
+            super::map_upstream_status_to_anthropic_error_type(503),
+            "overloaded_error"
+        );
+        assert_eq!(
+            super::map_upstream_status_to_anthropic_error_type(500),
+            "api_error"
+        );
+        assert_eq!(
+            super::map_upstream_status_to_anthropic_error_type(400),
+            "invalid_request_error"
+        );
+        assert_eq!(
+            super::map_upstream_status_to_anthropic_error_type(404),
+            "not_found_error"
+        );
+    }
+
+    #[test]
+    fn upstream_error_message_extracts_from_both_envelopes() {
+        let openai = serde_json::json!({
+            "error": { "type": "rate_limit_error", "message": "Rate limit exceeded" }
+        });
+        assert_eq!(
+            super::upstream_error_message(&openai).as_deref(),
+            Some("Rate limit exceeded")
+        );
+
+        let anthropic = serde_json::json!({
+            "type": "error",
+            "error": { "type": "rate_limit_error", "message": "Too many requests" }
+        });
+        assert_eq!(
+            super::upstream_error_message(&anthropic).as_deref(),
+            Some("Too many requests")
+        );
+
+        let plain = serde_json::json!({ "message": "plain" });
+        assert_eq!(super::upstream_error_message(&plain).as_deref(), Some("plain"));
+
+        let empty = serde_json::json!({ "error": { "code": 500 } });
+        assert_eq!(super::upstream_error_message(&empty), None);
     }
 
     #[test]

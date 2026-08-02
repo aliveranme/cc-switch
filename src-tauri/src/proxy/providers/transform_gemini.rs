@@ -92,9 +92,19 @@ pub fn anthropic_to_gemini_with_shadow(
     }
 
     if let Some(tools) = body.get("tools").and_then(|value| value.as_array()) {
+        // 仅转换可映射为 functionDeclaration 的工具：跳过 BatchTool 以及
+        // 无 name 的内置工具（如 web_search_20250305——Anthropic 内置工具
+        // 不带 name 字段）。Gemini 的 FunctionDeclaration.name 为必填，
+        // 空名会让上游直接 400 拒绝整个请求。
         let function_declarations: Vec<Value> = tools
             .iter()
-            .filter(|tool| tool.get("type").and_then(|value| value.as_str()) != Some("BatchTool"))
+            .filter(|tool| {
+                tool.get("type").and_then(|value| value.as_str()) != Some("BatchTool")
+                    && tool
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|name| !name.trim().is_empty())
+            })
             .map(|tool| {
                 build_gemini_function_declaration(
                     tool.get("name")
@@ -370,26 +380,28 @@ fn build_generation_config(body: &Value) -> Option<Value> {
     // Anthropic thinking -> Gemini generationConfig.thinkingConfig。此前完全未
     // 映射：一个开了 extended thinking 的 Claude Code 请求经 Gemini 原生路径转发
     // 时，thinking 预算被丢弃，Gemini 端按默认（通常关闭或自动）处理。
+    //
+    // 取值约束（对齐官方 ThinkingConfig 语义）：
+    // - thinkingBudget 是 int32 非负字段，-1 非法（上游 400 INVALID_ARGUMENT）。
+    // - disabled 时不显式写 thinkingBudget=0：Gemini 2.5 系列常开思考，
+    //   显式 0 会静默关闭它；省略字段交给模型默认，行为与未发 thinking
+    //   的客户端一致。
+    // - enabled 无预算时省略 thinkingConfig 整体（模型默认预算），
+    //   而不是发非法 -1。
     if let Some(thinking) = body.get("thinking").and_then(|v| v.as_object()) {
         let mut tc = Map::new();
         match thinking.get("type").and_then(|v| v.as_str()) {
-            Some("disabled") => {
-                // thinkingBudget=0 明确关闭思考
-                tc.insert("thinkingBudget".to_string(), json!(0));
-            }
             Some("enabled") => {
-                // 有预算就透传，没有就用 -1（Gemini 的动态预算）
+                // 有预算就透传，没有就省略 thinkingConfig（模型默认预算）
                 if let Some(budget) = thinking.get("budget_tokens").and_then(|v| v.as_i64()) {
                     tc.insert("thinkingBudget".to_string(), json!(budget));
+                    tc.insert("includeThoughts".to_string(), json!(true));
                 } else {
-                    tc.insert("thinkingBudget".to_string(), json!(-1));
+                    tc.insert("includeThoughts".to_string(), json!(true));
                 }
-                tc.insert("includeThoughts".to_string(), json!(true));
             }
-            // 未知/adaptive：交给 Gemini 动态决定
-            _ => {
-                tc.insert("thinkingBudget".to_string(), json!(-1));
-            }
+            // disabled / adaptive / 未知：省略 thinkingConfig，交给模型默认
+            _ => {}
         }
         if !tc.is_empty() {
             config.insert("thinkingConfig".to_string(), Value::Object(tc));
@@ -649,18 +661,25 @@ fn convert_message_content_to_parts(
                     .and_then(|value| value.as_str())
                     .unwrap_or("");
 
+                // 非 base64 源（url 等）：降级为文本占位而非整请求报错。
+                // 一条 url 源图片让整个对话轮 400 会拖垮所有后续工具循环，
+                // 与 Chat/Responses 桥的降级策略对齐（H3）。
                 if source_type != "base64" {
-                    return Err(ProxyError::TransformError(format!(
-                        "Gemini Native only supports base64 image sources, got `{source_type}`"
-                    )));
+                    let url = source.get("url").and_then(|value| value.as_str()).unwrap_or(source_type);
+                    log::warn!(
+                        "[Gemini] user 消息含非 base64 图片源（{source_type}），降级为文本占位"
+                    );
+                    parts.push(json!({
+                        "text": format!("[cc-switch: image omitted (unsupported source `{source_type}`: {url})]")
+                    }));
+                } else {
+                    parts.push(json!({
+                        "inlineData": {
+                            "mimeType": source.get("media_type").and_then(|value| value.as_str()).unwrap_or("image/png"),
+                            "data": source.get("data").and_then(|value| value.as_str()).unwrap_or("")
+                        }
+                    }));
                 }
-
-                parts.push(json!({
-                    "inlineData": {
-                        "mimeType": source.get("media_type").and_then(|value| value.as_str()).unwrap_or("image/png"),
-                        "data": source.get("data").and_then(|value| value.as_str()).unwrap_or("")
-                    }
-                }));
             }
             "document" => {
                 let source = block.get("source").ok_or_else(|| {
@@ -673,17 +692,21 @@ fn convert_message_content_to_parts(
                     .unwrap_or("");
 
                 if source_type != "base64" {
-                    return Err(ProxyError::TransformError(format!(
-                        "Gemini Native only supports base64 document sources, got `{source_type}`"
-                    )));
+                    let url = source.get("url").and_then(|value| value.as_str()).unwrap_or(source_type);
+                    log::warn!(
+                        "[Gemini] user 消息含非 base64 document 源（{source_type}），降级为文本占位"
+                    );
+                    parts.push(json!({
+                        "text": format!("[cc-switch: document omitted (unsupported source `{source_type}`: {url})]")
+                    }));
+                } else {
+                    parts.push(json!({
+                        "inlineData": {
+                            "mimeType": source.get("media_type").and_then(|value| value.as_str()).unwrap_or("application/pdf"),
+                            "data": source.get("data").and_then(|value| value.as_str()).unwrap_or("")
+                        }
+                    }));
                 }
-
-                parts.push(json!({
-                    "inlineData": {
-                        "mimeType": source.get("media_type").and_then(|value| value.as_str()).unwrap_or("application/pdf"),
-                        "data": source.get("data").and_then(|value| value.as_str()).unwrap_or("")
-                    }
-                }));
             }
             "tool_use" => {
                 if role != "assistant" {
@@ -721,11 +744,18 @@ fn convert_message_content_to_parts(
                 // on every functionCall in a multi-turn tool-use exchange.
                 // Without replaying the stored signature the upstream may
                 // reject with "missing a `thought_signature`".
+                //
+                // 注意：thought_signature 是 **Part 级**字段（官方
+                // content.proto Part.thought_signature, field 13），不是
+                // FunctionCall 的成员。写入 functionCall 内部会被 protojson
+                // 丢弃未知字段，签名静默丢失；必须挂在 part 外层与读路径
+                // （convert_function_call_part / streaming_gemini）形状一致。
+                let mut part = json!({ "functionCall": function_call });
                 if let Some(sig) = thought_signature_by_id.get(id) {
-                    function_call["thoughtSignature"] = json!(sig);
+                    part["thoughtSignature"] = json!(sig);
                 }
 
-                parts.push(json!({ "functionCall": function_call }));
+                parts.push(part);
             }
             "tool_result" => {
                 let tool_use_id = block
@@ -1309,6 +1339,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn anthropic_to_gemini_downgrades_non_base64_image_instead_of_error() {
+        // H3 回归：url 源图片不得让整请求 400——降级为文本占位，
+        // 且同一消息的后续块（text）必须保留。
+        let input = json!({
+            "model": "gemini-3-pro",
+            "max_tokens": 64,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "image", "source": { "type": "url", "url": "file:///tmp/secret.png" } },
+                    { "type": "text", "text": "Look at this" }
+                ]
+            }]
+        });
+
+        let result = anthropic_to_gemini(input).unwrap();
+        let parts = result["contents"][0]["parts"].as_array().unwrap();
+        assert!(parts.iter().any(|part| {
+            part.get("text")
+                .and_then(|v| v.as_str())
+                .is_some_and(|t| t.contains("image omitted"))
+        }), "url 图片必须降级为文本占位，实际: {parts:?}");
+        assert!(parts.iter().any(|part| part.get("text") == Some(&json!("Look at this"))),
+            "后续 text 块必须保留");
+        assert!(!parts.iter().any(|part| part.get("inlineData").is_some()),
+            "不得生成 inlineData");
+    }
+
+    #[test]
     fn anthropic_to_gemini_maps_system_and_messages() {
         let input = json!({
             "model": "gemini-2.5-pro",
@@ -1356,9 +1415,41 @@ mod tests {
             "messages": [{ "role": "user", "content": "Hi" }]
         }))
         .unwrap();
+        // disabled 不再写 thinkingBudget=0（会静默关闭 Gemini 2.5 常开思考）；
+        // 省略 thinkingConfig 交给模型默认，与未发 thinking 的客户端一致。
+        assert!(
+            disabled["generationConfig"].get("thinkingConfig").is_none(),
+            "disabled 应省略 thinkingConfig，而非显式 0"
+        );
+
+        // enabled 无 budget_tokens：省略 thinkingBudget（-1 非法），仅声明 includeThoughts
+        let no_budget = anthropic_to_gemini(json!({
+            "model": "gemini-3-pro",
+            "thinking": { "type": "enabled" },
+            "messages": [{ "role": "user", "content": "Hi" }]
+        }))
+        .unwrap();
         assert_eq!(
-            disabled["generationConfig"]["thinkingConfig"]["thinkingBudget"],
-            0
+            no_budget["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            true
+        );
+        assert!(
+            no_budget["generationConfig"]["thinkingConfig"]
+                .get("thinkingBudget")
+                .is_none(),
+            "无预算时应省略 thinkingBudget，而非非法 -1"
+        );
+
+        // adaptive / 未知类型：省略 thinkingConfig
+        let adaptive = anthropic_to_gemini(json!({
+            "model": "gemini-3-pro",
+            "thinking": { "type": "adaptive" },
+            "messages": [{ "role": "user", "content": "Hi" }]
+        }))
+        .unwrap();
+        assert!(
+            adaptive["generationConfig"].get("thinkingConfig").is_none(),
+            "adaptive 应省略 thinkingConfig"
         );
     }
 
@@ -1435,6 +1526,27 @@ mod tests {
             result["toolConfig"]["functionCallingConfig"]["allowedFunctionNames"][0],
             "get_weather"
         );
+    }
+
+    #[test]
+    fn anthropic_to_gemini_skips_builtin_tools_without_name() {
+        // Claude Code 内置工具（web_search_20250305 等）不带 name 字段；
+        // Gemini FunctionDeclaration.name 为必填，空名会让上游 400。
+        // 有 name 的 custom 工具必须保留。
+        let input = json!({
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "tools": [
+                { "type": "web_search_20250305" },
+                { "type": "custom", "name": "get_weather", "description": "W", "input_schema": { "type": "object" } }
+            ]
+        });
+
+        let result = anthropic_to_gemini(input).unwrap();
+        let declarations = result["tools"][0]["functionDeclarations"]
+            .as_array()
+            .expect("functionDeclarations should exist");
+        assert_eq!(declarations.len(), 1, "无 name 的内置工具应被过滤");
+        assert_eq!(declarations[0]["name"], "get_weather");
     }
 
     #[test]

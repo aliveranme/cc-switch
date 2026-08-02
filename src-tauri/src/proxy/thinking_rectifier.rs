@@ -97,12 +97,24 @@ pub fn should_rectify_thinking_signature(
         return true;
     }
 
-    // 场景7: 非法请求（与 CCH 对齐，按 invalid request 统一兜底）
-    if lower.contains("非法请求")
-        || lower.contains("illegal request")
-        || lower.contains("invalid request")
+    // 场景7: thinking 相关的非法请求兜底。
+    // 收紧为「invalid request + thinking 信号」双条件：裸 "invalid request"
+    // 极常见（"invalid request: model not found"、限流/配额措辞），单靠它触发
+    // 整流会为与 thinking 无关的错误多付一次请求费，且整流后的错误会覆盖
+    // 原始诊断。整流只对 thinking 形状的请求有意义。
+    if lower.contains("invalid request") || lower.contains("illegal request") || lower.contains("非法请求")
     {
-        return true;
+        let mentions_thinking = lower.contains("thinking")
+            || lower.contains("redacted_thinking")
+            || lower.contains("signature")
+            || lower.contains("budget")
+            || lower.contains("output_config");
+        if mentions_thinking {
+            return true;
+        }
+        log::debug!(
+            "[ThinkingRectifier] 'invalid request' 但未提及 thinking 相关字段，不触发整流"
+        );
     }
 
     false
@@ -516,16 +528,32 @@ mod tests {
 
     #[test]
     fn test_detect_invalid_request() {
-        // 场景7: 非法请求（与 CCH 对齐，统一触发）
+        // 场景7: invalid request 兜底——必须同时提及 thinking 相关字段才整流。
+        // 裸 "invalid request"（model not found / 限流措辞）与 thinking 无关，
+        // 整流只会白付一次请求费并覆盖原始错误。
         assert!(should_rectify_thinking_signature(
             Some("非法请求：thinking signature 不合法"),
             &enabled_config()
         ));
         assert!(should_rectify_thinking_signature(
-            Some("illegal request: tool_use block mismatch"),
+            Some("illegal request: thinking block mismatch"),
             &enabled_config()
         ));
         assert!(should_rectify_thinking_signature(
+            Some("invalid request: signature field required"),
+            &enabled_config()
+        ));
+
+        // 与 thinking 无关的 invalid request 不得触发整流
+        assert!(!should_rectify_thinking_signature(
+            Some("invalid request: model not found"),
+            &enabled_config()
+        ));
+        assert!(!should_rectify_thinking_signature(
+            Some("illegal request: tool_use block mismatch"),
+            &enabled_config()
+        ));
+        assert!(!should_rectify_thinking_signature(
             Some("invalid request: malformed JSON"),
             &enabled_config()
         ));

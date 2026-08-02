@@ -301,8 +301,12 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                                 .and_then(|value| value.as_str())
                                 .map(ToString::to_string);
                         }
-                        if latest_usage.is_none() {
-                            latest_usage = chunk_json.get("usageMetadata").cloned();
+                        // usageMetadata 累计出现、最终 chunk 是权威值。独立于
+                        // candidates 更新：部分 relay 在末尾发「仅含 usageMetadata、
+                        // 无 candidates」的收尾 chunk，嵌在 candidate 分支内会漏掉
+                        // 最终计数（输出 token 偏低）。
+                        if let Some(usage) = chunk_json.get("usageMetadata") {
+                            latest_usage = Some(usage.clone());
                         }
 
                         if !has_sent_message_start {
@@ -335,9 +339,6 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                         {
                             if let Some(reason) = candidate.get("finishReason").and_then(|value| value.as_str()) {
                                 latest_finish_reason = Some(reason.to_string());
-                            }
-                            if let Some(usage) = chunk_json.get("usageMetadata") {
-                                latest_usage = Some(usage.clone());
                             }
                             if let Some(parts) = candidate
                                 .get("content")
@@ -405,6 +406,47 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                 Err(error) => {
                     yield Err(std::io::Error::other(error.to_string()));
                     return;
+                }
+            }
+        }
+
+        // 流结束冲刷残留 buffer：末 chunk 不以 \n\n 结尾（NDJSON 风格或分块
+        // 截断）时，最后一块数据从未被 take_sse_block 消费——finishReason 与
+        // 权威 usage 都在其中，丢弃会让 stop_reason 错误、输出 token 漏记。
+        // 文本/工具调用若在残留块中属上游分帧异常，无法补救，仅记录。
+        if !buffer.trim().is_empty() {
+            // 残留 buffer 是未消费的 SSE 事件块（带 `data: ` 前缀），先剥前缀
+            let residual_data = buffer
+                .lines()
+                .filter_map(|line| strip_sse_field(line, "data"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            match serde_json::from_str::<Value>(residual_data.trim()) {
+                Ok(chunk_json) => {
+                    if let Some(usage) = chunk_json.get("usageMetadata") {
+                        latest_usage = Some(usage.clone());
+                    }
+                    if let Some(candidate) = chunk_json
+                        .get("candidates")
+                        .and_then(|value| value.as_array())
+                        .and_then(|value| value.first())
+                    {
+                        if let Some(reason) =
+                            candidate.get("finishReason").and_then(|value| value.as_str())
+                        {
+                            latest_finish_reason = Some(reason.to_string());
+                        }
+                    }
+                    log::debug!(
+                        "[Gemini] 流结束冲刷残留 buffer：已提取 usage/finishReason（bytes={}）",
+                        buffer.len()
+                    );
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[Gemini] 流结束残留 buffer 不是合法 JSON（bytes={}），已丢弃: {e}",
+                        buffer.len()
+                    );
                 }
             }
         }
@@ -597,6 +639,38 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("")
         })
+    }
+
+    #[test]
+    fn residual_buffer_without_trailing_blank_line_is_flushed_for_usage() {
+        // 末 chunk 不以 \n\n 结尾（NDJSON 风格 / 分块截断）：残留块从未被
+        // take_sse_block 消费。流结束冲刷必须提取其中的 finishReason 与
+        // usageMetadata，否则 stop_reason 错误、输出 token 漏记。
+        let output = collect_stream_output(vec![
+            "data: {\"responseId\":\"resp_1\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello\"}]}}],\"usageMetadata\":{\"promptTokenCount\":10,\"totalTokenCount\":13}}\n\n",
+            "data: {\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\" world\"}]}}],\"usageMetadata\":{\"promptTokenCount\":10,\"totalTokenCount\":16}}",
+        ]);
+
+        assert!(output.contains("\"stop_reason\":\"end_turn\""), "残留块 finishReason 必须被冲刷");
+        assert!(
+            output.contains("\"output_tokens\":6"),
+            "残留块 usage（total 16 - prompt 10）必须被冲刷，实际: {output}"
+        );
+    }
+
+    #[test]
+    fn usage_only_tail_chunk_updates_final_usage() {
+        // 部分 relay 在末尾发「仅含 usageMetadata、无 candidates」的收尾 chunk，
+        // 权威计数在其中。usage 更新独立于 candidate 分支后必须生效。
+        let output = collect_stream_output(vec![
+            "data: {\"responseId\":\"resp_2\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"Hi\"}]}}],\"usageMetadata\":{\"promptTokenCount\":10,\"totalTokenCount\":12}}\n\n",
+            "data: {\"usageMetadata\":{\"promptTokenCount\":10,\"totalTokenCount\":15}}\n\n",
+        ]);
+
+        assert!(
+            output.contains("\"output_tokens\":5"),
+            "仅 usage 的收尾 chunk 必须更新最终计数（total 15 - prompt 10），实际: {output}"
+        );
     }
 
     fn collect_stream_output_with_shadow(

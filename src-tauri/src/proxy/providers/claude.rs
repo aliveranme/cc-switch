@@ -109,9 +109,13 @@ fn is_reasoning_vendor_identifier(value: &str) -> bool {
 
 /// 是否为 DeepSeek reasoner 请求（thinking 模式下 tool_choice 仅接受 auto/none）。
 ///
-/// - 模型名或 base_url 命中 deepseek 才继续判断；
+/// - 模型名命中 deepseek 或 base_url 为 DeepSeek **官方域**才继续判断；
 /// - reasoner 家族（deepseek-v4-* / deepseek-reasoner）默认常开 thinking → 恒降级；
 /// - 其余 deepseek 模型（V3.x 等）仅在请求显式开启 thinking 时降级。
+///
+/// base_url 必须解析 host 做精确/后缀匹配：裸子串匹配会误伤聚合站
+/// （如 router.deepseek-proxy.com、api.deepseek-relay.example），把非 DeepSeek
+/// 上游的强制工具调用静默降级为 auto。
 fn is_deepseek_reasoner_request(provider: &Provider, body: &Value) -> bool {
     let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("");
     let model_is_deepseek = model.to_ascii_lowercase().contains("deepseek");
@@ -128,7 +132,7 @@ fn is_deepseek_reasoner_request(provider: &Provider, body: &Value) -> bool {
     ]
     .into_iter()
     .flatten()
-    .any(|u| u.to_ascii_lowercase().contains("deepseek"));
+    .any(|u| is_deepseek_official_base_url(u));
 
     if !(model_is_deepseek || base_url_is_deepseek) {
         return false;
@@ -142,6 +146,19 @@ fn is_deepseek_reasoner_request(provider: &Provider, body: &Value) -> bool {
             .and_then(|v| v.as_str()),
         Some("enabled") | Some("adaptive")
     )
+}
+
+/// DeepSeek 官方 API 域判定：`deepseek.com` / `*.deepseek.com` 及其
+/// `api.` 子域。聚合站 / 中转（host 含 deepseek 但非官方域）不算数。
+fn is_deepseek_official_base_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    host == "deepseek.com"
+        || host.ends_with(".deepseek.com")
+        || host == "api.deepseek.com"
+        || host.ends_with(".api.deepseek.com")
 }
 
 fn should_normalize_anthropic_tool_thinking_history(
@@ -1870,6 +1887,42 @@ mod tests {
             transform_claude_request_for_api_format(body, &provider, "openai_chat", None, None)
                 .unwrap();
         assert_eq!(transformed["tool_choice"], json!("auto"));
+    }
+
+    #[test]
+    fn test_openai_chat_aggregator_with_deepseek_in_host_is_not_downgraded() {
+        // 聚合站 / 中转的 host 含 "deepseek" 但非官方域（api.deepseek.com）：
+        // 裸子串匹配会误伤并把强制工具调用静默降级为 auto，官方域匹配应放行。
+        let provider = create_provider(json!({
+            "base_url": "https://router.deepseek-proxy.com/v1"
+        }));
+        let transformed = transform_claude_request_for_api_format(
+            deepseek_forced_tool_body("claude-sonnet-4-5"),
+            &provider,
+            "openai_chat",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            transformed["tool_choice"].get("type").and_then(|v| v.as_str()),
+            Some("function"),
+            "非 DeepSeek 官方域的聚合站不应触发 tool_choice 降级（强制工具调用必须保留）"
+        );
+
+        // 官方域必须仍命中
+        let official = create_provider(json!({
+            "base_url": "https://api.deepseek.com"
+        }));
+        let transformed2 = transform_claude_request_for_api_format(
+            deepseek_forced_tool_body("claude-sonnet-4-5"),
+            &official,
+            "openai_chat",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(transformed2["tool_choice"], json!("auto"));
     }
 
     #[test]

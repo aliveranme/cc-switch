@@ -961,6 +961,20 @@ pub fn openai_to_anthropic(body: Value) -> Result<Value, ProxyError> {
         "output_tokens": output_tokens
     });
 
+    // 思考 token 记账：OpenAI 兼容上游把推理 token 计入
+    // completion_tokens_details.reasoning_tokens（DeepSeek/Kimi 等思考型
+    // 模型）。映射为 Anthropic output_tokens_details.thinking_tokens，
+    // 与流式路径（streaming.rs build_anthropic_usage_json）对称，
+    // 否则思考成本在非流式请求下整体漏记。
+    if let Some(reasoning_tokens) = usage
+        .pointer("/completion_tokens_details/reasoning_tokens")
+        .and_then(|v| v.as_u64())
+        .filter(|v| *v > 0)
+    {
+        usage_json["output_tokens_details"] =
+            json!({ "thinking_tokens": reasoning_tokens });
+    }
+
     if cached > 0 {
         usage_json["cache_read_input_tokens"] = json!(cached);
     }
