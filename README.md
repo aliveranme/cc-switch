@@ -2,6 +2,10 @@
 
 # CC Switch
 
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="100%" alt="CC Switch: switch API providers, MCP, prompts and skills across eight AI coding tools from one desktop app">
+</p>
+
 ### The All-in-One Manager for Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw & Hermes Agent
 
 [![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
@@ -211,6 +215,16 @@ Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex
 - **Cloud Sync** — Sync provider data across devices via Dropbox, OneDrive, iCloud, or WebDAV servers
 - **Cross-Platform** — Native desktop app for Windows, macOS, and Linux, built with Tauri 2
 - **Built-in Utilities** — Includes various utilities for first-launch login confirmation, signature bypass, plugin extension sync, and more
+
+## How it works
+
+<p align="center">
+  <img src="./assets/readme/how-it-works.svg" width="100%" alt="How CC Switch works: one SQLite database is the single source of truth; switching atomically writes each tool's live config file, and edits to live files sync back to the database">
+</p>
+
+- **One database behind every tool** — providers, MCP, prompts, skills, and usage data live in a single SQLite file (`~/.cc-switch/cc-switch.db`)
+- **Switching writes the live files** — CC Switch merges the active provider into each tool's own config, via temp file + rename, so an interrupted switch can never leave a half-written file
+- **Your hand edits are kept** — editing the active provider's live config backfills the database instead of being overwritten
 
 ## Screenshots
 
