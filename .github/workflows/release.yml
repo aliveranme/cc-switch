@@ -581,7 +581,7 @@ jobs:
         with:
           tag_name: ${{ needs.resolve-version.outputs.tag }}
           name: CC Switch ${{ needs.resolve-version.outputs.tag }}
-          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || true }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease }}
           fail_on_unmatched_files: false
           overwrite_files: true
           body_path: release-body.md
