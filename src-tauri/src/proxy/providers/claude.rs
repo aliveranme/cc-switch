@@ -107,6 +107,43 @@ fn is_reasoning_vendor_identifier(value: &str) -> bool {
         .any(|hint| value.contains(hint))
 }
 
+/// 是否为 DeepSeek reasoner 请求（thinking 模式下 tool_choice 仅接受 auto/none）。
+///
+/// - 模型名或 base_url 命中 deepseek 才继续判断；
+/// - reasoner 家族（deepseek-v4-* / deepseek-reasoner）默认常开 thinking → 恒降级；
+/// - 其余 deepseek 模型（V3.x 等）仅在请求显式开启 thinking 时降级。
+fn is_deepseek_reasoner_request(provider: &Provider, body: &Value) -> bool {
+    let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let model_is_deepseek = model.to_ascii_lowercase().contains("deepseek");
+
+    let settings = &provider.settings_config;
+    let base_url_is_deepseek = [
+        settings
+            .get("env")
+            .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
+            .and_then(|v| v.as_str()),
+        settings.get("base_url").and_then(|v| v.as_str()),
+        settings.get("baseURL").and_then(|v| v.as_str()),
+        settings.get("apiEndpoint").and_then(|v| v.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|u| u.to_ascii_lowercase().contains("deepseek"));
+
+    if !(model_is_deepseek || base_url_is_deepseek) {
+        return false;
+    }
+    if super::transform::is_deepseek_reasoner_family(model) {
+        return true;
+    }
+    matches!(
+        body.get("thinking")
+            .and_then(|t| t.get("type"))
+            .and_then(|v| v.as_str()),
+        Some("enabled") | Some("adaptive")
+    )
+}
+
 fn should_normalize_anthropic_tool_thinking_history(
     provider: &Provider,
     body: &Value,
@@ -443,6 +480,15 @@ pub fn transform_claude_request_for_api_format(
         "openai_chat" => {
             let preserve_reasoning_content =
                 should_preserve_reasoning_content_for_openai_chat(provider, &body);
+            // DeepSeek reasoner 兼容：V4/reasoner 系列默认常开 thinking，仅接受
+            // tool_choice "auto"/"none"；V3.x 显式开启 thinking 时同样受限。
+            // Claude Code 的 WebSearch 等内置工具会强制具名 tool_choice，转换后为
+            // {"type":"function","function":{...}}，直发 DeepSeek 会 HTTP 400
+            // （"Thinking mode does not support this tool_choice"，见
+            // https://api-docs.deepseek.com/guides/thinking_mode/）。降级为 "auto"
+            // 保留模型自主调用工具的能力（与 LiteLLM 同款策略，BerriAI/litellm#27628）。
+            // 检测须在 body move 进转换之前，基于原始 Anthropic 请求体。
+            let downgrade_tool_choice = is_deepseek_reasoner_request(provider, &body);
             let mut result = super::transform::anthropic_to_openai_with_reasoning_content(
                 body,
                 preserve_reasoning_content,
@@ -459,6 +505,9 @@ pub fn transform_claude_request_for_api_format(
             // 不在 SSE 末尾吐 usage → 转换出的 Anthropic message_delta 全 0 →
             // 整笔 input/output/cache 漏记（与 Codex Responses→Chat 路径同源）。
             super::transform::inject_openai_stream_include_usage(&mut result);
+            if downgrade_tool_choice {
+                super::transform::downgrade_forced_tool_choice_to_auto(&mut result);
+            }
             Ok(result)
         }
         "gemini_native" => super::transform_gemini::anthropic_to_gemini_with_shadow(
@@ -1677,6 +1726,113 @@ mod tests {
             },
         );
         assert!(!adapter.needs_transform(&unknown_format));
+    }
+
+    // ── DeepSeek reasoner 强制 tool_choice 降级（thinking 模式仅接受 auto/none） ──
+
+    fn deepseek_forced_tool_body(model: &str) -> serde_json::Value {
+        json!({
+            "model": model,
+            "max_tokens": 1024,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": "hello" }],
+            "tools": [{
+                "name": "web_search",
+                "description": "Search the web",
+                "input_schema": { "type": "object", "properties": {} }
+            }],
+            "tool_choice": { "type": "tool", "name": "web_search" }
+        })
+    }
+
+    #[test]
+    fn test_openai_chat_deepseek_v4_downgrades_forced_tool_choice() {
+        // deepseek-v4 默认常开 thinking，具名强制 tool_choice 必须降级为 auto。
+        let provider = create_provider(json!({}));
+        let transformed = transform_claude_request_for_api_format(
+            deepseek_forced_tool_body("deepseek-v4-pro"),
+            &provider,
+            "openai_chat",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(transformed["tool_choice"], json!("auto"));
+        // 工具列表本身不受影响
+        assert_eq!(transformed["tools"][0]["function"]["name"], json!("web_search"));
+    }
+
+    #[test]
+    fn test_openai_chat_deepseek_v3_thinking_enabled_downgrades_forced_tool_choice() {
+        // V3.x 显式开启 thinking 时同样拒绝强制 tool_choice。
+        let provider = create_provider(json!({}));
+        let transformed = transform_claude_request_for_api_format(
+            deepseek_forced_tool_body("deepseek-chat"),
+            &provider,
+            "openai_chat",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(transformed["tool_choice"], json!("auto"));
+    }
+
+    #[test]
+    fn test_openai_chat_deepseek_thinking_off_keeps_forced_tool_choice() {
+        // thinking 关闭时 DeepSeek 支持强制调用，保持具名形式。
+        let mut body = deepseek_forced_tool_body("deepseek-chat");
+        body["thinking"] = json!({ "type": "disabled" });
+        let provider = create_provider(json!({}));
+        let transformed = transform_claude_request_for_api_format(
+            body,
+            &provider,
+            "openai_chat",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            transformed["tool_choice"],
+            json!({"type": "function", "function": {"name": "web_search"}})
+        );
+    }
+
+    #[test]
+    fn test_openai_chat_non_deepseek_keeps_forced_tool_choice() {
+        // 非 deepseek 模型不受影响。
+        let provider = create_provider(json!({}));
+        let transformed = transform_claude_request_for_api_format(
+            deepseek_forced_tool_body("gpt-4o"),
+            &provider,
+            "openai_chat",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            transformed["tool_choice"],
+            json!({"type": "function", "function": {"name": "web_search"}})
+        );
+    }
+
+    #[test]
+    fn test_openai_chat_deepseek_base_url_detects_reasoner_request() {
+        // 模型名不含 deepseek 但 base_url 命中时，仍按 thinking 状态判定。
+        let provider = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://opencode.ai/zen/go/v1" },
+            "base_url": "https://api.deepseek.com"
+        }));
+        // 模型名非 deepseek 家族 → 靠 base_url + thinking 状态命中降级分支
+        let body = deepseek_forced_tool_body("claude-sonnet-4-5");
+        let transformed = transform_claude_request_for_api_format(
+            body,
+            &provider,
+            "openai_chat",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(transformed["tool_choice"], json!("auto"));
     }
 
     #[test]

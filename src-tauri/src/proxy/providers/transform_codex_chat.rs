@@ -325,6 +325,28 @@ pub fn responses_to_chat_completions_with_reasoning(
         result["tool_choice"] = responses_tool_choice_to_chat(tool_choice, &tool_context);
     }
 
+    // DeepSeek reasoner 兼容：V4/reasoner 家族默认常开 thinking，仅接受
+    // tool_choice "auto"/"none"；其余 deepseek 模型显式开启 thinking 时同样受限。
+    // 强制/具名形式（"required"、{"type":"function",...}）直发会 HTTP 400
+    // （"Thinking mode does not support this tool_choice"，见
+    // https://api-docs.deepseek.com/guides/thinking_mode/）。降级为 "auto"
+    // 保留模型自主调用工具的能力（与 Claude→openai_chat 路径同款策略，
+    // BerriAI/litellm#27628）。
+    let is_deepseek = reasoning_config
+        .as_ref()
+        .and_then(|c| c.effort_value_mode.as_deref())
+        == Some("deepseek");
+    if is_deepseek
+        && (super::transform::is_deepseek_reasoner_family(model)
+            || result
+                .get("thinking")
+                .and_then(|t| t.get("type"))
+                .and_then(Value::as_str)
+                == Some("enabled"))
+    {
+        super::transform::downgrade_forced_tool_choice_to_auto(&mut result);
+    }
+
     for key in EXTRA_CHAT_PASSTHROUGH_FIELDS {
         if let Some(value) = body.get(*key) {
             result[*key] = value.clone();
@@ -2503,6 +2525,104 @@ mod tests {
 
         assert_eq!(result["thinking"]["type"], "enabled");
         assert_eq!(result["reasoning_effort"], "max");
+    }
+
+    fn deepseek_reasoning_config() -> CodexChatReasoningConfig {
+        CodexChatReasoningConfig {
+            supports_thinking: Some(true),
+            supports_effort: Some(true),
+            thinking_param: Some("thinking".to_string()),
+            effort_param: Some("reasoning_effort".to_string()),
+            effort_value_mode: Some("deepseek".to_string()),
+            output_format: Some("reasoning_content".to_string()),
+        }
+    }
+
+    #[test]
+    fn responses_request_to_chat_deepseek_v4_downgrades_forced_tool_choice() {
+        // V4 reasoner 家族默认常开 thinking，仅接受 auto/none：
+        // 具名强制 tool_choice 必须降级为 auto（LiteLLM#27628 同款策略）。
+        let input = json!({
+            "model": "deepseek-v4-pro",
+            "input": "hello",
+            "reasoning": {"effort": "high"},
+            "tools": [{"type": "function", "name": "get_weather", "description": "weather"}],
+            "tool_choice": {"type": "function", "name": "get_weather"}
+        });
+        let result = responses_to_chat_completions_with_reasoning(
+            input,
+            Some(&deepseek_reasoning_config()),
+        )
+        .unwrap();
+        assert_eq!(result["thinking"]["type"], "enabled");
+        assert_eq!(result["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn responses_request_to_chat_deepseek_v3_thinking_enabled_downgrades_forced_tool_choice() {
+        // V3.x 显式开启 thinking 时同样拒绝强制 tool_choice。
+        let input = json!({
+            "model": "deepseek-chat",
+            "input": "hello",
+            "reasoning": {"effort": "high"},
+            "tools": [{"type": "function", "name": "get_weather", "description": "weather"}],
+            "tool_choice": {"type": "function", "name": "get_weather"}
+        });
+        let result = responses_to_chat_completions_with_reasoning(
+            input,
+            Some(&deepseek_reasoning_config()),
+        )
+        .unwrap();
+        assert_eq!(result["thinking"]["type"], "enabled");
+        assert_eq!(result["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn responses_request_to_chat_deepseek_thinking_off_keeps_forced_tool_choice() {
+        // thinking 显式关闭时不降级：非 thinking 模式 DeepSeek 支持强制调用。
+        let input = json!({
+            "model": "deepseek-chat",
+            "input": "hello",
+            "reasoning": {"effort": "none"},
+            "tools": [{"type": "function", "name": "get_weather", "description": "weather"}],
+            "tool_choice": {"type": "function", "name": "get_weather"}
+        });
+        let result = responses_to_chat_completions_with_reasoning(
+            input,
+            Some(&deepseek_reasoning_config()),
+        )
+        .unwrap();
+        assert_eq!(result["thinking"]["type"], "disabled");
+        assert_eq!(
+            result["tool_choice"],
+            json!({"type": "function", "function": {"name": "get_weather"}})
+        );
+    }
+
+    #[test]
+    fn responses_request_to_chat_non_deepseek_keeps_forced_tool_choice() {
+        // 非 deepseek 平台（如 OpenRouter）不受 thinking 模式 tool_choice 限制。
+        let config = CodexChatReasoningConfig {
+            supports_thinking: Some(false),
+            supports_effort: Some(true),
+            thinking_param: Some("none".to_string()),
+            effort_param: Some("reasoning.effort".to_string()),
+            effort_value_mode: Some("openrouter".to_string()),
+            output_format: Some("auto".to_string()),
+        };
+        let input = json!({
+            "model": "deepseek/deepseek-chat-v3.1",
+            "input": "hello",
+            "reasoning": {"effort": "high"},
+            "tools": [{"type": "function", "name": "get_weather", "description": "weather"}],
+            "tool_choice": {"type": "function", "name": "get_weather"}
+        });
+        let result =
+            responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
+        assert_eq!(
+            result["tool_choice"],
+            json!({"type": "function", "function": {"name": "get_weather"}})
+        );
     }
 
     #[test]

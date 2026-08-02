@@ -389,6 +389,37 @@ fn map_tool_choice_to_chat(tool_choice: &Value) -> Value {
     }
 }
 
+/// 是否为 DeepSeek reasoner 家族模型（`deepseek-v4-*` / `deepseek-reasoner`）。
+///
+/// V4 系列（deepseek-v4-pro / deepseek-v4-flash）默认常开 thinking 模式，且
+/// thinking 模式下 DeepSeek 仅接受 `tool_choice` 的 `"auto"` / `"none"`，
+/// `"required"` 与具名 function 形式一律 HTTP 400
+/// （"Thinking mode does not support this tool_choice"，见
+/// <https://api-docs.deepseek.com/guides/thinking_mode/>）。
+pub(crate) fn is_deepseek_reasoner_family(model: &str) -> bool {
+    let normalized = model.to_ascii_lowercase();
+    normalized.contains("deepseek-v4") || normalized.contains("deepseek-reasoner")
+}
+
+/// 将 DeepSeek thinking 模式不支持的强制 / 具名 `tool_choice` 降级为 `"auto"`。
+///
+/// Claude Code 的 WebSearch 等内置工具会强制具名调用，经 Anthropic→OpenAI 转换后
+/// 变成 `"required"` 或 `{"type":"function","function":{"name":...}}`；
+/// DeepSeek reasoner（V4 默认常开 thinking）只接受 `"auto"`/`"none"`，
+/// 强制形式直接 400。降级为 `"auto"` 保留模型自主调用工具的能力
+/// （与 LiteLLM 同款策略，见 BerriAI/litellm#27628）。
+/// `"auto"` / `"none"` 原样保留，无 tool_choice 时不做任何事。
+pub(crate) fn downgrade_forced_tool_choice_to_auto(result: &mut Value) {
+    let forced = match result.get("tool_choice") {
+        Some(Value::String(s)) => s == "required",
+        Some(Value::Object(obj)) => obj.get("type").and_then(Value::as_str) == Some("function"),
+        _ => false,
+    };
+    if forced {
+        result["tool_choice"] = json!("auto");
+    }
+}
+
 /// Normalize OpenAI Chat system messages for prefix-cache stability.
 ///
 /// Anthropic's top-level `system` field produces consecutive leading system
@@ -2204,6 +2235,50 @@ mod tests {
             run_tool_choice(json!({"type": "tool", "name": "search"})),
             json!({"type": "function", "function": {"name": "search"}}),
         );
+    }
+
+    // ── is_deepseek_reasoner_family / downgrade_forced_tool_choice_to_auto ──
+
+    #[test]
+    fn deepseek_reasoner_family_detects_v4_and_reasoner_models() {
+        assert!(is_deepseek_reasoner_family("deepseek-v4-pro"));
+        assert!(is_deepseek_reasoner_family("DeepSeek-V4-Flash"));
+        assert!(is_deepseek_reasoner_family("deepseek-reasoner"));
+        assert!(!is_deepseek_reasoner_family("deepseek-chat"));
+        assert!(!is_deepseek_reasoner_family("deepseek/deepseek-chat-v3.1"));
+        assert!(!is_deepseek_reasoner_family("gpt-4o"));
+    }
+
+    fn run_downgrade(tool_choice: Value) -> Value {
+        let mut result = json!({ "tool_choice": tool_choice });
+        downgrade_forced_tool_choice_to_auto(&mut result);
+        result["tool_choice"].clone()
+    }
+
+    #[test]
+    fn downgrade_forced_tool_choice_to_auto_rewrites_required() {
+        assert_eq!(run_downgrade(json!("required")), json!("auto"));
+    }
+
+    #[test]
+    fn downgrade_forced_tool_choice_to_auto_rewrites_named_function() {
+        assert_eq!(
+            run_downgrade(json!({"type": "function", "function": {"name": "web_search"}})),
+            json!("auto")
+        );
+    }
+
+    #[test]
+    fn downgrade_forced_tool_choice_to_auto_keeps_auto_and_none() {
+        assert_eq!(run_downgrade(json!("auto")), json!("auto"));
+        assert_eq!(run_downgrade(json!("none")), json!("none"));
+    }
+
+    #[test]
+    fn downgrade_forced_tool_choice_to_auto_noop_without_choice() {
+        let mut result = json!({ "model": "deepseek-v4-pro" });
+        downgrade_forced_tool_choice_to_auto(&mut result);
+        assert!(result.get("tool_choice").is_none());
     }
 
     // ── normalize_openai_system_messages ──
