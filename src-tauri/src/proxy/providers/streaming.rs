@@ -538,12 +538,9 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                                 //    content_block_start，晚到的碎片不会重排已发出的块。
                                                 let mut ready_starts: Vec<(u32, String, String, String)> =
                                                     Vec::new();
-                                                loop {
-                                                    let Some(state) = tool_blocks_by_index
-                                                        .get_mut(&next_tool_start_index)
-                                                    else {
-                                                        break;
-                                                    };
+                                                while let Some(state) = tool_blocks_by_index
+                                                    .get_mut(&next_tool_start_index)
+                                                {
                                                     if state.aborted {
                                                         next_tool_start_index += 1;
                                                         continue;
@@ -780,7 +777,6 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                     serde_json::to_string(&event).unwrap_or_default());
                 yield Ok(Bytes::from(sse_data));
             }
-            current_non_tool_block_type = None;
             if !open_tool_block_indices.is_empty() {
                 let mut tool_indices: Vec<u32> =
                     open_tool_block_indices.iter().copied().collect();
@@ -1187,8 +1183,11 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(start_names, vec!["first_tool", "second_tool"],
-            "index 0 晚到身份碎片也不得重排：start 顺序必须与 Chat index 一致");
+        assert_eq!(
+            start_names,
+            vec!["first_tool", "second_tool"],
+            "index 0 晚到身份碎片也不得重排：start 顺序必须与 Chat index 一致"
+        );
     }
 
     #[tokio::test]
@@ -1240,7 +1239,7 @@ mod tests {
 
         assert_eq!(start_names, vec!["first_tool"]);
         assert!(
-            !start_names.iter().any(|name| *name == "unknown_tool"),
+            !start_names.contains(&"unknown_tool"),
             "不得伪造 unknown_tool 工具名"
         );
     }
@@ -1550,11 +1549,15 @@ mod tests {
         // 修复后行为：上游流结束但从未发 finish_reason 时，有实质输出的流必须
         // 补发终止事件（end_turn + message_stop），否则 Claude Code 静默挂起。
         assert!(
-            events.iter().any(|event| event_type(event) == Some("message_delta")),
+            events
+                .iter()
+                .any(|event| event_type(event) == Some("message_delta")),
             "截断流（无 finish_reason）必须补发 message_delta，实际: {events:?}"
         );
         assert!(
-            events.iter().any(|event| event_type(event) == Some("message_stop")),
+            events
+                .iter()
+                .any(|event| event_type(event) == Some("message_stop")),
             "截断流（无 finish_reason）必须补发 message_stop"
         );
         // 内容块必须闭合（stop 在 message_delta 之前）
@@ -1569,7 +1572,10 @@ mod tests {
                     && e.pointer("/index").and_then(|v| v.as_u64()) == Some(0)
             })
             .unwrap();
-        assert!(text_stop_pos < delta_pos, "content_block_stop 必须先于 message_delta");
+        assert!(
+            text_stop_pos < delta_pos,
+            "content_block_stop 必须先于 message_delta"
+        );
     }
 
     #[tokio::test]

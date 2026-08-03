@@ -651,7 +651,10 @@ mod tests {
             "data: {\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\" world\"}]}}],\"usageMetadata\":{\"promptTokenCount\":10,\"totalTokenCount\":16}}",
         ]);
 
-        assert!(output.contains("\"stop_reason\":\"end_turn\""), "残留块 finishReason 必须被冲刷");
+        assert!(
+            output.contains("\"stop_reason\":\"end_turn\""),
+            "残留块 finishReason 必须被冲刷"
+        );
         assert!(
             output.contains("\"output_tokens\":6"),
             "残留块 usage（total 16 - prompt 10）必须被冲刷，实际: {output}"

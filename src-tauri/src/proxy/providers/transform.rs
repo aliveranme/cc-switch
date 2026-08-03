@@ -971,8 +971,7 @@ pub fn openai_to_anthropic(body: Value) -> Result<Value, ProxyError> {
         .and_then(|v| v.as_u64())
         .filter(|v| *v > 0)
     {
-        usage_json["output_tokens_details"] =
-            json!({ "thinking_tokens": reasoning_tokens });
+        usage_json["output_tokens_details"] = json!({ "thinking_tokens": reasoning_tokens });
     }
 
     if cached > 0 {
@@ -1758,7 +1757,8 @@ mod tests {
                 "content": anthropic_response["content"].clone()
             }]
         });
-        let replayed = anthropic_to_openai_with_reasoning_content(follow_up_request, true, false).unwrap();
+        let replayed =
+            anthropic_to_openai_with_reasoning_content(follow_up_request, true, false).unwrap();
         let msg = &replayed["messages"][0];
 
         assert_eq!(

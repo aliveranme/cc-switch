@@ -132,7 +132,7 @@ fn is_deepseek_reasoner_request(provider: &Provider, body: &Value) -> bool {
     ]
     .into_iter()
     .flatten()
-    .any(|u| is_deepseek_official_base_url(u));
+    .any(is_deepseek_official_base_url);
 
     if !(model_is_deepseek || base_url_is_deepseek) {
         return false;
@@ -411,9 +411,10 @@ pub(crate) fn is_opencode_go_gateway(provider: &Provider) -> bool {
         settings.get("apiEndpoint").and_then(|v| v.as_str()),
     ];
 
-    base_urls.into_iter().flatten().any(|url| {
-        url.contains("opencode.ai") && url.contains("/zen/")
-    })
+    base_urls
+        .into_iter()
+        .flatten()
+        .any(|url| url.contains("opencode.ai") && url.contains("/zen/"))
 }
 
 pub fn transform_claude_request_for_api_format(
@@ -550,7 +551,7 @@ pub fn transform_claude_request_for_api_format(
             // 字符）+ 缓存保留时长（默认 24h，网关 schema 枚举 in_memory|24h）。
             if opencode_go {
                 if result.get("prompt_cache_key").is_none() {
-                    if let Some(key) = cache_key.as_deref() {
+                    if let Some(key) = cache_key {
                         let key: String = key.chars().take(64).collect();
                         result["prompt_cache_key"] = serde_json::json!(key);
                     }
@@ -1905,7 +1906,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            transformed["tool_choice"].get("type").and_then(|v| v.as_str()),
+            transformed["tool_choice"]
+                .get("type")
+                .and_then(|v| v.as_str()),
             Some("function"),
             "非 DeepSeek 官方域的聚合站不应触发 tool_choice 降级（强制工具调用必须保留）"
         );

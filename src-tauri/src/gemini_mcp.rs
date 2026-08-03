@@ -147,7 +147,10 @@ pub fn set_mcp_servers_map(
 
         match (startup_ms, tool_ms) {
             (Some(startup), Some(tool)) => {
-                obj.insert("timeout".to_string(), Value::Number(startup.max(tool).into()));
+                obj.insert(
+                    "timeout".to_string(),
+                    Value::Number(startup.max(tool).into()),
+                );
             }
             (Some(startup), None) => {
                 obj.insert("timeout".to_string(), Value::Number(startup.into()));

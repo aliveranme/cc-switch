@@ -1629,22 +1629,17 @@ fn set_codex_experimental_bearer_token(config_text: &str, token: &str) -> Result
     // 当前 Codex 静默忽略，不能作为兜底。
     let provider_table = doc
         .entry("model_providers")
-        .or_insert_with(|| toml_edit::table().into())
+        .or_insert_with(toml_edit::table)
         .as_table_like_mut()
         .and_then(|providers| {
             providers
                 .entry(provider_id.as_str())
-                .or_insert_with(|| toml_edit::table().into())
+                .or_insert_with(toml_edit::table)
                 .as_table_like_mut()
         });
     if let Some(provider_table) = provider_table {
-        provider_table.insert(
-            "experimental_bearer_token",
-            toml_edit::value(token),
-        );
-        log::warn!(
-            "[Codex] [model_providers.{provider_id}] 表缺失，已自动补建并写入 bearer token"
-        );
+        provider_table.insert("experimental_bearer_token", toml_edit::value(token));
+        log::warn!("[Codex] [model_providers.{provider_id}] 表缺失，已自动补建并写入 bearer token");
         Ok(doc.to_string())
     } else {
         Err(AppError::localized(
@@ -1783,7 +1778,10 @@ pub fn migrate_codex_wire_api_in_toml(toml_str: &str) -> String {
     }
 
     // [model_providers.<id>].wire_api
-    if let Some(providers) = doc.get_mut("model_providers").and_then(toml_edit::Item::as_table_like_mut) {
+    if let Some(providers) = doc
+        .get_mut("model_providers")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
         for (_, provider) in providers.iter_mut() {
             if let Some(table) = provider.as_table_like_mut() {
                 if let Some(item) = table.get_mut("wire_api") {

@@ -390,18 +390,13 @@ fn build_generation_config(body: &Value) -> Option<Value> {
     //   而不是发非法 -1。
     if let Some(thinking) = body.get("thinking").and_then(|v| v.as_object()) {
         let mut tc = Map::new();
-        match thinking.get("type").and_then(|v| v.as_str()) {
-            Some("enabled") => {
-                // 有预算就透传，没有就省略 thinkingConfig（模型默认预算）
-                if let Some(budget) = thinking.get("budget_tokens").and_then(|v| v.as_i64()) {
-                    tc.insert("thinkingBudget".to_string(), json!(budget));
-                    tc.insert("includeThoughts".to_string(), json!(true));
-                } else {
-                    tc.insert("includeThoughts".to_string(), json!(true));
-                }
+        // disabled / adaptive / 未知：省略 thinkingConfig，交给模型默认
+        if thinking.get("type").and_then(|v| v.as_str()) == Some("enabled") {
+            // 有预算就透传，没有就省略 thinkingConfig（模型默认预算）
+            if let Some(budget) = thinking.get("budget_tokens").and_then(|v| v.as_i64()) {
+                tc.insert("thinkingBudget".to_string(), json!(budget));
             }
-            // disabled / adaptive / 未知：省略 thinkingConfig，交给模型默认
-            _ => {}
+            tc.insert("includeThoughts".to_string(), json!(true));
         }
         if !tc.is_empty() {
             config.insert("thinkingConfig".to_string(), Value::Object(tc));
@@ -665,7 +660,10 @@ fn convert_message_content_to_parts(
                 // 一条 url 源图片让整个对话轮 400 会拖垮所有后续工具循环，
                 // 与 Chat/Responses 桥的降级策略对齐（H3）。
                 if source_type != "base64" {
-                    let url = source.get("url").and_then(|value| value.as_str()).unwrap_or(source_type);
+                    let url = source
+                        .get("url")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or(source_type);
                     log::warn!(
                         "[Gemini] user 消息含非 base64 图片源（{source_type}），降级为文本占位"
                     );
@@ -692,7 +690,10 @@ fn convert_message_content_to_parts(
                     .unwrap_or("");
 
                 if source_type != "base64" {
-                    let url = source.get("url").and_then(|value| value.as_str()).unwrap_or(source_type);
+                    let url = source
+                        .get("url")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or(source_type);
                     log::warn!(
                         "[Gemini] user 消息含非 base64 document 源（{source_type}），降级为文本占位"
                     );
@@ -1356,15 +1357,24 @@ mod tests {
 
         let result = anthropic_to_gemini(input).unwrap();
         let parts = result["contents"][0]["parts"].as_array().unwrap();
-        assert!(parts.iter().any(|part| {
-            part.get("text")
-                .and_then(|v| v.as_str())
-                .is_some_and(|t| t.contains("image omitted"))
-        }), "url 图片必须降级为文本占位，实际: {parts:?}");
-        assert!(parts.iter().any(|part| part.get("text") == Some(&json!("Look at this"))),
-            "后续 text 块必须保留");
-        assert!(!parts.iter().any(|part| part.get("inlineData").is_some()),
-            "不得生成 inlineData");
+        assert!(
+            parts.iter().any(|part| {
+                part.get("text")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|t| t.contains("image omitted"))
+            }),
+            "url 图片必须降级为文本占位，实际: {parts:?}"
+        );
+        assert!(
+            parts
+                .iter()
+                .any(|part| part.get("text") == Some(&json!("Look at this"))),
+            "后续 text 块必须保留"
+        );
+        assert!(
+            !parts.iter().any(|part| part.get("inlineData").is_some()),
+            "不得生成 inlineData"
+        );
     }
 
     #[test]

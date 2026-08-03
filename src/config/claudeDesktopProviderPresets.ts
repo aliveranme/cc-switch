@@ -127,7 +127,8 @@ const brandedRoutes = (
       upstreamModel,
       labelOverride: upstreamModel,
       // Haiku 档不支持 1M（与 passthroughRoutes/mappedRoutes 一致）
-      supports1m: routeId === CLAUDE_DESKTOP_ROLE_ROUTE_IDS.haiku ? false : supports1m,
+      supports1m:
+        routeId === CLAUDE_DESKTOP_ROLE_ROUTE_IDS.haiku ? false : supports1m,
     }))
     .filter((route) => {
       if (seenUpstream.has(route.upstreamModel)) {

@@ -603,12 +603,11 @@ async fn handle_claude_transform_upstream_error(
         }
     }))
     .map_err(|e| ProxyError::Internal(format!("序列化错误响应失败: {e}")))?;
-    Ok(builder
-        .body(axum::body::Body::from(body))
-        .map_err(|e| {
-            log::error!("[{}] 构建错误响应失败: {e}", ctx.tag);
-            ProxyError::Internal(format!("Failed to build error response: {e}"))
-        })?)
+    let response_body = axum::body::Body::from(body);
+    builder.body(response_body).map_err(|e| {
+        log::error!("[{}] 构建错误响应失败: {e}", ctx.tag);
+        ProxyError::Internal(format!("Failed to build error response: {e}"))
+    })
 }
 
 async fn handle_claude_transform(
@@ -3189,7 +3188,10 @@ mod tests {
     #[test]
     fn upstream_status_maps_to_anthropic_error_types() {
         // 转换路径错误映射：Claude Code SDK 依据状态码 + error.type 分类重试
-        assert_eq!(super::map_upstream_status_to_anthropic_error_type(429), "rate_limit_error");
+        assert_eq!(
+            super::map_upstream_status_to_anthropic_error_type(429),
+            "rate_limit_error"
+        );
         assert_eq!(
             super::map_upstream_status_to_anthropic_error_type(401),
             "authentication_error"
@@ -3236,7 +3238,10 @@ mod tests {
         );
 
         let plain = serde_json::json!({ "message": "plain" });
-        assert_eq!(super::upstream_error_message(&plain).as_deref(), Some("plain"));
+        assert_eq!(
+            super::upstream_error_message(&plain).as_deref(),
+            Some("plain")
+        );
 
         let empty = serde_json::json!({ "error": { "code": 500 } });
         assert_eq!(super::upstream_error_message(&empty), None);

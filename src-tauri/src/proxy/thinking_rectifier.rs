@@ -102,7 +102,9 @@ pub fn should_rectify_thinking_signature(
     // 极常见（"invalid request: model not found"、限流/配额措辞），单靠它触发
     // 整流会为与 thinking 无关的错误多付一次请求费，且整流后的错误会覆盖
     // 原始诊断。整流只对 thinking 形状的请求有意义。
-    if lower.contains("invalid request") || lower.contains("illegal request") || lower.contains("非法请求")
+    if lower.contains("invalid request")
+        || lower.contains("illegal request")
+        || lower.contains("非法请求")
     {
         let mentions_thinking = lower.contains("thinking")
             || lower.contains("redacted_thinking")
@@ -112,9 +114,7 @@ pub fn should_rectify_thinking_signature(
         if mentions_thinking {
             return true;
         }
-        log::debug!(
-            "[ThinkingRectifier] 'invalid request' 但未提及 thinking 相关字段，不触发整流"
-        );
+        log::debug!("[ThinkingRectifier] 'invalid request' 但未提及 thinking 相关字段，不触发整流");
     }
 
     false

@@ -94,7 +94,12 @@ impl CodexChatHistoryStore {
         inner.insert_calls(&StoreKey::new(session_id, response_id), calls)
     }
 
-    async fn record_call_item(&self, session_id: &str, response_id: Option<&str>, item: &Value) -> bool {
+    async fn record_call_item(
+        &self,
+        session_id: &str,
+        response_id: Option<&str>,
+        item: &Value,
+    ) -> bool {
         let Some(call) = cached_call_item(item) else {
             return false;
         };
@@ -177,7 +182,11 @@ impl CodexChatHistoryStore {
             .cloned()
             .collect::<HashSet<_>>();
         let lookup = self
-            .lookup(&session_id, previous_response_id.as_deref(), &requested_call_ids)
+            .lookup(
+                &session_id,
+                previous_response_id.as_deref(),
+                &requested_call_ids,
+            )
             .await;
 
         let restore_group = lookup.restore_group(&output_call_ids, &existing_call_ids);
@@ -259,7 +268,8 @@ impl CodexChatHistoryStore {
         let inner = self.inner.read().await;
         let previous = previous_response_id
             .and_then(|id| inner.responses.get(&StoreKey::new(session_id, id)).cloned());
-        let fallback = inner.unique_fallback_calls(session_id, requested_call_ids, previous.as_ref());
+        let fallback =
+            inner.unique_fallback_calls(session_id, requested_call_ids, previous.as_ref());
         CachedLookup { previous, fallback }
     }
 }
@@ -585,18 +595,21 @@ mod tests {
     async fn enriches_tool_output_with_cached_function_call_from_previous_response() {
         let history = CodexChatHistoryStore::default();
         history
-            .record_response(&json!({
-                "id": "resp_1",
-                "output": [
-                    {
-                        "type": "function_call",
-                        "call_id": "call_1",
-                        "name": "read_file",
-                        "arguments": "{\"path\":\"README.md\"}",
-                        "reasoning_content": "Need to inspect the file."
-                    }
-                ]
-            }), "test-session")
+            .record_response(
+                &json!({
+                    "id": "resp_1",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"README.md\"}",
+                            "reasoning_content": "Need to inspect the file."
+                        }
+                    ]
+                }),
+                "test-session",
+            )
             .await;
 
         let mut request = json!({
@@ -622,18 +635,21 @@ mod tests {
     async fn restores_unique_call_id_without_matching_previous_response() {
         let history = CodexChatHistoryStore::default();
         history
-            .record_response(&json!({
-                "id": "resp_1",
-                "output": [
-                    {
-                        "type": "function_call",
-                        "call_id": "call_1",
-                        "name": "read_file",
-                        "arguments": "{}",
-                        "reasoning_content": "This is the only cached call."
-                    }
-                ]
-            }), "test-session")
+            .record_response(
+                &json!({
+                    "id": "resp_1",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "read_file",
+                            "arguments": "{}",
+                            "reasoning_content": "This is the only cached call."
+                        }
+                    ]
+                }),
+                "test-session",
+            )
             .await;
 
         let mut missing_previous = json!({
@@ -702,18 +718,21 @@ mod tests {
             ("resp_2", "This belongs to the second response."),
         ] {
             history
-                .record_response(&json!({
-                    "id": response_id,
-                    "output": [
-                        {
-                            "type": "function_call",
-                            "call_id": "call_1",
-                            "name": "read_file",
-                            "arguments": "{}",
-                            "reasoning_content": reasoning
-                        }
-                    ]
-                }), "test-session")
+                .record_response(
+                    &json!({
+                        "id": response_id,
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "call_id": "call_1",
+                                "name": "read_file",
+                                "arguments": "{}",
+                                "reasoning_content": reasoning
+                            }
+                        ]
+                    }),
+                    "test-session",
+                )
                 .await;
         }
 
@@ -769,18 +788,21 @@ mod tests {
     async fn enriches_existing_function_call_missing_reasoning() {
         let history = CodexChatHistoryStore::default();
         history
-            .record_response(&json!({
-                "id": "resp_1",
-                "output": [
-                    {
-                        "type": "function_call",
-                        "call_id": "call_1",
-                        "name": "read_file",
-                        "arguments": "{}",
-                        "reasoning_content": "Need to inspect the file."
-                    }
-                ]
-            }), "test-session")
+            .record_response(
+                &json!({
+                    "id": "resp_1",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "read_file",
+                            "arguments": "{}",
+                            "reasoning_content": "Need to inspect the file."
+                        }
+                    ]
+                }),
+                "test-session",
+            )
             .await;
 
         let mut request = json!({
@@ -811,18 +833,21 @@ mod tests {
     async fn enriches_existing_function_call_missing_name_and_arguments() {
         let history = CodexChatHistoryStore::default();
         history
-            .record_response(&json!({
-                "id": "resp_1",
-                "output": [
-                    {
-                        "type": "function_call",
-                        "call_id": "call_1",
-                        "name": "read_file",
-                        "arguments": "{\"path\":\"README.md\"}",
-                        "reasoning_content": "Need to inspect the file."
-                    }
-                ]
-            }), "test-session")
+            .record_response(
+                &json!({
+                    "id": "resp_1",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"README.md\"}",
+                            "reasoning_content": "Need to inspect the file."
+                        }
+                    ]
+                }),
+                "test-session",
+            )
             .await;
 
         let mut request = json!({
@@ -854,25 +879,28 @@ mod tests {
     async fn restores_parallel_tool_calls_as_one_assistant_group() {
         let history = CodexChatHistoryStore::default();
         history
-            .record_response(&json!({
-                "id": "resp_1",
-                "output": [
-                    {
-                        "type": "function_call",
-                        "call_id": "call_1",
-                        "name": "first",
-                        "arguments": "{}",
-                        "reasoning_content": "Need both tools."
-                    },
-                    {
-                        "type": "function_call",
-                        "call_id": "call_2",
-                        "name": "second",
-                        "arguments": "{}",
-                        "reasoning_content": "Need both tools."
-                    }
-                ]
-            }), "test-session")
+            .record_response(
+                &json!({
+                    "id": "resp_1",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "first",
+                            "arguments": "{}",
+                            "reasoning_content": "Need both tools."
+                        },
+                        {
+                            "type": "function_call",
+                            "call_id": "call_2",
+                            "name": "second",
+                            "arguments": "{}",
+                            "reasoning_content": "Need both tools."
+                        }
+                    ]
+                }),
+                "test-session",
+            )
             .await;
 
         let mut request = json!({
@@ -906,26 +934,29 @@ mod tests {
     async fn restores_custom_and_tool_search_calls_from_previous_response() {
         let history = CodexChatHistoryStore::default();
         history
-            .record_response(&json!({
-                "id": "resp_1",
-                "output": [
-                    {
-                        "type": "custom_tool_call",
-                        "call_id": "call_patch",
-                        "name": "apply_patch",
-                        "input": "*** Begin Patch\n*** End Patch",
-                        "reasoning_content": "Need to patch the file."
-                    },
-                    {
-                        "type": "tool_search_call",
-                        "call_id": "call_search",
-                        "status": "completed",
-                        "execution": "client",
-                        "arguments": {"query": "Gmail tools"},
-                        "reasoning_content": "Need to discover tools."
-                    }
-                ]
-            }), "test-session")
+            .record_response(
+                &json!({
+                    "id": "resp_1",
+                    "output": [
+                        {
+                            "type": "custom_tool_call",
+                            "call_id": "call_patch",
+                            "name": "apply_patch",
+                            "input": "*** Begin Patch\n*** End Patch",
+                            "reasoning_content": "Need to patch the file."
+                        },
+                        {
+                            "type": "tool_search_call",
+                            "call_id": "call_search",
+                            "status": "completed",
+                            "execution": "client",
+                            "arguments": {"query": "Gmail tools"},
+                            "reasoning_content": "Need to discover tools."
+                        }
+                    ]
+                }),
+                "test-session",
+            )
             .await;
 
         let mut request = json!({
@@ -967,9 +998,10 @@ mod tests {
             )),
         ]);
 
-        let output = record_responses_sse_stream(stream, history.clone(), "test-session".to_string())
-            .collect::<Vec<_>>()
-            .await;
+        let output =
+            record_responses_sse_stream(stream, history.clone(), "test-session".to_string())
+                .collect::<Vec<_>>()
+                .await;
         assert_eq!(output.len(), 2);
 
         let mut request = json!({

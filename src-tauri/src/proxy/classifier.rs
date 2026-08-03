@@ -531,7 +531,9 @@ pub fn transform_classifier_response(
         } else {
             upstream_text.to_string()
         };
-        format!("{verdict_line}\n<reason>{summary}</reason>\n\nUpstream analysis:\n{upstream_analysis}")
+        format!(
+            "{verdict_line}\n<reason>{summary}</reason>\n\nUpstream analysis:\n{upstream_analysis}"
+        )
     };
 
     serde_json::json!({
@@ -1272,9 +1274,19 @@ mod tests {
         let response =
             transform_classifier_response(&upstream, "claude-opus-4-8", ClassifierMode::Severity);
         let text = response["content"][0]["text"].as_str().unwrap();
-        assert_eq!(text.matches("<severity>").count(), 1, "必须恰好一个 severity 标签");
-        assert!(text.contains("The action reads files safely"), "剥离后保留分析文字");
-        assert!(!text.contains("<severity>42</severity>"), "上游自带标签必须剥离");
+        assert_eq!(
+            text.matches("<severity>").count(),
+            1,
+            "必须恰好一个 severity 标签"
+        );
+        assert!(
+            text.contains("The action reads files safely"),
+            "剥离后保留分析文字"
+        );
+        assert!(
+            !text.contains("<severity>42</severity>"),
+            "上游自带标签必须剥离"
+        );
 
         // <reason> 标签同理
         let upstream2 = json!({
@@ -1283,7 +1295,10 @@ mod tests {
         let response2 =
             transform_classifier_response(&upstream2, "claude-opus-4-8", ClassifierMode::Severity);
         let text2 = response2["content"][0]["text"].as_str().unwrap();
-        assert!(!text2.contains("<reason>why</reason>"), "上游 reason 标签必须剥离");
+        assert!(
+            !text2.contains("<reason>why</reason>"),
+            "上游 reason 标签必须剥离"
+        );
         assert!(text2.contains("notes"), "剥离后保留周围文字");
     }
 

@@ -622,13 +622,7 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
     // 定义核心字段（已在下方处理，跳过通用转换）
     let core_fields = match typ {
         "stdio" => vec!["type", "command", "args", "env", "cwd", "env_vars"],
-        "http" | "sse" => vec![
-            "type",
-            "url",
-            "headers",
-            "http_headers",
-            "env_http_headers",
-        ],
+        "http" | "sse" => vec!["type", "url", "headers", "http_headers", "env_http_headers"],
         _ => vec!["type"],
     };
 
@@ -731,8 +725,7 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
             // 直接透传 timeout 会被 serde 忽略，用户设置静默失效。
             if key == "timeout" && extended_fields.contains(&"startup_timeout_ms") {
                 if let Some(secs) = value.as_u64().or_else(|| value.as_f64().map(|f| f as u64)) {
-                    t["startup_timeout_ms"] =
-                        toml_edit::value(secs.saturating_mul(1000) as i64);
+                    t["startup_timeout_ms"] = toml_edit::value(secs.saturating_mul(1000) as i64);
                     log::debug!("已转换 timeout={secs}s → startup_timeout_ms");
                 }
                 continue;
