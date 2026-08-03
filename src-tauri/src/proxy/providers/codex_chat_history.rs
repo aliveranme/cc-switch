@@ -112,15 +112,13 @@ impl CodexChatHistoryStore {
         }
     }
 
-    pub async fn enrich_request(&self, body: &mut Value) -> usize {
-        // 会话作用域：与 record 侧同源（Codex 请求 metadata.session_id 与
-        // 代理提取的 session_id 前缀一致）；缺失时用空串（退化行为见 StoreKey）。
-        let session_id = body
-            .get("metadata")
-            .and_then(|value| value.get("session_id"))
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
+    pub async fn enrich_request(&self, session_id: &str, body: &mut Value) -> usize {
+        // 会话作用域：session_id 必须与 record 侧同源 —— 调用方（forwarder）持有
+        // RequestContext.extract_session_id 的结果（含 codex_ 前缀），与记录侧
+        // ctx.session_id 是同一个值。此前在此处从 body.metadata.session_id 读裸值，
+        // 与记录侧的 codex_ 前缀键永不相等，导致恢复在生产路径整体失效。
+        // （extract_session_id 恒返回非空：客户端未提供时退化为生成 UUID，
+        // 记录/恢复两侧仍共享同一值，只是跨请求不可达。）
         let previous_response_id = body
             .get("previous_response_id")
             .and_then(|value| value.as_str())
@@ -183,7 +181,7 @@ impl CodexChatHistoryStore {
             .collect::<HashSet<_>>();
         let lookup = self
             .lookup(
-                &session_id,
+                session_id,
                 previous_response_id.as_deref(),
                 &requested_call_ids,
             )
@@ -624,7 +622,10 @@ mod tests {
             ]
         });
 
-        assert_eq!(history.enrich_request(&mut request).await, 1);
+        assert_eq!(
+            history.enrich_request("test-session", &mut request).await,
+            1
+        );
         let input = request["input"].as_array().unwrap();
         assert_eq!(input[0]["type"], "function_call");
         assert_eq!(input[0]["reasoning_content"], "Need to inspect the file.");
@@ -662,7 +663,12 @@ mod tests {
                 }
             ]
         });
-        assert_eq!(history.enrich_request(&mut missing_previous).await, 1);
+        assert_eq!(
+            history
+                .enrich_request("test-session", &mut missing_previous)
+                .await,
+            1
+        );
         assert_eq!(missing_previous["input"][0]["type"], "function_call");
         assert_eq!(
             missing_previous["input"][0]["reasoning_content"],
@@ -682,7 +688,9 @@ mod tests {
             ]
         });
         assert_eq!(
-            history.enrich_request(&mut other_session).await,
+            history
+                .enrich_request("other-session", &mut other_session)
+                .await,
             0,
             "不同会话的 call_id fallback 必须被拒绝（会话作用域）"
         );
@@ -698,7 +706,12 @@ mod tests {
                 }
             ]
         });
-        assert_eq!(history.enrich_request(&mut different_previous).await, 1);
+        assert_eq!(
+            history
+                .enrich_request("test-session", &mut different_previous)
+                .await,
+            1
+        );
         assert_eq!(different_previous["input"][0]["type"], "function_call");
         assert_eq!(
             different_previous["input"][0]["reasoning_content"],
@@ -746,7 +759,12 @@ mod tests {
                 }
             ]
         });
-        assert_eq!(history.enrich_request(&mut missing_previous).await, 0);
+        assert_eq!(
+            history
+                .enrich_request("test-session", &mut missing_previous)
+                .await,
+            0
+        );
         assert_eq!(missing_previous["input"][0]["type"], "function_call_output");
 
         // H1 回归：不同会话引用同一 call_id 时不得恢复（防串话）
@@ -761,7 +779,9 @@ mod tests {
             ]
         });
         assert_eq!(
-            history.enrich_request(&mut other_session).await,
+            history
+                .enrich_request("other-session", &mut other_session)
+                .await,
             0,
             "不同会话的 call_id fallback 必须被拒绝（会话作用域）"
         );
@@ -777,7 +797,12 @@ mod tests {
                 }
             ]
         });
-        assert_eq!(history.enrich_request(&mut different_previous).await, 0);
+        assert_eq!(
+            history
+                .enrich_request("test-session", &mut different_previous)
+                .await,
+            0
+        );
         assert_eq!(
             different_previous["input"][0]["type"],
             "function_call_output"
@@ -823,7 +848,10 @@ mod tests {
             ]
         });
 
-        assert_eq!(history.enrich_request(&mut request).await, 1);
+        assert_eq!(
+            history.enrich_request("test-session", &mut request).await,
+            1
+        );
         let input = request["input"].as_array().unwrap();
         assert_eq!(input[0]["reasoning_content"], "Need to inspect the file.");
         assert_eq!(input.len(), 2);
@@ -866,7 +894,10 @@ mod tests {
             ]
         });
 
-        assert_eq!(history.enrich_request(&mut request).await, 1);
+        assert_eq!(
+            history.enrich_request("test-session", &mut request).await,
+            1
+        );
         let input = request["input"].as_array().unwrap();
         assert_eq!(input[0]["type"], "function_call");
         assert_eq!(input[0]["name"], "read_file");
@@ -920,7 +951,10 @@ mod tests {
             ]
         });
 
-        assert_eq!(history.enrich_request(&mut request).await, 2);
+        assert_eq!(
+            history.enrich_request("test-session", &mut request).await,
+            2
+        );
         let input = request["input"].as_array().unwrap();
         assert_eq!(input[0]["type"], "function_call");
         assert_eq!(input[0]["call_id"], "call_1");
@@ -976,7 +1010,10 @@ mod tests {
             ]
         });
 
-        assert_eq!(history.enrich_request(&mut request).await, 2);
+        assert_eq!(
+            history.enrich_request("test-session", &mut request).await,
+            2
+        );
         let input = request["input"].as_array().unwrap();
         assert_eq!(input[0]["type"], "custom_tool_call");
         assert_eq!(input[0]["call_id"], "call_patch");
@@ -1016,7 +1053,78 @@ mod tests {
             ]
         });
 
-        assert_eq!(history.enrich_request(&mut request).await, 1);
+        assert_eq!(
+            history.enrich_request("test-session", &mut request).await,
+            1
+        );
         assert_eq!(request["input"][0]["reasoning_content"], "Need a file.");
+    }
+
+    /// F1 回归：恢复侧必须使用与记录侧同源的 session_id（extract_session_id 的
+    /// `codex_` 前缀值）。此前 enrich_request 从 body.metadata.session_id 读裸值，
+    /// 与记录侧的 `codex_<raw>` 键永不相等，恢复在生产路径整体失效。
+    #[tokio::test]
+    async fn restores_with_prefixed_session_id_matching_record_side() {
+        let history = CodexChatHistoryStore::default();
+        history
+            .record_response(
+                &json!({
+                    "id": "resp_1",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "read_file",
+                            "arguments": "{}",
+                            "reasoning_content": "Prefixed session reasoning."
+                        }
+                    ]
+                }),
+                "codex_test-session",
+            )
+            .await;
+
+        // 生产形态：客户端请求体带裸 metadata.session_id，但 record/enrich 两侧
+        // 都用代理提取的 codex_ 前缀值 —— 必须命中。
+        let mut request = json!({
+            "metadata": { "session_id": "test-session" },
+            "previous_response_id": "resp_1",
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "ok"
+                }
+            ]
+        });
+        assert_eq!(
+            history
+                .enrich_request("codex_test-session", &mut request)
+                .await,
+            1,
+            "记录/恢复两侧同源（带前缀）时必须恢复"
+        );
+        assert_eq!(
+            request["input"][0]["reasoning_content"],
+            "Prefixed session reasoning."
+        );
+
+        // 旧行为（裸值）不得命中：这是 F1 修复前生产路径的实际失效形态。
+        let mut bare = json!({
+            "metadata": { "session_id": "test-session" },
+            "previous_response_id": "resp_1",
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "ok"
+                }
+            ]
+        });
+        assert_eq!(
+            history.enrich_request("test-session", &mut bare).await,
+            0,
+            "裸值 session 不得命中 codex_ 前缀键（防串话回归）"
+        );
     }
 }

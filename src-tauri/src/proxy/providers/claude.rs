@@ -216,7 +216,7 @@ const DEEPSEEK_OFFICIAL_ANTHROPIC_URL: &str = "https://api.deepseek.com/anthropi
 
 /// Check whether the provider is configured to use DeepSeek's official
 /// Anthropic-compatible endpoint.
-fn is_deepseek_official_anthropic_endpoint(provider: &Provider) -> bool {
+pub fn is_deepseek_official_anthropic_endpoint(provider: &Provider) -> bool {
     let settings = &provider.settings_config;
     let base_url = settings
         .get("env")

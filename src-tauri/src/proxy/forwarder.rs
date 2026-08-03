@@ -449,23 +449,27 @@ impl RequestForwarder {
 
             // PRE-SEND 优化器：每个 provider 独立决定是否优化
             // clone 仅在需要写时进行；所有 optimizer 禁用时直接透传原 body
-            // 注意：cache_injection 与 thinking_optimizer 均仅对 Bedrock provider
-            // 生效（types.rs OptimizerConfig 文档声明）。缓存断点注入会把 Anthropic
-            // 形状的 system 数组化、给 tools 加 cache_control 未知字段，逃逸到
-            // Codex/Gemini 等非 Anthropic 上游会被严格网关 400 拒收。
-            let mut provider_body =
-                if self.optimizer_config.enabled && is_bedrock_provider(provider) {
-                    let mut b = body.clone();
-                    if self.optimizer_config.thinking_optimizer {
-                        super::thinking_optimizer::optimize(&mut b, &self.optimizer_config);
-                    }
-                    if self.optimizer_config.cache_injection {
-                        super::cache_injector::inject(&mut b, &self.optimizer_config);
-                    }
-                    b
-                } else {
-                    body.clone()
-                };
+            // 注意：cache_injection 与 thinking_optimizer 仅对 Bedrock 与 DeepSeek
+            // 官方 Anthropic 端点生效（types.rs OptimizerConfig 文档声明）。缓存断点
+            // 注入会把 Anthropic 形状的 system 数组化、给 tools 加 cache_control
+            // 未知字段，逃逸到 Codex/Gemini 等非 Anthropic 上游会被严格网关 400 拒收。
+            // DeepSeek 官方 Anthropic 端点（api.deepseek.com/anthropic）支持 context
+            // caching，且请求体全程保持 Anthropic 形状（无格式转换），注入安全。
+            let mut provider_body = if self.optimizer_config.enabled
+                && (is_bedrock_provider(provider)
+                    || super::providers::is_deepseek_official_anthropic_endpoint(provider))
+            {
+                let mut b = body.clone();
+                if self.optimizer_config.thinking_optimizer {
+                    super::thinking_optimizer::optimize(&mut b, &self.optimizer_config);
+                }
+                if self.optimizer_config.cache_injection {
+                    super::cache_injector::inject(&mut b, &self.optimizer_config);
+                }
+                b
+            } else {
+                body.clone()
+            };
 
             attempted_providers += 1;
 
@@ -1438,7 +1442,7 @@ impl RequestForwarder {
                 .map(ToString::to_string);
             let restored = self
                 .codex_chat_history
-                .enrich_request(&mut mapped_body)
+                .enrich_request(&self.session_id, &mut mapped_body)
                 .await;
             if restored > 0 {
                 log::debug!(
@@ -1511,6 +1515,13 @@ impl RequestForwarder {
             // otherwise system/tools/history are re-sent at full price every round,
             // inflating cost and first-token latency. The injector handles the
             // string→array `system` conversion and the new-breakpoint budget.
+            //
+            // 域说明：桥接下游按定义是 Anthropic 协议上游（codex_responses_to_anthropic
+            // 仅对 Anthropic 格式 provider 成立），cache_control 是 Anthropic 协议
+            // 标准字段——Kimi/GLM/DeepSeek/MiniMax 等官方 Anthropic 兼容端点均接受，
+            // 与 PRE-SEND 优化器（Bedrock + DeepSeek 官方域）"防污染非标准网关"的
+            // 场景不同（后者注入面可能发生格式转换）。注入跟随 cache_injection
+            // 子开关，有意绕过优化器总开关：桥接缓存是协议必需而非可选优化。
             super::cache_injector::inject(
                 &mut anthropic_body,
                 &codex_anthropic_cache_config(&self.optimizer_config),
