@@ -6,6 +6,7 @@
 
 use super::gemini_schema::build_gemini_function_declaration;
 use super::gemini_shadow::{GeminiAssistantTurn, GeminiShadowStore, GeminiToolCallMeta};
+use super::transform::{strip_leading_anthropic_billing_header, strip_volatile_cch};
 use crate::proxy::error::ProxyError;
 use crate::proxy::tool_media::{
     strip_and_clamp_media_from_tool_value, ToolMediaScope, TOOL_RESULT_MEDIA_ATTACHED_MARKER,
@@ -121,6 +122,14 @@ pub fn anthropic_to_gemini_with_shadow(
         if !function_declarations.is_empty() {
             result["tools"] = json!([{ "functionDeclarations": function_declarations }]);
         }
+    }
+
+    // tools 全部被过滤（BatchTool / 无 name 内置工具）时不输出 toolConfig——
+    // 具名 tool 选择（ANY + allowedFunctionNames）会指向被过滤掉的函数，
+    // 严格网关可能 400（与 transform.rs / transform_codex_chat.rs 对称）。
+    if result.get("tools").is_none() && body.get("tools").is_some_and(|t| t.is_array()) {
+        log::debug!("[Gemini] tools 全部被过滤（BatchTool / 无 name 内置工具），省略 toolConfig");
+        return Ok(result);
     }
 
     if let Some(tool_config) = map_tool_choice(body.get("tool_choice"))? {
@@ -334,7 +343,12 @@ fn build_system_instruction(
 fn collect_system_texts(value: &Value, texts: &mut Vec<String>) -> Result<(), ProxyError> {
     if let Some(text) = value.as_str() {
         if !text.is_empty() {
-            texts.push(text.to_string());
+            // 与 Chat/Responses 路径对齐：剥离首行 x-anthropic-billing-header 及其
+            // cch nonce。Claude Code 会在 system[0] 注入该头，rotating nonce 原样
+            // 进入 systemInstruction 会破坏 Gemini 的前缀缓存，也让模型看到计费头。
+            texts.push(strip_volatile_cch(strip_leading_anthropic_billing_header(
+                text,
+            )));
         }
         return Ok(());
     }
@@ -350,7 +364,7 @@ fn collect_system_texts(value: &Value, texts: &mut Vec<String>) -> Result<(), Pr
             .iter()
             .filter_map(|block| block.get("text").and_then(|value| value.as_str()))
             .filter(|text| !text.is_empty())
-            .map(ToString::to_string),
+            .map(|text| strip_volatile_cch(strip_leading_anthropic_billing_header(text))),
     );
 
     Ok(())
@@ -1487,6 +1501,23 @@ mod tests {
         assert_eq!(result["contents"].as_array().unwrap().len(), 1);
         assert_eq!(result["contents"][0]["role"], "user");
         assert_eq!(result["contents"][0]["parts"][0]["text"], "Hello");
+    }
+
+    #[test]
+    fn anthropic_to_gemini_strips_billing_header_and_cch_nonce_from_system() {
+        // L1 回归：Claude Code 注入的 x-anthropic-billing-header（含 rotating
+        // cch nonce）不得进入 systemInstruction——否则破坏 Gemini 前缀缓存，
+        // 且把计费头暴露给模型。与 Chat/Responses 路径行为对齐。
+        let input = json!({
+            "model": "gemini-3-pro",
+            "system": "x-anthropic-billing-header: cc_version=1; cch=a1b2c3d4;\nYou are a coding agent."
+        });
+
+        let result = anthropic_to_gemini(input).unwrap();
+        assert_eq!(
+            result["systemInstruction"]["parts"][0]["text"],
+            "You are a coding agent."
+        );
     }
 
     #[test]

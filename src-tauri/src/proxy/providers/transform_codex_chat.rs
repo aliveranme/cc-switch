@@ -402,8 +402,14 @@ fn apply_reasoning_options(
 ) {
     let Some(config) = config else {
         if super::transform::supports_reasoning_effort(model) {
-            if let Some(effort) = body.pointer("/reasoning/effort") {
-                result["reasoning_effort"] = effort.clone();
+            if let Some(effort) = body.pointer("/reasoning/effort").and_then(Value::as_str) {
+                // 与配置化路径一致：经 map_reasoning_effort 过滤（none/off/disabled
+                // 显式关闭、max/ultra 钳制、未知值丢弃）。此前直写原值会把 Codex
+                // 扩展档位（max/ultra）或关闭值（none）原样塞给严格 OpenAI 兼容
+                // 上游，触发 `400 reasoning_effort: Invalid option`。
+                if let Some(mapped) = map_reasoning_effort(effort, None) {
+                    result["reasoning_effort"] = json!(mapped);
+                }
             }
         }
         return;
@@ -2577,6 +2583,43 @@ mod tests {
 
         assert_eq!(result["thinking"]["type"], "enabled");
         assert_eq!(result["reasoning_effort"], "max");
+    }
+
+    #[test]
+    fn responses_request_to_chat_fallback_filters_invalid_reasoning_effort() {
+        // M1 回归：无 reasoning config 的 fallback 路径此前直写 /reasoning/effort
+        // 原值——Codex 扩展档位（ultra）或关闭值（none）会被严格 OpenAI 兼容上游
+        // 400 拒收（`400 reasoning_effort: Invalid option`）。现在与配置化路径一致，
+        // 经 map_reasoning_effort 过滤/钳制。
+        let ultra = json!({
+            "model": "o3",
+            "input": "hello",
+            "reasoning": {"effort": "ultra"}
+        });
+        let result = responses_to_chat_completions(ultra).unwrap();
+        assert_eq!(result["reasoning_effort"], "max", "ultra 应钳制到 max");
+
+        let none = json!({
+            "model": "o3",
+            "input": "hello",
+            "reasoning": {"effort": "none"}
+        });
+        let result = responses_to_chat_completions(none).unwrap();
+        assert!(
+            result.get("reasoning_effort").is_none(),
+            "none/off/disabled 应被过滤（显式关闭）"
+        );
+
+        let bogus = json!({
+            "model": "o3",
+            "input": "hello",
+            "reasoning": {"effort": "bogus"}
+        });
+        let result = responses_to_chat_completions(bogus).unwrap();
+        assert!(
+            result.get("reasoning_effort").is_none(),
+            "未知档位应被丢弃而非直写"
+        );
     }
 
     fn deepseek_reasoning_config() -> CodexChatReasoningConfig {

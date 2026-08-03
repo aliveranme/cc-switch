@@ -347,6 +347,13 @@ pub fn anthropic_to_openai_with_reasoning_content(
     }
 
     if let Some(v) = body.get("tool_choice") {
+        // tools 全部被过滤（如只剩 BatchTool）时不输出 tool_choice——严格
+        // OpenAI 兼容上游对"有 tool_choice 无 tools"会 400（与 Codex→Chat
+        // 路径的兜底对称，见 transform_codex_chat.rs）。
+        if result.get("tools").is_none() && body.get("tools").is_some_and(|t| t.is_array()) {
+            log::debug!("[Claude/OpenRouter] tools 全部被过滤（如 BatchTool），省略 tool_choice");
+            return Ok(result);
+        }
         result["tool_choice"] = map_tool_choice_to_chat(v);
         // Anthropic 用 tool_choice.disable_parallel_tool_use 表达串行工具调用；
         // OpenAI Chat 用顶层 parallel_tool_calls。此前只映射了 tool_choice 本身，
@@ -735,7 +742,17 @@ fn chat_file_part_from_anthropic_document(block: &Value) -> Option<Value> {
                 }
             }))
         }
-        _ => None,
+        _ => {
+            // 非 base64 源（url / content 等）：Chat file part 无承载位，丢弃。
+            // 与 Responses 路径（transform_responses.rs 同场景 warn）对齐留痕，
+            // 否则用户附带的文件在模型侧静默消失、无从排查。
+            log::warn!(
+                "[Claude/OpenRouter] Anthropic document 块使用非 base64 源（type={:?}），Chat 方向无承载字段，已丢弃（filename={}）",
+                source.get("type").and_then(Value::as_str),
+                filename,
+            );
+            None
+        }
     }
 }
 
