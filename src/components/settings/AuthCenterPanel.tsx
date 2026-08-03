@@ -80,7 +80,7 @@ export function AuthCenterPanel() {
           </div>
         </div>
 
-        <CodexOAuthSection />
+        <CodexOAuthSection showAccountQuota />
       </section>
 
       <section className="rounded-xl border border-border/60 bg-card/60 p-6">
