@@ -821,6 +821,11 @@ pub fn create_responses_sse_stream_from_chat<E: std::error::Error + Send + 'stat
     create_responses_sse_stream_from_chat_with_context(stream, CodexToolContext::default())
 }
 
+/// 转换器内部 SSE 解析缓冲上限（与透传路径 response_processor 的
+/// MAX_SSE_PARSE_BUFFER_BYTES 对齐）。上游不按 \n\n 分帧时缓冲无界增长，
+/// 超限即终止流，避免 OOM。
+const MAX_STREAMING_SSE_BUFFER_BYTES: usize = 1024 * 1024;
+
 /// Create a stream that converts Chat Completions SSE chunks into Responses SSE
 /// events while restoring Codex tool namespace/custom/tool_search metadata.
 pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error + Send + 'static>(
@@ -832,6 +837,9 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
         let mut utf8_remainder: Vec<u8> = Vec::new();
         let mut state = ChatToResponsesState::with_tool_context(tool_context);
         let mut stream_failed = false;
+        // [DONE] 已处理：终态后的残留 chunk 不得再产出事件
+        // （response.completed 之后出现 output 事件会让 Codex 状态机进入非法态）。
+        let mut done_seen = false;
 
         tokio::pin!(stream);
 
@@ -839,6 +847,21 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
             match chunk {
                 Ok(bytes) => {
                     crate::proxy::sse::append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
+
+                    // 转换器内部 buffer 无上限防护（透传路径有 1MB 上限）：
+                    // 上游不按 \n\n 分帧时缓冲线性增长直至 OOM，超限终止流。
+                    if buffer.len() > MAX_STREAMING_SSE_BUFFER_BYTES {
+                        log::error!(
+                            "[Codex] SSE 解析缓冲超过 {MAX_STREAMING_SSE_BUFFER_BYTES} 字节且未出现帧分隔符，终止流"
+                        );
+                        yield Ok(state.failed_event(
+                            "Upstream SSE stream exceeded the proxy buffer limit without a frame delimiter."
+                                .to_string(),
+                            Some("stream_error".to_string()),
+                        ));
+                        stream_failed = true;
+                        break;
+                    }
 
                     while let Some(block) = take_sse_block(&mut buffer) {
                         if block.trim().is_empty() {
@@ -862,10 +885,31 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
 
                         let data = data_parts.join("\n");
                         if data.trim() == "[DONE]" {
+                            // [DONE] 前漏发 finish_reason 时不得谎报 completed（
+                            // response_status_from_finish_reason(None) == "completed"）：
+                            // 与 EOF 截断路径同判据——有实质输出 → 合成 length
+                            // （incomplete），无输出 → failed，否则 Codex 会收到
+                            // 一个 status=completed 的空回合继续 agent loop。
+                            if state.finish_reason.is_none() && !state.completed {
+                                if state.has_substantive_output() {
+                                    state.finish_reason = Some("length".to_string());
+                                } else {
+                                    yield Ok(state.failed_event(
+                                        "Upstream Chat Completions stream ended ([DONE]) before sending finish_reason and without any output"
+                                            .to_string(),
+                                        Some("stream_truncated".to_string()),
+                                    ));
+                                    stream_failed = true;
+                                    // 与成功路径一致用 break：failed 终态后的残留块
+                                    // 不得再产出事件。
+                                    break;
+                                }
+                            }
                             for event in state.finalize() {
                                 yield Ok(event);
                             }
-                            continue;
+                            done_seen = true;
+                            break;
                         }
 
                         let chunk: Value = match serde_json::from_str(&data) {
@@ -885,7 +929,7 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
                         }
                     }
 
-                    if stream_failed {
+                    if stream_failed || done_seen {
                         break;
                     }
                 }

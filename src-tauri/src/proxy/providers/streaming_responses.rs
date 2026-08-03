@@ -50,6 +50,11 @@ fn responses_error_details(data: &Value, fallback: &str) -> (String, String) {
     (message, error_type)
 }
 
+/// 转换器内部 SSE 解析缓冲上限（与透传路径 response_processor 的
+/// MAX_SSE_PARSE_BUFFER_BYTES 对齐）。上游不按 \n\n 分帧或 whole-JSON 体
+/// 超限时缓冲无界增长，超限即终止流，避免 OOM。
+const MAX_STREAMING_SSE_BUFFER_BYTES: usize = 1024 * 1024;
+
 fn anthropic_error_sse(message: &str, error_type: &str) -> Bytes {
     anthropic_sse(
         "error",
@@ -336,6 +341,21 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
                 Ok(bytes) => {
                     crate::proxy::sse::append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
 
+                    // 转换器内部 buffer 无上限防护（透传路径有 1MB 上限）：上游
+                    // 不按 \n\n 分帧（LF-only/压缩流/畸形字节）或 whole-JSON 体
+                    // 超限时缓冲线性增长直至 OOM。超限发 error 终止流，不伪装成功。
+                    if buffer.len() > MAX_STREAMING_SSE_BUFFER_BYTES {
+                        log::error!(
+                            "[Claude/Responses] SSE 解析缓冲超过 {MAX_STREAMING_SSE_BUFFER_BYTES} 字节且未出现帧分隔符，终止流"
+                        );
+                        yield Ok(anthropic_error_sse(
+                            "Upstream SSE stream exceeded the proxy buffer limit without a frame delimiter.",
+                            "stream_error",
+                        ));
+                        terminated = true;
+                        break;
+                    }
+
                     // A few compatible gateways ignore stream:true and return one
                     // JSON document. Hold it intact until EOF, including any pretty-
                     // printed blank lines that would otherwise look like SSE separators.
@@ -621,6 +641,9 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
                                         current_text_index = Some(index);
                                         index
                                     };
+                                    // 与 output_text.delta 同步维护：refusal.done 据此
+                                    // 判断是否需从 data["text"] 补发完整拒绝文本。
+                                    text_had_delta.insert(index);
 
                                     if !open_indices.contains(&index) {
                                         let start_event = json!({
@@ -965,6 +988,39 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
                                     }
                                 });
                                 if let Some(index) = index {
+                                    // 与 output_text.done 对称：网关跳过 refusal.delta、
+                                    // 只在 done 带完整拒绝文本时，从 data["text"] 补发，
+                                    // 否则拒绝文本静默丢失（refusal.delta 已写入
+                                    // text_had_delta，正常流不会重复补发）。
+                                    if !text_had_delta.contains(&index) {
+                                        if let Some(text) = data
+                                            .get("text")
+                                            .and_then(Value::as_str)
+                                            .filter(|value| !value.is_empty())
+                                        {
+                                            if !open_indices.contains(&index) {
+                                                let start_event = json!({
+                                                    "type": "content_block_start",
+                                                    "index": index,
+                                                    "content_block": {"type": "text", "text": ""}
+                                                });
+                                                yield Ok(Bytes::from(format!(
+                                                    "event: content_block_start\ndata: {}\n\n",
+                                                    serde_json::to_string(&start_event).unwrap_or_default()
+                                                )));
+                                                open_indices.insert(index);
+                                            }
+                                            let delta_event = json!({
+                                                "type": "content_block_delta",
+                                                "index": index,
+                                                "delta": {"type": "text_delta", "text": text}
+                                            });
+                                            yield Ok(Bytes::from(format!(
+                                                "event: content_block_delta\ndata: {}\n\n",
+                                                serde_json::to_string(&delta_event).unwrap_or_default()
+                                            )));
+                                        }
+                                    }
                                     if !open_indices.remove(&index) {
                                         continue;
                                     }
@@ -1662,6 +1718,52 @@ mod tests {
         assert_eq!(
             map_responses_stop_reason(Some("incomplete"), false, Some("content_filter")),
             Some("end_turn")
+        );
+    }
+
+    /// refusal.done 对称回归：网关跳过 refusal.delta、只在 done 带完整拒绝
+    /// 文本时，必须从 data["text"] 补发（与 output_text.done 的恢复逻辑对齐）。
+    #[tokio::test]
+    async fn test_refusal_done_recovers_text_when_deltas_are_skipped() {
+        let input = concat!(
+            "event: response.created\n",
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-4o\"}}\n\n",
+            "event: response.content_part.added\n",
+            "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"refusal\"}}\n\n",
+            "event: response.refusal.done\n",
+            "data: {\"type\":\"response.refusal.done\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"text\":\"I cannot help with that.\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n\n"
+        );
+
+        let merged = convert_stream_text(input.as_bytes().to_vec()).await;
+        assert!(
+            merged.contains("\"type\":\"text_delta\"")
+                && merged.contains("I cannot help with that."),
+            "refusal.done 的拒绝文本未被恢复: {merged}"
+        );
+    }
+
+    /// refusal.done 反向护栏：正常流（refusal.delta 已发过增量）不得重复补发全文。
+    #[tokio::test]
+    async fn test_refusal_done_does_not_duplicate_when_deltas_were_sent() {
+        let input = concat!(
+            "event: response.created\n",
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-4o\"}}\n\n",
+            "event: response.refusal.delta\n",
+            "data: {\"type\":\"response.refusal.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"I cannot\"}\n\n",
+            "event: response.refusal.delta\n",
+            "data: {\"type\":\"response.refusal.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\" help with that.\"}\n\n",
+            "event: response.refusal.done\n",
+            "data: {\"type\":\"response.refusal.done\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"text\":\"I cannot help with that.\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n\n"
+        );
+
+        let merged = convert_stream_text(input.as_bytes().to_vec()).await;
+        assert!(
+            !merged.contains("\"text\":\"I cannot help with that.\""),
+            "已发过 refusal.delta 时不得从 done 重复补发全文: {merged}"
         );
     }
 

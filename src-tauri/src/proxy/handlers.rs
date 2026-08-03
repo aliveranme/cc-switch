@@ -1147,7 +1147,6 @@ async fn handle_responses_for_app(
 
     let mut ctx =
         RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
-    let endpoint = endpoint_with_query(&uri, "/responses");
 
     let is_stream = body
         .get("stream")
@@ -2530,6 +2529,9 @@ async fn sniff_response_body_is_json(
     use bytes::BytesMut;
     use futures::StreamExt;
 
+    // sniff_limit == 0 时 while 循环直接跳过、落入下方 unreachable!() panic；
+    // 防御性钳到 1（当前调用点恒传 2048）。
+    let sniff_limit = sniff_limit.max(1);
     let status = response.status();
     let headers = response.headers().clone();
     let mut stream = Box::pin(response.bytes_stream());

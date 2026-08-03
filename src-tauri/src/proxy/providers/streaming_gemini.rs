@@ -234,6 +234,11 @@ fn encode_sse(event_name: &str, payload: &Value) -> Bytes {
     ))
 }
 
+/// 转换器内部 SSE 解析缓冲上限（与透传路径 response_processor 的
+/// MAX_SSE_PARSE_BUFFER_BYTES 对齐）。上游不按 \n\n 分帧时缓冲无界增长，
+/// 超限即终止流，避免 OOM。
+const MAX_STREAMING_SSE_BUFFER_BYTES: usize = 1024 * 1024;
+
 pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'static>(
     stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
     shadow_store: Option<Arc<GeminiShadowStore>>,
@@ -263,6 +268,23 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                 Ok(bytes) => {
                     append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
 
+                    // 转换器内部 buffer 无上限防护（透传路径有 1MB 上限）：
+                    // 上游不按 \n\n 分帧时缓冲线性增长直至 OOM，超限终止流。
+                    if buffer.len() > MAX_STREAMING_SSE_BUFFER_BYTES {
+                        log::error!(
+                            "[Gemini] SSE 解析缓冲超过 {MAX_STREAMING_SSE_BUFFER_BYTES} 字节且未出现帧分隔符，终止流"
+                        );
+                        let error_event = json!({
+                            "type": "error",
+                            "error": {
+                                "type": "stream_error",
+                                "message": "Upstream SSE stream exceeded the proxy buffer limit without a frame delimiter.",
+                            }
+                        });
+                        yield Ok(encode_sse("error", &error_event));
+                        return;
+                    }
+
                     while let Some(block) = take_sse_block(&mut buffer) {
                         if block.trim().is_empty() {
                             continue;
@@ -288,6 +310,29 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                             Ok(value) => value,
                             Err(_) => continue,
                         };
+
+                        // 200 + {"error": ...} envelope（兼容 relay 形态）：显式转成
+                        // Anthropic error 事件并终止，否则错误被静默丢弃、客户端收到
+                        // end_turn 空成功（chat/responses 转换器均显式处理此类事件，
+                        // gemini 独缺）。
+                        if let Some(error) = chunk_json.get("error") {
+                            let message = error
+                                .get("message")
+                                .and_then(|v| v.as_str())
+                                .filter(|m| !m.is_empty())
+                                .unwrap_or(
+                                    "Gemini upstream returned an error envelope in a 2xx SSE response",
+                                );
+                            let error_event = json!({
+                                "type": "error",
+                                "error": {
+                                    "type": "api_error",
+                                    "message": message,
+                                }
+                            });
+                            yield Ok(encode_sse("error", &error_event));
+                            return;
+                        }
 
                         if message_id.is_none() {
                             message_id = chunk_json
@@ -452,17 +497,19 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
         }
 
         if !has_sent_message_start {
-            let event = json!({
-                "type": "message_start",
-                "message": {
-                    "id": message_id.clone().unwrap_or_default(),
-                    "type": "message",
-                    "role": "assistant",
-                    "model": current_model.clone().unwrap_or_default(),
-                    "usage": build_anthropic_usage(latest_usage.as_ref())
+            // 空流/零 chunk：不合成 message_start + end_turn 空成功——那是伪成功
+            //（Claude Code 会继续 agent loop 而非报错重试）。残余 buffer 中的
+            // usage/finishReason 已在上面冲刷提取；即便属未分帧的完整响应，
+            // 对客户端而言同样是无法解析的流，如实报错更诚实。
+            let error_event = json!({
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": "Gemini upstream ended the stream without any parseable SSE chunk; the proxy refused to fabricate an empty success.",
                 }
             });
-            yield Ok(encode_sse("message_start", &event));
+            yield Ok(encode_sse("error", &error_event));
+            return;
         }
 
         if accumulated_text.is_empty() {
@@ -1126,6 +1173,38 @@ mod tests {
         assert_eq!(
             shadow["parts"][0]["thoughtSignature"], "sig-keep",
             "prior thoughtSignature must survive a later chunk that omits it: {shadow}"
+        );
+    }
+
+    /// M4 回归：200 + {"error": ...} envelope 必须转成 Anthropic error 事件，
+    /// 不得被静默丢弃后让客户端收到 end_turn 空成功。
+    #[test]
+    fn error_envelope_in_2xx_sse_becomes_anthropic_error() {
+        let output = collect_stream_output(vec![
+            "data: {\"responseId\":\"rsig\",\"modelVersion\":\"gemini-2.5-pro\"}\n\n",
+            "data: {\"error\":{\"message\":\"rate limit exceeded\",\"code\":429}}\n\n",
+        ]);
+        assert!(
+            output.contains("\"type\":\"error\"") && output.contains("rate limit exceeded"),
+            "2xx error envelope 应转成 error 事件: {output}"
+        );
+        assert!(
+            !output.contains("message_stop"),
+            "error 后不得补 message_stop 伪成功: {output}"
+        );
+    }
+
+    /// M4 回归：空流（零 chunk）不得合成 message_start + end_turn 空成功。
+    #[test]
+    fn empty_stream_emits_error_not_fake_success() {
+        let output = collect_stream_output(vec![]);
+        assert!(
+            output.contains("\"type\":\"error\""),
+            "空流应发 error 事件: {output}"
+        );
+        assert!(
+            !output.contains("message_delta") && !output.contains("message_stop"),
+            "空流不得伪造成功终态: {output}"
         );
     }
 }

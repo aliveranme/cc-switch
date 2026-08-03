@@ -166,6 +166,11 @@ fn build_message_delta_event(stop_reason: Option<String>, usage_json: Option<Val
     })
 }
 
+/// 转换器内部 SSE 解析缓冲上限（与透传路径 response_processor 的
+/// MAX_SSE_PARSE_BUFFER_BYTES 对齐）。上游不按 \n\n 分帧时缓冲无界增长，
+/// 超限即终止流，避免 OOM。
+const MAX_STREAMING_SSE_BUFFER_BYTES: usize = 1024 * 1024;
+
 /// 创建 Anthropic SSE 流
 pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
     stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
@@ -177,6 +182,11 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
         let mut current_model = None;
         let mut next_content_index: u32 = 0;
         let mut has_sent_message_start = false;
+        // 有实质输出的判据：发过 text/thinking/tool_use 任一 content_block_start。
+        // message_start 在第一个带 choices 的 chunk 到达时即发出（即使 delta 全空），
+        // 不能当作"有输出"的代理——否则上游只发空 delta chunk 后断流/发 [DONE]，
+        // 会被补发 end_turn 报成一次空成功（伪成功），而不是报错重试。
+        let mut has_substantive_output = false;
         // 某些上游 provider（如 OpenRouter 的 kimi-k2.6）会在 tool_use 后发送多个
         // 带 finish_reason 的 SSE chunk。Anthropic 协议要求每个消息流只能有一个
         // message_delta，重复会导致 Claude Code abort 连接。因此需要：
@@ -197,9 +207,38 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
         tokio::pin!(stream);
 
         while let Some(chunk) = stream.next().await {
+            // 终态已发（[DONE] 已处理）后的残留数据不得再产出事件——Anthropic
+            // 协议要求每个消息流恰好一个终止序列，message_stop 之后出现 delta
+            // 会让 Claude Code 状态机进入非法态。
+            if has_sent_message_stop {
+                break;
+            }
             match chunk {
                 Ok(bytes) => {
                     crate::proxy::sse::append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
+
+                    // 转换器内部 buffer 无上限防护：上游若不按 \n\n 分帧
+                    // （LF-only、压缩流、畸形字节），take_sse_block 永不命中，
+                    // buffer 随整个流线性增长直至 OOM——透传路径有 1MB 上限
+                    // （response_processor::MAX_SSE_PARSE_BUFFER_BYTES），转换
+                    // 路径此前没有。超限发 error 终止流，不伪装成功。
+                    if buffer.len() > MAX_STREAMING_SSE_BUFFER_BYTES {
+                        log::error!(
+                            "[Claude/OpenRouter] SSE 解析缓冲超过 {MAX_STREAMING_SSE_BUFFER_BYTES} 字节且未出现帧分隔符，终止流"
+                        );
+                        let error_event = json!({
+                            "type": "error",
+                            "error": {
+                                "type": "stream_error",
+                                "message": "Upstream SSE stream exceeded the proxy buffer limit without a frame delimiter.",
+                            }
+                        });
+                        let sse_data = format!("event: error\ndata: {}\n\n",
+                            serde_json::to_string(&error_event).unwrap_or_default());
+                        yield Ok(Bytes::from(sse_data));
+                        stream_ended_with_error = true;
+                        break;
+                    }
 
                     while let Some(line) = take_sse_block(&mut buffer) {
                         if line.trim().is_empty() {
@@ -267,7 +306,7 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                             serde_json::to_string(&event).unwrap_or_default());
                                         log::debug!("[Claude/OpenRouter] >>> Anthropic SSE: message_delta (from pending)");
                                         yield Ok(Bytes::from(sse_data));
-                                    } else if has_sent_message_start {
+                                    } else if has_substantive_output {
                                         log::warn!(
                                             "[Claude/OpenRouter] 上游在 [DONE] 前未发送 finish_reason，补发 end_turn 终止事件"
                                         );
@@ -278,6 +317,29 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                         let sse_data = format!("event: message_delta\ndata: {}\n\n",
                                             serde_json::to_string(&event).unwrap_or_default());
                                         yield Ok(Bytes::from(sse_data));
+                                    } else if has_sent_message_start {
+                                        // 伪成功防护：message_start 已发但从未有实质输出
+                                        //（上游只发了空 delta chunk 即 [DONE]）。补 error
+                                        // 事件而不是伪造 end_turn 空成功——空成功会让
+                                        // Claude Code 继续 agent loop，报错才能触发重试/展示。
+                                        log::warn!(
+                                            "[Claude/OpenRouter] 上游 [DONE] 前无任何实质输出，发送 error 事件替代伪造成功"
+                                        );
+                                        let error_event = json!({
+                                            "type": "error",
+                                            "error": {
+                                                "type": "api_error",
+                                                "message": "Upstream ended the stream with no assistant output (no content, reasoning, or tool calls); the proxy refused to fabricate an empty success.",
+                                            }
+                                        });
+                                        let sse_data = format!("event: error\ndata: {}\n\n",
+                                            serde_json::to_string(&error_event).unwrap_or_default());
+                                        yield Ok(Bytes::from(sse_data));
+                                        has_sent_message_stop = true;
+                                        // 用 break 而非 continue：终态后的残留块（同一
+                                        // chunk 内 [DONE] 之后的数据）不得再产出事件，
+                                        // 否则 message_stop 之后出现 delta 进入非法态。
+                                        break;
                                     }
 
                                     let event = json!({"type": "message_stop"});
@@ -286,7 +348,10 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                     log::debug!("[Claude/OpenRouter] >>> Anthropic SSE: message_stop");
                                     yield Ok(Bytes::from(sse_data));
                                     has_sent_message_stop = true;
-                                    continue;
+                                    // 用 break 而非 continue：同上，终态后的残留块
+                                    // 不得再产出事件（外层 chunk 循环的
+                                    // has_sent_message_stop 守卫拦截下一个 chunk）。
+                                    break;
                                 }
 
                                 if let Ok(chunk) = serde_json::from_str::<OpenAIStreamChunk>(&data) {
@@ -363,6 +428,7 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                                 }
                                                 let index = next_content_index;
                                                 next_content_index += 1;
+                                                has_substantive_output = true;
                                                 let event = json!({
                                                     "type": "content_block_start",
                                                     "index": index,
@@ -424,6 +490,7 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
 
                                                     let index = next_content_index;
                                                     next_content_index += 1;
+                                                    has_substantive_output = true;
                                                     let event = json!({
                                                         "type": "content_block_start",
                                                         "index": index,
@@ -570,6 +637,7 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
 
                                                 // 3) 发出 start / pending args / immediate delta
                                                 for (anthropic_index, id, name, pending) in ready_starts {
+                                                    has_substantive_output = true;
                                                     let event = json!({
                                                         "type": "content_block_start",
                                                         "index": anthropic_index,
@@ -802,7 +870,7 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                 log::debug!("[Claude/OpenRouter] >>> Anthropic SSE: message_delta (at stream end)");
                 yield Ok(Bytes::from(sse_data));
                 true
-            } else if has_sent_message_start {
+            } else if has_substantive_output {
                 // 上游流结束但从未发 finish_reason：有实质输出时补 end_turn，
                 // 避免 Claude Code 静默挂起（无任何输出的场景由下方 error 兜底）。
                 log::warn!(
@@ -816,6 +884,25 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                     serde_json::to_string(&event).unwrap_or_default());
                 yield Ok(Bytes::from(sse_data));
                 true
+            } else if has_sent_message_start {
+                // 伪成功防护：与 [DONE] 分支一致——message_start 已发但从未有实质
+                // 输出（上游只发了空 delta chunk 后断流），补 error 事件而不是
+                // 补发 end_turn 伪造空成功。置 stream_ended_with_error 以跳过
+                // 下方的 message_stop 终止序列（error 已是终态）。
+                log::warn!(
+                    "[Claude/OpenRouter] 上游流结束但无任何实质输出，发送 error 事件替代伪造成功"
+                );
+                let error_event = json!({
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": "Upstream ended the stream with no assistant output (no content, reasoning, or tool calls); the proxy refused to fabricate an empty success.",
+                    }
+                });
+                let sse_data = format!("event: error\ndata: {}\n\n",
+                    serde_json::to_string(&error_event).unwrap_or_default());
+                yield Ok(Bytes::from(sse_data));
+                false
             } else {
                 false
             };
@@ -1629,5 +1716,70 @@ mod tests {
         assert!(!events
             .iter()
             .any(|e| e.get("type").and_then(|v| v.as_str()) == Some("message_stop")));
+    }
+
+    /// M1 回归：message_start 已发（首个带 choices 的 chunk）但 delta 全空、
+    /// 随后 [DONE] 时，不得补发 end_turn + message_stop 伪造空成功；
+    /// 必须发 error 事件（客户端才能报错/重试，而不是继续 agent loop）。
+    #[tokio::test]
+    async fn test_empty_delta_chunk_then_done_emits_error_not_fake_success() {
+        let input = concat!(
+            "data: {\"id\":\"c1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let events = collect_anthropic_events(input).await;
+
+        assert!(
+            events.iter().any(|e| event_type(e) == Some("error")),
+            "空 delta chunk 后 [DONE] 必须产出 error 事件，实际事件: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| event_type(e) == Some("message_delta")),
+            "不得伪造 end_turn message_delta"
+        );
+        assert!(
+            !events.iter().any(|e| event_type(e) == Some("message_stop")),
+            "不得在 error 后补 message_stop"
+        );
+    }
+
+    /// M1 回归（EOF 变体）：空 delta chunk 后上游直接断流（无 [DONE]）时，
+    /// 同样必须 error 而不是补 end_turn 空成功。
+    #[tokio::test]
+    async fn test_empty_delta_chunk_then_eof_emits_error_not_fake_success() {
+        let input =
+            "data: {\"id\":\"c1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n";
+        let events = collect_anthropic_events(input).await;
+
+        assert!(
+            events.iter().any(|e| event_type(e) == Some("error")),
+            "空 delta chunk 后断流必须产出 error 事件，实际事件: {events:?}"
+        );
+        assert!(!events
+            .iter()
+            .any(|e| event_type(e) == Some("message_delta")));
+        assert!(!events.iter().any(|e| event_type(e) == Some("message_stop")));
+    }
+
+    /// M1 反向护栏：有实质文本输出但上游漏发 finish_reason 时仍补 end_turn
+    ///（避免静默挂起），不能被新判据误伤。
+    #[tokio::test]
+    async fn test_substantive_output_without_finish_reason_still_ends_turn() {
+        let input = concat!(
+            "data: {\"id\":\"c1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let events = collect_anthropic_events(input).await;
+
+        assert!(
+            events
+                .iter()
+                .any(|e| e["type"] == "message_delta" && e["delta"]["stop_reason"] == "end_turn"),
+            "有实质输出时漏发 finish_reason 应补 end_turn，实际事件: {events:?}"
+        );
+        assert!(events.iter().any(|e| event_type(e) == Some("message_stop")));
+        assert!(!events.iter().any(|e| event_type(e) == Some("error")));
     }
 }
