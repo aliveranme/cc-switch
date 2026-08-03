@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { parse as parseToml } from "smol-toml";
 import {
   codexApiFormatFromWireApi,
   isCodexAnthropicWireApi,
   extractCodexModelName,
   extractCodexBaseUrl,
+  extractCodexWireApi,
   setCodexBaseUrl,
+  setCodexWireApi,
   hasCommonConfigSnippet,
   isCodexRemoteCompactionEnabled,
   setCodexModelName,
@@ -218,6 +221,71 @@ describe("TOML section header edge cases", () => {
       'base_url = "https://should-not-be-picked/v1"',
     ].join("\n");
     expect(extractCodexBaseUrl(withArray)).toBe("https://a.example.com/v1");
+  });
+
+  it("does not treat a nested array element line as a section boundary", () => {
+    // 多行数组的嵌套数组元素 `[1, 2]` 不是节头；旧 boundary 正则把它当
+    // 段起始，段内位于其后的 base_url 被错误切断归属。
+    const withNestedArray = [
+      'model_provider = "custom"',
+      "",
+      "[model_providers.custom]",
+      "flags = [",
+      "  [1, 2]",
+      "]",
+      'base_url = "https://nested.example.com/v1"',
+      'wire_api = "responses"',
+    ].join("\n");
+    expect(extractCodexBaseUrl(withNestedArray)).toBe(
+      "https://nested.example.com/v1",
+    );
+    expect(extractCodexWireApi(withNestedArray)).toBe("responses");
+  });
+
+  it("recognizes a whitespace-padded section header", () => {
+    // TOML 1.0 允许 `[ ws table-key ws ]`；旧正则捕获首尾空白导致段名
+    // 不匹配，base_url 落到 recoverable 兜底，多 base_url 时结果不确定。
+    const padded = [
+      'model_provider = "custom"',
+      "",
+      "[ model_providers.custom ]",
+      'name = "Custom"',
+      'base_url = "https://padded.example.com/v1"',
+      'wire_api = "responses"',
+    ].join("\n");
+    expect(extractCodexBaseUrl(padded)).toBe("https://padded.example.com/v1");
+    expect(extractCodexWireApi(padded)).toBe("responses");
+  });
+
+  it("rewrites base_url inside an inline-table model_providers without corrupting the file", () => {
+    // H2 回归：inline table 形态（`model_providers = { custom = {...} }`）下，
+    // 写路径此前会追加与 inline table 冲突的 `[model_providers.custom]` 段，
+    // 整个 config.toml 解析失败。现在应展开为标准段并更新 base_url。
+    const inlineTable = [
+      'model_provider = "custom"',
+      'model_providers = { custom = { name = "Custom", base_url = "https://old.example.com/v1", wire_api = "responses" } }',
+    ].join("\n");
+
+    const updated = setCodexBaseUrl(inlineTable, "https://new.example.com/v1");
+    // 结果必须仍是合法 TOML（不得出现 inline table 与 [model_providers.custom] 冲突）
+    expect(() => parseToml(updated)).not.toThrow();
+    expect(extractCodexBaseUrl(updated)).toBe("https://new.example.com/v1");
+    expect(extractCodexWireApi(updated)).toBe("responses");
+    // 不再保留顶层 inline table 行
+    expect(updated).not.toMatch(/^\s*model_providers\s*=/);
+    expect(updated).toContain("[model_providers.custom]");
+  });
+
+  it("rewrites wire_api inside an inline-table model_providers without corrupting the file", () => {
+    const inlineTable = [
+      'model_provider = "custom"',
+      'model_providers = { custom = { name = "Custom", base_url = "https://a.example.com/v1", wire_api = "responses" } }',
+    ].join("\n");
+
+    const updated = setCodexWireApi(inlineTable, "chat");
+    expect(() => parseToml(updated)).not.toThrow();
+    expect(extractCodexWireApi(updated)).toBe("chat");
+    expect(extractCodexBaseUrl(updated)).toBe("https://a.example.com/v1");
   });
 });
 

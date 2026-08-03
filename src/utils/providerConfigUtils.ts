@@ -450,12 +450,19 @@ export const hasTomlCommonConfigSnippet = (
 
 // ========== Codex base_url utils ==========
 
-// 表头：匹配 `[table]`，接受合法 TOML 的尾随注释 `[table] # comment`。
-const TOML_SECTION_HEADER_PATTERN = /^\s*\[([^[\]\r\n]+)\]\s*(?:#.*)?$/;
+// 表头：匹配 `[table]`，接受合法 TOML 的尾随注释 `[table] # comment` 与
+// 括号内空白 `[ table ]`（TOML 1.0 ABNF 允许 `[ ws table-key ws ]`）。
+// 捕获组惰性匹配 + 尾随 \s*，使用方再 .trim() 消除首尾空白。
+const TOML_SECTION_HEADER_PATTERN = /^\s*\[([^[\]\r\n]+?)\s*\]\s*(?:#.*)?$/;
 // 段边界：除 `[table]` 外还识别 array-of-tables `[[array]]`。凡是判断
 // “下一个段从这里开始” 都用它，否则 `[[x]]` 不被视为边界，它的 body 会被
 // 错误地算进上一个 table，round-trip 时产生重复段。
-const TOML_SECTION_BOUNDARY_PATTERN = /^\s*\[\[?[^[\]\r\n]+\]\]?\s*(?:#.*)?$/;
+// 同时排除数组元素误判：`[` 后（允许空白）必须是字母/下划线/引号开头的
+// 节名形状——`[1, 2]`、`[1]` 这类多行数组的嵌套数组元素行不是节头，
+// 否则段内位于其后的 base_url 等赋值会被错误切断归属（recoverable 兜底
+// 也救不回多 base_url 的配置）。
+const TOML_SECTION_BOUNDARY_PATTERN =
+  /^\s*\[\[?\s*[A-Za-z_'"][^[\]\r\n,=]*\s*\]\]?\s*(?:#.*)?$/;
 const TOML_BASE_URL_PATTERN =
   /^\s*base_url\s*=\s*(?:"((?:\\.|[^"\\\r\n])*)"|'([^'\r\n]*)')\s*(?:#.*)?$/;
 const TOML_EXPERIMENTAL_BEARER_TOKEN_PATTERN =
@@ -519,7 +526,7 @@ const getTomlSectionRange = (
     // 这样目标段后面若跟着 `[[array]]` 也能正确收尾。
     if (headerLineIndex === -1) {
       const match = lines[index].match(TOML_SECTION_HEADER_PATTERN);
-      if (match && match[1] === sectionName) {
+      if (match && match[1].trim() === sectionName) {
         headerLineIndex = index;
       }
       continue;
@@ -678,7 +685,7 @@ const findTomlAssignments = (
     // `[table]` 就记名字，否则（array-of-tables）置一个非目标 sentinel。
     if (TOML_SECTION_BOUNDARY_PATTERN.test(line)) {
       const headerMatch = line.match(TOML_SECTION_HEADER_PATTERN);
-      currentSectionName = headerMatch ? headerMatch[1] : line.trim();
+      currentSectionName = headerMatch ? headerMatch[1].trim() : line.trim();
       return;
     }
 
@@ -786,6 +793,102 @@ const unescapeTomlBasicString = (value: string): string =>
     },
   );
 
+// inline table 形态的 model_providers（`model_providers = { custom = {...} }`，
+// TOML 合法且后端 codex_config.rs 已全面支持）在前端行扫描下没有段头：写路径
+// 会兜底追加 `[model_providers.custom]` 段——TOML 规范禁止 inline table 键再
+// 用表头扩展，生成冲突段会让整个 config.toml 解析失败（配置损坏级）。
+// 写路径入口先把它展开为标准段；无 inline table 时原样返回。
+const tomlKeySegment = (key: string): string =>
+  /^[A-Za-z0-9_-]+$/.test(key) ? key : tomlBasicString(key);
+
+const tomlValueToInline = (value: unknown): string => {
+  if (typeof value === "string") return tomlBasicString(value);
+  if (typeof value === "boolean" || typeof value === "number")
+    return String(value);
+  if (Array.isArray(value))
+    return `[${value.map(tomlValueToInline).join(", ")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return `{ ${entries
+      .map(([k, v]) => `${tomlKeySegment(k)} = ${tomlValueToInline(v)}`)
+      .join(", ")} }`;
+  }
+  return tomlBasicString(String(value));
+};
+
+const expandInlineModelProvidersToml = (configText: string): string => {
+  if (!configText) return configText;
+  const lines = configText.split("\n");
+  // 已有 [model_providers...] 段头时不处理（正常配置不会 inline table 与段头共存）
+  if (lines.some((line) => /^\s*\[model_providers[\s.\]]/.test(line))) {
+    return configText;
+  }
+  const start = lines.findIndex((line) => /^\s*model_providers\s*=/.test(line));
+  if (start === -1) return configText;
+
+  // 收集到 inline table 闭合（可跨行；跳过字符串内的大括号）
+  let end = start;
+  let depth = 0;
+  let inString: string | null = null;
+  let escaped = false;
+  let closed = false;
+  for (let i = start; i < lines.length && !closed; i += 1) {
+    const line = lines[i];
+    for (let j = 0; j < line.length; j += 1) {
+      const ch = line[j];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === inString) inString = null;
+      } else if (ch === '"' || ch === "'") {
+        inString = ch;
+      } else if (ch === "{") {
+        depth += 1;
+      } else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          closed = true;
+          end = i;
+          break;
+        }
+      }
+    }
+  }
+  if (!closed) return configText; // 未闭合的畸形输入，交给原路径兜底
+
+  const inlineBody = lines
+    .slice(start, end + 1)
+    .join("\n")
+    .replace(/^\s*model_providers\s*=\s*/, "");
+  let providers: unknown;
+  try {
+    const parsed = parseToml(`__model_providers_tmp = ${inlineBody}`);
+    providers = (parsed as Record<string, unknown>).__model_providers_tmp;
+  } catch {
+    return configText; // 解析失败（含行内注释等），交给原路径兜底
+  }
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) {
+    return configText;
+  }
+
+  const expanded: string[] = [];
+  for (const [key, fields] of Object.entries(
+    providers as Record<string, unknown>,
+  )) {
+    expanded.push(`[model_providers.${tomlKeySegment(key)}]`);
+    if (fields && typeof fields === "object" && !Array.isArray(fields)) {
+      for (const [fk, fv] of Object.entries(
+        fields as Record<string, unknown>,
+      )) {
+        expanded.push(`${fk} = ${tomlValueToInline(fv)}`);
+      }
+    }
+  }
+  return [...lines.slice(0, start), ...expanded, ...lines.slice(end + 1)].join(
+    "\n",
+  );
+};
+
 const CODEX_CHAT_WIRE_API_VALUES = new Set([
   "chat",
   "chat_completions",
@@ -882,7 +985,9 @@ export const setCodexWireApi = (
   configText: string,
   wireApi: "responses" | "chat",
 ): string => {
-  const normalizedText = normalizeTomlText(configText);
+  const normalizedText = normalizeTomlText(
+    expandInlineModelProvidersToml(configText),
+  );
   const lines = normalizedText ? normalizedText.split("\n") : [];
   const targetSectionName = getCodexProviderSectionName(normalizedText);
   const replacementLine = `wire_api = "${wireApi}"`;
@@ -1099,7 +1204,9 @@ export const setCodexRemoteCompaction = (
   enabled: boolean,
   fallbackProviderName?: string,
 ): string => {
-  const normalizedText = normalizeTomlText(configText);
+  const normalizedText = normalizeTomlText(
+    expandInlineModelProvidersToml(configText),
+  );
   const lines = normalizedText ? normalizedText.split("\n") : [];
   const targetSectionName = getCodexCustomProviderSectionName(normalizedText);
 
@@ -1349,7 +1456,11 @@ export const setCodexBaseUrl = (
   baseUrl: string,
 ): string => {
   const trimmed = baseUrl.trim();
-  const normalizedText = normalizeTomlText(configText);
+  // inline table 形态的 model_providers 展开为标准段（无则原样返回），
+  // 否则下方会追加与 inline table 冲突的 [model_providers.x] 段。
+  const normalizedText = normalizeTomlText(
+    expandInlineModelProvidersToml(configText),
+  );
   const lines = normalizedText ? normalizedText.split("\n") : [];
   const targetSectionName = getCodexProviderSectionName(normalizedText);
   const allAssignments = findTomlAssignments(lines, TOML_BASE_URL_PATTERN);
@@ -1509,7 +1620,9 @@ export const setCodexModelName = (
   modelName: string,
 ): string => {
   const trimmed = modelName.trim();
-  const normalizedText = normalizeTomlText(configText);
+  const normalizedText = normalizeTomlText(
+    expandInlineModelProvidersToml(configText),
+  );
   const lines = normalizedText ? normalizedText.split("\n") : [];
   const topLevelEndIndex = getTopLevelEndIndex(lines);
   const modelLineIndex = findTopLevelModelLineIndex(lines, topLevelEndIndex);

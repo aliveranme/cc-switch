@@ -237,11 +237,9 @@ pub fn write_codex_live_atomic(
     } else {
         None
     };
-    let _old_config = if config_path.exists() {
-        Some(fs::read(&config_path).map_err(|e| AppError::io(&config_path, e))?)
-    } else {
-        None
-    };
+    // 注：config.toml 走 write_text_file → atomic_write（rename 原子替换），
+    // 写失败时旧文件必然完好，无需回滚（auth.json 在 config 之前已写成功，
+    // 失败时回滚 auth 即可，见下）。
 
     // 准备写入内容（写盘前迁移存量 wire_api = "chat"）
     let cfg_text = match config_text_opt {
@@ -2336,13 +2334,17 @@ pub fn remove_codex_toml_base_url_if(toml_str: &str, predicate: impl Fn(&str) ->
         .map(str::to_string);
 
     if let Some(provider_key) = model_provider {
+        // 用 as_table_like_mut 而非 as_table_mut：用户把配置写成 inline table
+        //（`model_providers = { custom = { base_url = "…" } }`，TOML 合法）时
+        // as_table_mut 返回 None，代理清理会静默失效、无法剥掉代理 URL。
+        // 与 update_codex_toml_field、mcp/codex.rs 的同款修复保持一致。
         if let Some(model_providers) = doc
             .get_mut("model_providers")
-            .and_then(|v| v.as_table_mut())
+            .and_then(toml_edit::Item::as_table_like_mut)
         {
             if let Some(provider_table) = model_providers
                 .get_mut(provider_key.as_str())
-                .and_then(|v| v.as_table_mut())
+                .and_then(toml_edit::Item::as_table_like_mut)
             {
                 let should_remove = provider_table
                     .get("base_url")
@@ -3268,6 +3270,33 @@ base_url = "https://production.api/v1"
             .and_then(|v| v.get("base_url"))
             .and_then(|v| v.as_str());
         assert_eq!(base_url, Some("https://production.api/v1"));
+    }
+
+    #[test]
+    fn remove_base_url_if_handles_inline_table_shape() {
+        // 用户把 model_providers 写成 inline table（TOML 合法）时，
+        // as_table_mut 返回 None 导致清理静默失效——必须同样能剥掉代理 URL。
+        let input = r#"model_provider = "custom"
+model_providers = { custom = { name = "custom", base_url = "http://127.0.0.1:5000/v1", wire_api = "responses" } }
+"#;
+
+        let result =
+            remove_codex_toml_base_url_if(input, |url| url.starts_with("http://127.0.0.1"));
+        let parsed: toml::Value = toml::from_str(&result).unwrap();
+
+        let provider = parsed
+            .get("model_providers")
+            .and_then(|v| v.get("custom"))
+            .unwrap();
+        assert!(
+            provider.get("base_url").is_none(),
+            "inline table 形态的代理 base_url 应被剥除: {result}"
+        );
+        assert_eq!(
+            provider.get("wire_api").and_then(|v| v.as_str()),
+            Some("responses"),
+            "其余字段必须保留: {result}"
+        );
     }
 
     #[test]
