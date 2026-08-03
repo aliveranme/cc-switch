@@ -439,10 +439,29 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
     // 创建临时文件 + 写入。穿过跨卷符号链接时偶发 448/183/32，退避重试。
     let tmp_for_write = tmp.clone();
     retry_transient_io(|| {
-        let mut f = fs::File::create(&tmp_for_write)?;
-        f.write_all(data)?;
-        f.flush()?;
-        Ok(())
+        // Unix 上创建时即按 0600：避免"先 umask 默认 0644 再 chmod"的窗口期
+        // （窗口期内同机其他用户可读明文 API key），且 chmod 失败（FAT/exFAT/
+        // FUSE 等不支持权限位的挂载）时文件也从未以宽松权限存在过。
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp_for_write)?;
+            f.write_all(data)?;
+            f.flush()?;
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let mut f = fs::File::create(&tmp_for_write)?;
+            f.write_all(data)?;
+            f.flush()?;
+            Ok(())
+        }
     })
     .map_err(|e| AppError::io(&tmp, e))?;
 
@@ -457,8 +476,9 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
         let mode = fs::metadata(path)
             .map(|meta| meta.permissions().mode() & 0o700)
             .unwrap_or(0o600);
-        // chmod 失败时记日志而不是静默吞掉——否则在 FAT/exFAT/FUSE 等不支持
-        // 权限位的挂载上收紧会永久失效，文件停留在 umask 默认 0644。
+        // chmod 失败时记日志而不是静默吞掉——在 FAT/exFAT/FUSE 等不支持权限位
+        // 的挂载上收紧会失效；文件自创建起已是 0600，此调用仅用于兼容目标
+        // 原本为 0700（保留目录执行位）等形态。
         if let Err(e) = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode)) {
             log::warn!("无法收紧 {} 的文件权限: {e}", tmp.display());
         }

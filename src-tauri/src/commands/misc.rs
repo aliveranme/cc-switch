@@ -2997,10 +2997,14 @@ fn write_claude_config(
     let config_json =
         serde_json::to_string_pretty(&config_obj).map_err(|e| format!("序列化配置失败: {e}"))?;
 
-    std::fs::write(config_file, config_json).map_err(|e| format!("写入配置文件失败: {e}"))?;
+    // 配置文件包含明文 API Key，且位于系统临时目录。用 atomic_write（unix 上
+    // 创建时即 0600 + 原子 rename）替代 fs::write + 事后收紧：fs::write 按 umask
+    // 0644 落盘，收紧前的窗口期内同机其他用户可读。
+    crate::config::atomic_write(config_file, config_json.as_bytes())
+        .map_err(|e| format!("写入配置文件失败: {e}"))?;
 
-    // 配置文件包含明文 API Key，且位于系统临时目录（默认 0644 同机其他用户可读），
-    // 必须收紧到 0600；Windows 由用户目录 ACL 保护，此函数在非 unix 平台为空实现。
+    // 兜底收紧（atomic_write 已按 0600 创建，正常路径此调用为空操作；
+    // 非 unix 平台为空实现）。
     crate::config::harden_secret_file(config_file);
 
     Ok(())
