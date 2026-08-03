@@ -86,13 +86,16 @@ pub enum ClassifierStage {
 ///
 /// 基于 Claude Code 源码（@cometix/claude-code 2.1.219）逆向确认的协议特征：
 /// - `stop_sequences` 含 `"</block>"`（block 模式）或 `"</severity>"`（severity 模式）：
-///   both/thinking 阶段（默认 `twoStageClassifier="both"`）必带其一。这是协议级特征。
-/// - fast 单阶段（显式配置 `twoStageClassifier="fast"`）**不带 stop_sequences**，
-///   只能靠「分类器 system prompt 强身份句 + `<transcript>` 消息结构」双重确认。
+///   both/thinking 阶段（默认 `twoStageClassifier="both"`）的 stage-1 必带其一。
+///   这是协议级特征。
+/// - **stage-2 与 fast 单阶段均不带 stop_sequences**（源码：stage-2 请求体
+///   无 stop_sequences 字段），只能靠「分类器 system prompt 强身份句 +
+///   `<transcript>` 消息结构」双重确认。默认 both 模式下 stage-2（thinking 深度
+///   分类）承担多数检出量，路径 2 并非 fast 专属——收紧它会导致 stage-2 漏检透传。
 ///
 /// 检测优先级：
 /// 1. `</block>` / `</severity>` stop_sequence → 分类器（模式由标签决定）
-/// 2. 分类器身份句 + `<transcript>` 包裹 → fast 单阶段分类器
+/// 2. 分类器身份句 + `<transcript>` 包裹 → fast 单阶段 / both stage-2 分类器
 /// 3. 其余一律不是分类器（关键词不能单独触发——安全主题的普通 system prompt
 ///    会命中 "prompt injection" 等词，若不要求强特征会把正常非流式请求误判为
 ///    分类器并毁掉：system prompt 被替换、stream 被强制 false）。
@@ -231,8 +234,9 @@ pub fn detect_classifier_request(body: &Value) -> ClassifierDetection {
         };
     }
 
-    // 2) fast 单阶段（twoStageClassifier="fast"）：无 stop_sequences。
-    //    需 system prompt 强身份句 + `<transcript>` 结构双重确认，避免误判正常请求。
+    // 2) fast 单阶段（twoStageClassifier="fast"）与 both/thinking 的 stage-2：
+    //    均无 stop_sequences（stage-2 请求体源码确认无该字段），需 system prompt
+    //    强身份句 + `<transcript>` 结构双重确认，避免误判正常请求。
     if is_classifier_prompt && has_transcript {
         // 模式从原始 system prompt 的输出格式推断：
         // severity 版 system（kiy 替换 Output Format）含 `<severity>`，block 版含 `<block>`。
@@ -289,6 +293,9 @@ pub fn transform_classifier_request(body: &Value) -> Value {
         obj.remove("stop_sequences");
         // 移除 thinking 参数（分类器使用小 max_tokens）
         obj.remove("thinking");
+        // 移除 betas：分类器请求可能携带主请求的 beta 头字段（如
+        // claude-code-20250219），严格 Anthropic 兼容网关会 400。
+        obj.remove("betas");
         // 确保非流式
         obj.insert("stream".into(), serde_json::json!(false));
     }
@@ -309,20 +316,57 @@ pub fn parse_classifier_usage(body: &Value) -> crate::proxy::usage::parser::Toke
 ///
 /// 同时支持 Claude Messages API 和 OpenAI Chat Completions 两种响应格式。
 fn extract_response_text(body: &Value) -> Option<String> {
-    // Claude Messages: content[0].text
+    // Claude Messages: 遍历 content 找第一个 type=="text" 的块。只取 content[0]
+    // 会把 thinking 块前置的响应（部分 Anthropic 兼容网关在 stream:false 时返回
+    // [{type:"thinking",...},{type:"text",...}]）提取成 None，导致分类器静默
+    // 失效、永远走 ALLOW 兜底。thinking 块虽也带 text 字段，但那是推理内容，
+    // 不是裁决文本，不能取。
     if let Some(content) = body.get("content").and_then(|c| c.as_array()) {
-        if let Some(first) = content.first() {
-            if let Some(text) = first.get("text").and_then(|t| t.as_str()) {
+        for block in content
+            .iter()
+            .filter(|block| block.get("type").and_then(|t| t.as_str()) == Some("text"))
+        {
+            if let Some(text) = block
+                .get("text")
+                .and_then(|t| t.as_str())
+                .filter(|text| !text.is_empty())
+            {
+                return Some(text.to_string());
+            }
+        }
+        // 兜底：无 type 标注的兼容网关按 text 字段取
+        for block in content {
+            if let Some(text) = block
+                .get("text")
+                .and_then(|t| t.as_str())
+                .filter(|text| !text.is_empty())
+            {
                 return Some(text.to_string());
             }
         }
     }
-    // OpenAI Chat: choices[0].message.content
+    // OpenAI Chat: choices[0].message.content 可能是字符串，也可能是
+    // 数组（[{type,text},...] 形态的兼容网关）。
     if let Some(choices) = body.get("choices").and_then(|c| c.as_array()) {
         if let Some(first) = choices.first() {
             if let Some(msg) = first.get("message") {
-                if let Some(text) = msg.get("content").and_then(|t| t.as_str()) {
+                if let Some(text) = msg
+                    .get("content")
+                    .and_then(|t| t.as_str())
+                    .filter(|text| !text.is_empty())
+                {
                     return Some(text.to_string());
+                }
+                if let Some(blocks) = msg.get("content").and_then(|c| c.as_array()) {
+                    for block in blocks {
+                        if let Some(text) = block
+                            .get("text")
+                            .and_then(|t| t.as_str())
+                            .filter(|text| !text.is_empty())
+                        {
+                            return Some(text.to_string());
+                        }
+                    }
                 }
             }
         }
@@ -376,6 +420,8 @@ fn determine_classification_result(text: &str) -> (&str, &str) {
     //    只匹配明确的拦截措辞与不安全信号。不用裸的 contains("blocked")：
     //    否定句 "nothing was blocked" 描述的是未发生拦截，不含拦截意图，
     //    用 "should/must/will/needs to be blocked" 这类主动拦截措辞替代。
+    //    裸词 block 也不匹配："a block of the file"、"code block" 是普通
+    //    文本；"block this" 前必须无否定（"would not block this" 等）。
     let has_unsafe_signal = lower.contains("not safe")
         || lower.contains("unsafe")
         || lower.contains("malicious")
@@ -386,8 +432,7 @@ fn determine_classification_result(text: &str) -> (&str, &str) {
         || lower.contains("must be blocked")
         || lower.contains("will be blocked")
         || lower.contains("needs to be blocked")
-        || lower.contains("block this")
-        || is_word_boundary_contain(&lower, "block");
+        || (lower.contains("block this") && !has_block_this_negation(&lower));
 
     if has_unsafe_signal {
         (
@@ -428,49 +473,31 @@ fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// 检查 `text` 是否包含 `keyword` 且前后为词边界（\b 语义）。
-/// 避免 `contains("block")` 在 "a block of code" 中误匹配。
-fn is_word_boundary_contain(text: &str, keyword: &str) -> bool {
-    let kw_len = keyword.len();
-    if kw_len == 0 || text.len() < kw_len {
-        return false;
-    }
-    // 在 text 中每找到一次 keyword 出现位置就检查边界。
-    // 前/后字符必须用完整 char 判断（is_word_char 需要字符而非字节）：
-    // 直接对 text.as_bytes()[i] as char 会把多字节字符的单个字节误判为
-    // 词字符，导致 CJK/emoji 前的边界判断错误
-    // （见 test_word_boundary_contain_cjk_prefix_is_word_char）。
-    let mut start = 0;
-    while let Some(rel) = text[start..].find(keyword) {
-        let abs_pos = start + rel;
-        // 前一个字符（不在开头）必须是词边界
-        let prev_ok = if abs_pos == 0 {
-            true
-        } else {
-            match text[..abs_pos].chars().next_back() {
-                Some(c) => !is_word_char(c),
-                None => true,
-            }
-        };
-        // 后一个字符（不在结尾）必须是词边界
-        let next_ok = if abs_pos + kw_len >= text.len() {
-            true
-        } else {
-            match text[abs_pos + kw_len..].chars().next() {
-                Some(c) => !is_word_char(c),
-                None => true,
-            }
-        };
-        if prev_ok && next_ok {
-            return true;
-        }
-        // 不是边界匹配，从 keyword 内偏移一位继续搜索，避免死循环
-        start = abs_pos + 1;
-        if start >= text.len() {
-            break;
-        }
-    }
-    false
+/// "block this" 的否定/条件防护：启发式兜底只在出现主动拦截措辞时判为
+/// unsafe。否定句（"would not block this"、"don't block this"、
+/// "shouldn't block this"、"never block this" 等）描述的是**不拦截**，
+/// 不能算拦截信号——裸 contains("block this") 会把它们误拦。
+fn has_block_this_negation(lower: &str) -> bool {
+    [
+        "not block this",
+        "don't block this",
+        "dont block this",
+        "won't block this",
+        "wont block this",
+        "wouldn't block this",
+        "wouldnt block this",
+        "can't block this",
+        "cant block this",
+        "cannot block this",
+        "shouldn't block this",
+        "shouldnt block this",
+        "mustn't block this",
+        "mustnt block this",
+        "never block this",
+        "no need to block this",
+    ]
+    .iter()
+    .any(|negation| lower.contains(negation))
 }
 
 /// 将上游响应转换为分类器兼容的 Messages API 格式
@@ -1134,23 +1161,62 @@ mod tests {
         );
     }
 
-    /// Finding 3 回归：UTF-8 多字节字符前的词边界判断必须基于完整字符，
-    /// 而非原始字节。'中block' 中 '中' 是 Unicode 字母（word char），
-    /// 因此 block 不是独立词，不应匹配。
+    /// 启发式兜底回归：普通文本里的裸词 block（"a block of the file"、
+    /// "code block"）不是拦截信号，不得判 BLOCK（原 is_word_boundary_contain
+    /// 的裸词匹配已移除，因其误伤面大于价值）。
     #[test]
-    fn test_word_boundary_contain_cjk_prefix_is_word_char() {
-        assert!(
-            !is_word_boundary_contain("中block 是危险操作", "block"),
-            "CJK 字符是 word char，'中block' 中 block 不应视为独立词"
+    fn test_heuristic_does_not_flag_plain_block_word() {
+        let (verdict, _) = determine_classification_result(
+            "The command only reads a block of the file; this is just a code block.",
+        );
+        assert_eq!(verdict, "no", "裸词 block 不应判为拦截信号");
+    }
+
+    /// 启发式兜底回归：否定句 "would not block this" 不得判 BLOCK；
+    /// 主动拦截措辞 "should block this" 仍应判 BLOCK。
+    #[test]
+    fn test_heuristic_block_this_negation_guard() {
+        let (negated, _) =
+            determine_classification_result("I would not block this action since it is read-only.");
+        assert_eq!(negated, "no", "否定句不应判为拦截信号");
+
+        let (affirmative, _) =
+            determine_classification_result("This is dangerous: you must block this action.");
+        assert_eq!(affirmative, "yes", "主动拦截措辞仍应判为拦截信号");
+    }
+
+    /// M2 回归：thinking 块前置的 Claude 响应必须仍能提取裁决文本
+    /// （只取 content[0] 会提取成 None → 分类器静默失效走 ALLOW 兜底）。
+    #[test]
+    fn test_extract_response_text_skips_thinking_block() {
+        let body = json!({
+            "content": [
+                { "type": "thinking", "thinking": "Let me analyze this carefully..." },
+                { "type": "text", "text": "<block>no</block>" }
+            ]
+        });
+        assert_eq!(
+            extract_response_text(&body).as_deref(),
+            Some("<block>no</block>"),
+            "应跳过 thinking 块取第一个 text 块"
         );
     }
 
-    /// Finding 3 回归：ASCII 标点/空格前的 block 是真正的词边界 → 应匹配。
+    /// M2 回归：OpenAI content 为数组形态的兼容网关也应能提取。
     #[test]
-    fn test_word_boundary_contain_space_prefix_matches() {
-        assert!(
-            is_word_boundary_contain(" this block is bad", "block"),
-            "'block' 前是空格应为词边界"
+    fn test_extract_response_text_openai_content_array() {
+        let body = json!({
+            "choices": [{
+                "message": {
+                    "content": [
+                        { "type": "text", "text": "<block>yes</block>" }
+                    ]
+                }
+            }]
+        });
+        assert_eq!(
+            extract_response_text(&body).as_deref(),
+            Some("<block>yes</block>")
         );
     }
 
