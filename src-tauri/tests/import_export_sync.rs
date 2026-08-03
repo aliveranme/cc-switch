@@ -81,11 +81,18 @@ fn sync_codex_provider_writes_config_without_touching_auth() {
     // 注意：v3.7.0 后 MCP 同步由 McpService 独立处理，不再通过 provider 切换触发
     // Codex provider 切换只写 config.toml；auth.json 保留用户登录态。
 
+    // 官方 Codex config.schema.json 中 experimental_bearer_token 仅存在于
+    // ModelProviderInfo（[model_providers.<id>] 表内）；顶层写盘会被 serde
+    // 静默忽略 → 鉴权落空。fixture 必须带 model_provider 路由，token 才能
+    // 落到 [model_providers.codex-test] 表内。
     let provider_config = json!({
         "auth": {
             "OPENAI_API_KEY": "codex-key"
         },
-        "config": r#"base_url = "https://codex.test""#
+        "config": r#"model_provider = "codex-test"
+
+[model_providers.codex-test]
+base_url = "https://codex.test""#
     });
 
     let provider = Provider::with_id(
@@ -141,6 +148,52 @@ fn sync_codex_provider_writes_config_without_touching_auth() {
     assert!(
         toml_text.contains("experimental_bearer_token"),
         "live config should include generated bearer token"
+    );
+}
+
+#[test]
+fn sync_codex_provider_without_model_provider_route_fails_loudly() {
+    // 官方 Codex config.schema.json：experimental_bearer_token 仅存在于
+    // ModelProviderInfo（[model_providers.<id>] 表内），顶层写盘会被 serde
+    // 静默忽略 → 鉴权注入落空后请求以 ChatGPT 登录态打到第三方 base_url，
+    // 认证失败且无报错。无 model_provider 路由时必须显式报错，不能静默写
+    // 无效键（此前行为）。
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    enable_codex_official_auth_preservation();
+
+    let mut config = MultiAppConfig::default();
+
+    let provider_config = json!({
+        "auth": {
+            "OPENAI_API_KEY": "codex-key"
+        },
+        "config": r#"base_url = "https://codex.test""#
+    });
+
+    let provider = Provider::with_id(
+        "codex-1".to_string(),
+        "Codex Test".to_string(),
+        provider_config,
+        None,
+    );
+
+    let manager = config
+        .get_manager_mut(&AppType::Codex)
+        .expect("codex manager");
+    manager.providers.insert("codex-1".to_string(), provider);
+    manager.current = "codex-1".to_string();
+
+    let err = ConfigService::sync_current_providers_to_live(&mut config)
+        .expect_err("sync must fail: no model_provider route for bearer token");
+    let message = format!("{err}");
+    assert!(
+        message.contains("model_provider"),
+        "error should explain the missing model_provider route, got: {message}"
+    );
+    assert!(
+        !cc_switch_lib::get_codex_config_path().exists(),
+        "config.toml must not be written when the bearer token cannot be routed"
     );
 }
 

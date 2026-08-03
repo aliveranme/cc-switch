@@ -350,7 +350,15 @@ command = "echo"
                 "Latest".to_string(),
                 json!({
                     "auth": {"OPENAI_API_KEY": "fresh-key"},
-                    "config": r#"[mcp_servers.latest]
+                    // 官方 schema 中 experimental_bearer_token 仅存在于
+                    // [model_providers.<id>] 表内，切换必须带 model_provider 路由
+                    "config": r#"model_provider = "new-provider-test"
+
+[model_providers.new-provider-test]
+base_url = "https://provider.test/v1"
+wire_api = "responses"
+
+[mcp_servers.latest]
 type = "stdio"
 command = "say"
 "#

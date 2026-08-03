@@ -136,7 +136,15 @@ command = "echo"
                 "Latest".to_string(),
                 json!({
                     "auth": {"OPENAI_API_KEY": "fresh-key"},
-                    "config": r#"[mcp_servers.latest]
+                    // 官方 schema 中 experimental_bearer_token 仅存在于
+                    // [model_providers.<id>] 表内，切换必须带 model_provider 路由
+                    "config": r#"model_provider = "new-provider-test"
+
+[model_providers.new-provider-test]
+base_url = "https://provider.test/v1"
+wire_api = "responses"
+
+[mcp_servers.latest]
 type = "stdio"
 command = "say"
 "#
@@ -2576,10 +2584,16 @@ command = "ghost-cmd"
         stored_a_config.contains("model_provider = \"aprov\""),
         "provider-owned routing must survive backfill, got: {stored_a_config}"
     );
-    // 顶层 wire_api 是 A 自己的路由语义：不进片段，但回填时留在 A 的快照里
+    // 顶层 wire_api 是 A 自己的路由语义：不进片段，但回填时留在 A 的快照里。
+    // 注意：上游 Codex 已移除 Chat wire API，live 写盘时 "chat" 已被归一化为
+    // "responses"（migrate_codex_wire_api_in_toml），回填读回的是迁移后的值。
     assert!(
-        stored_a_config.contains("wire_api = \"chat\""),
-        "provider-owned top-level wire_api must survive backfill, got: {stored_a_config}"
+        stored_a_config.contains("wire_api = \"responses\""),
+        "provider-owned top-level wire_api must survive backfill (normalized to responses), got: {stored_a_config}"
+    );
+    assert!(
+        !stored_a_config.contains("wire_api = \"chat\""),
+        "removed Chat wire API must not survive backfill, got: {stored_a_config}"
     );
     for forbidden in [
         "disable_response_storage",
