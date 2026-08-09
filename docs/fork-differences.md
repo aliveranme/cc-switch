@@ -11,7 +11,7 @@
 | 上游基线 | `413c09e0`（2026-08-09，v3.19.2 安全加固） |
 | 本地领先 | 325 commits（其中非 merge 本地提交约 243 个，其余为上游 merge 同步） |
 | 本次 merge | 92 文件，+12 344 / −1 537（合入上游 15 个提交） |
-| 本地版本 | `v3.19.1-b`（fork 发布序列：`v3.19.1-a` → `v3.19.1-b`，未随上游 bump） |
+| 本地版本 | `v3.19.2`（fork 发布序列：`v3.19.1-a` → `v3.19.1-b` → `v3.19.2`；本版与上游版本号对齐，首次无字母后缀） |
 | 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-08-09 |
 | 测试规模 | Rust 2487（本机 2 个 model_pricing 测试因 Windows v3.10.3 legacy 回退环境触发失败，与 merge 无关）+ 前端 vitest 705 |
 
@@ -282,6 +282,7 @@ tests/config/universalProviderPresets.test.ts
 |---|---|
 | `v3.19.1-a` | CI/发布基础设施修复（tag 推送正式版、wix.version 绕过 prerelease） |
 | `v3.19.1-b` | proxy 协议修复收尾（安全分类器、prefix-cache 稳定性、流式终态容错、工具历史恢复会话隔离） |
+| `v3.19.2` | 合入上游 v3.19.2（15 提交）+ fork 全特性；字节上限统一为 `bytes_with_limit`（200MB）；content_encoding 解压 bomb 防护；atomic_write Windows 改用 `ReplaceFileW`；版本号与上游对齐（首次无后缀，wix.version 3.19.2.0） |
 
 ## 6. 维护约定
 

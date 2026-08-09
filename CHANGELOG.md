@@ -5,6 +5,19 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.19.2] - 2026-08-09 (fork)
+
+Fork 发布版本，版本号与上游 v3.19.2 对齐。合入上游 main 全部 15 个提交
+（安全加固、Codex usage 交错计数修复、OMO 统一配置、管理面板搜索/批量切换、
+备份/导入性能，详见下方上游条目），fork 特有改动完整保留。
+
+本版同步要点（fork 有意偏离详见 `docs/fork-differences.md`）：
+- proxy 响应体字节上限统一为上游 `bytes_with_limit` 实现，上限保留 fork 的
+  200MB（`MAX_BUFFERED_PROXY_BODY_BYTES`，上游为 128MB）
+- content_encoding 采用上游解压 bomb 防护（`decompress_body_with_limit`）
+- atomic_write Windows 改用 `ReplaceFileW`；unix 创建即 0600 + 属主位收紧保留
+- 版本号首次与上游重合（此前 fork 用 `-a`/`-b` 字母后缀）
+
 ## [3.19.2] - 2026-08-06
 
 Development since v3.19.1 is a correctness and hardening pass, with the management UI picking up its two most-requested conveniences. The headline fix is to Codex usage accounting: a rollout file that interleaves several cumulative token counters — a gateway replaying the same snapshot under different rate-limit buckets, or two genuinely distinct counters alternating — could record several times its true usage, and the importer now recognizes both shapes; replaying a real corpus of ~1,900 rollout files lands within 0.001% of an independently computed ideal recount (#3011). A six-part security hardening caps every unbounded read a contributor's audit surfaced — usage scripts, Grok session logs, catalog files, proxy response bodies and their decompression — and the deep-link import dialog now shows two credential fields it previously persisted without rendering. OMO setups regain a working integration on two fronts: when OMO's unified config (`~/.omo/omo.jsonc` or `omo.json`) exists, writes land inside it instead of the legacy file the runtime no longer reads, and the model pickers merge in whatever the installed OpenCode reports at runtime. The MCP, prompt and skill panels gain search, with bulk per-app toggles joining the MCP and skill lists; the Auth Center shows each ChatGPT account's subscription usage inline; and two write-path overhauls — batched SQL backups and batched Codex session imports — cut the worst restore, sync and reimport stalls on large databases.
