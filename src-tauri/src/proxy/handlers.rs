@@ -81,10 +81,10 @@ pub async fn get_status(State(state): State<ProxyState>) -> Result<Json<ProxySta
 /// cc-switch–owned `model_catalog_json`, using the same path ownership rules as
 /// Codex live-setting import.
 pub async fn handle_models() -> Result<Json<Value>, ProxyError> {
-    let generated_path = crate::codex_config::get_codex_model_catalog_path();
+    let config_dir = crate::codex_config::get_codex_config_dir();
     let active_catalog_path = match crate::codex_config::read_codex_config_text() {
         Ok(config_text) => {
-            crate::codex_config::resolve_cc_switch_catalog_path(&config_text, &generated_path)
+            crate::codex_config::resolve_cc_switch_catalog_path(&config_text, &config_dir)
         }
         Err(_) => None,
     };
@@ -92,8 +92,13 @@ pub async fn handle_models() -> Result<Json<Value>, ProxyError> {
     let catalog = if let Some(catalog_path) =
         active_catalog_path.as_ref().filter(|path| path.exists())
     {
-        let text = std::fs::read_to_string(catalog_path).unwrap_or_default();
-        serde_json::from_str(&text).unwrap_or(json!({"models": []}))
+        match crate::codex_config::read_codex_model_catalog_text(catalog_path) {
+            Ok(text) => serde_json::from_str(&text).unwrap_or(json!({"models": []})),
+            Err(error) => {
+                log::warn!("[models] 拒绝读取越界或过大的目录文件: {error}");
+                json!({"models": []})
+            }
+        }
     } else {
         if active_catalog_path.is_none() {
             log::debug!(
@@ -563,7 +568,7 @@ async fn handle_claude_transform_upstream_error(
         .cloned();
 
     let message = match response
-        .bytes_limited(super::hyper_client::MAX_BUFFERED_PROXY_BODY_BYTES)
+        .bytes_with_limit(super::hyper_client::MAX_BUFFERED_PROXY_BODY_BYTES)
         .await
     {
         Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
@@ -2296,7 +2301,8 @@ fn codex_proxy_error_code(error: &ProxyError) -> &'static str {
         | ProxyError::NotRunning
         | ProxyError::BindFailed(_)
         | ProxyError::StopTimeout
-        | ProxyError::StopFailed(_) => "cc_switch_proxy_error",
+        | ProxyError::StopFailed(_)
+        | ProxyError::ResponseBodyTooLarge(_) => "cc_switch_proxy_error",
     }
 }
 
@@ -4001,7 +4007,7 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         assert!(is_json, "完整 JSON body 应被识别为 JSON");
 
         // 重建后的响应能读出完整 body，供非流式聚合使用
-        let bytes = rebuilt.bytes_limited(4096).await.unwrap();
+        let bytes = rebuilt.bytes_with_limit(4096).await.unwrap();
         assert!(bytes.starts_with(b"{"));
         assert!(String::from_utf8_lossy(&bytes).contains("chatcmpl-1"));
     }
@@ -4018,7 +4024,7 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         assert!(!is_json, "SSE body 不应被识别为 JSON");
 
         // 重建后的流式响应仍能读出原始 SSE 内容
-        let bytes = rebuilt.bytes_limited(4096).await.unwrap();
+        let bytes = rebuilt.bytes_with_limit(4096).await.unwrap();
         assert!(String::from_utf8_lossy(&bytes).starts_with("data:"));
     }
 
@@ -4039,7 +4045,7 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         assert!(is_json, "超过嗅探边界的 JSON 仍应被识别");
 
         // 重建后 body 完整（前缀 + 剩余拼接无误）
-        let bytes = rebuilt.bytes_limited(8192).await.unwrap();
+        let bytes = rebuilt.bytes_with_limit(8192).await.unwrap();
         assert!(bytes.starts_with(b"{"));
         assert!(bytes.ends_with(b"}"));
     }
@@ -4053,7 +4059,7 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
 
         let (is_json, rebuilt) = sniff_response_body_is_json(response, 2048).await.unwrap();
         assert!(!is_json, "空 body 不应被识别为 JSON");
-        assert!(rebuilt.bytes_limited(1024).await.unwrap().is_empty());
+        assert!(rebuilt.bytes_with_limit(1024).await.unwrap().is_empty());
     }
 
     #[tokio::test]

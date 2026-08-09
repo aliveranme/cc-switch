@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | `492245dc`（2026-08-03，Codex OAuth 账户用量展示 #4887） |
-| 本地领先 | 312 commits（其中非 merge 本地提交约 156 个，其余为上游 merge 同步） |
-| 文件差异 | 184 文件，+18 847 / −9 371 |
-| 本地版本 | `v3.19.1-b`（fork 发布序列：`v3.19.1-a` → `v3.19.1-b`） |
-| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-08-03 |
-| 测试规模 | Rust 2434（上游基线约 2000）+ 前端 vitest 592 |
+| 上游基线 | `413c09e0`（2026-08-09，v3.19.2 安全加固） |
+| 本地领先 | 325 commits（其中非 merge 本地提交约 243 个，其余为上游 merge 同步） |
+| 本次 merge | 92 文件，+12 344 / −1 537（合入上游 15 个提交） |
+| 本地版本 | `v3.19.1-b`（fork 发布序列：`v3.19.1-a` → `v3.19.1-b`，未随上游 bump） |
+| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-08-09 |
+| 测试规模 | Rust 2487（本机 2 个 model_pricing 测试因 Windows v3.10.3 legacy 回退环境触发失败，与 merge 无关）+ 前端 vitest 705 |
 
 ## 2. 修改总览（按主题）
 
@@ -26,6 +26,7 @@
 | **prefix-cache 稳定性**（transform 系 + forwarder） | 剥离 `x-anthropic-billing-header` 的 rotating `cch=` nonce（`strip_volatile_cch`，逐行字节级确定）；mid-conversation system 重写为 user（见 4.1）；CacheTrace 调试链路（TRACE 级门控） |
 | **SSE 流式协议**（streaming.rs / streaming_codex_chat.rs / streaming_gemini.rs / streaming_responses.rs） | 终态必达（EOF sentinel、[DONE] 去重、截断流补 end_turn）；**伪成功防护**（空 delta chunk 后断流/DONE 发 error 而非伪造成功）；错误状态码与 retry-after 透传；`output_text.done`/`refusal.done` 跳 delta 恢复完整文本；whole-JSON 非流式回退（Responses 方向）；转换器 1MB 缓冲上限防 OOM；[DONE] 后残留数据守卫 |
 | **路由/嗅探**（handlers.rs / forwarder.rs / content_encoding.rs） | 响应体嗅探（`<=`→`<` 边界修复保流式、未标记 JSON 识别）；content_encoding 双向全支持（gzip/br/zstd/deflate，堆叠编码，200MB 上限）；`cache_injection` 域收敛（见 4.4）；嗅探超时与故障转移联动 |
+| **响应体字节上限实现**（v3.19.2 同步） | 方法统一为上游 `bytes_with_limit`（Buffered 变体事后比较 + 流式逐块超限截停 + `ResponseBodyTooLarge` 错误），上限保留 fork 的 `MAX_BUFFERED_PROXY_BODY_BYTES = 200MB`（上游 128MB）；content_encoding 采用上游 `decompress_body_with_limit`（解码器读取侧预算、压缩炸弹在预算处截停、TooLarge 与数据损坏区分） |
 | **工具历史恢复**（新增 `codex_chat_history.rs`） | Codex Responses→Chat 桥下按会话恢复 function_call 与 reasoning_content；StoreKey 复合键会话隔离（防串话）+ 512 响应/4096 call 规模上限 |
 | **OpenCode Go 网关特化**（claude.rs `is_opencode_go_gateway`） | `opencode.ai/zen/*` 上游**保留** OpenAI 请求体的 cache_control 断点/prompt_cache_key（Go 网关认可），其他 OpenAI 兼容上游维持剥离 |
 
@@ -182,6 +183,12 @@ tests/config/universalProviderPresets.test.ts
   chmod"窗口期，且 FAT/exFAT 等不支持权限位的挂载上也不存在宽松存在期）。
 - ⚠️ 同步时注意：上游若引入新的配置写路径，必须走 `atomic_write`/`harden_secret_file`，
   否则密钥文件会退回 0644。
+- **v3.19.2 同步**：`atomic_write` 的 Windows 替换方式合入上游 `ReplaceFileW`
+  （原 remove+rename 有"目标文件短暂不存在"窗口，`ReplaceFileW` 原子替换保留 ACL 并处理
+  共享冲突）；fork 的 unix 权限语义完整保留——create_new 循环在 unix 上 open 时即 `mode(0o600)`
+  （创建即收紧，无 0644 窗口期）+ 后续属主位收紧块原样保留。fork 的
+  `retry_transient_io`/`is_transient_reparse_error`（跨卷符号链接 448/183/32 退避重试）因
+  生产调用点被 ReplaceFileW 取代，标记 `#[allow(dead_code)]` 保留作 fallback（测试仍在）。
 
 ### 4.6 wire_api 迁移（chat→responses）
 
