@@ -2,10 +2,10 @@
 //!
 //! 负责将请求转发到上游Provider，支持故障转移
 
-use super::hyper_client::ProxyResponse;
+use super::hyper_client::{ProxyResponse, MAX_BUFFERED_PROXY_BODY_BYTES};
 use super::{
     body_filter::filter_private_params_with_whitelist,
-    content_encoding::{decompress_body, get_content_encoding},
+    content_encoding::{decompress_body_with_limit, get_content_encoding},
     error::*,
     failover_switch::FailoverSwitchManager,
     json_canonical::{canonicalize_value, short_value_hash},
@@ -2373,14 +2373,18 @@ impl RequestForwarder {
             // 在 from_utf8 处变成非 UTF-8 而被丢弃，隐藏掉上游的限流/鉴权等详情。
             let encoding = get_content_encoding(response.headers());
             let raw = response
-                .bytes_limited(super::hyper_client::MAX_BUFFERED_PROXY_BODY_BYTES)
+                .bytes_with_limit(MAX_BUFFERED_PROXY_BODY_BYTES)
                 .await?;
             let decoded = match encoding {
-                Some(encoding) => match decompress_body(&encoding, &raw) {
-                    Ok(Some(decompressed)) => decompressed,
-                    // 不支持的编码 / 解压失败：退回原始字节，尽量保留可读信息
-                    _ => raw.to_vec(),
-                },
+                Some(encoding) => {
+                    match decompress_body_with_limit(&encoding, &raw, MAX_BUFFERED_PROXY_BODY_BYTES)
+                    {
+                        Ok(Some(decompressed)) => decompressed,
+                        // 不支持的编码 / 解压失败 / 解压后超限：退回（已有上限的）
+                        // 原始字节，尽量保留可读信息
+                        _ => raw.to_vec(),
+                    }
+                }
                 None => raw.to_vec(),
             };
             let body_text = String::from_utf8(decoded).ok();
@@ -2414,7 +2418,7 @@ impl RequestForwarder {
         let body_timeout = self.non_streaming_timeout;
         let body = tokio::time::timeout(
             body_timeout,
-            response.bytes_limited(super::hyper_client::MAX_BUFFERED_PROXY_BODY_BYTES),
+            response.bytes_with_limit(MAX_BUFFERED_PROXY_BODY_BYTES),
         )
         .await
         .map_err(|_| {
@@ -2438,13 +2442,15 @@ impl RequestForwarder {
         let headers = response.headers().clone();
         let encoding = get_content_encoding(&headers);
         let raw = response
-            .bytes_limited(super::hyper_client::MAX_BUFFERED_PROXY_BODY_BYTES)
+            .bytes_with_limit(MAX_BUFFERED_PROXY_BODY_BYTES)
             .await?;
         let decoded = match encoding {
-            Some(encoding) => match decompress_body(&encoding, &raw) {
-                Ok(Some(decompressed)) => decompressed,
-                _ => raw.to_vec(),
-            },
+            Some(encoding) => {
+                match decompress_body_with_limit(&encoding, &raw, MAX_BUFFERED_PROXY_BODY_BYTES) {
+                    Ok(Some(decompressed)) => decompressed,
+                    _ => raw.to_vec(),
+                }
+            }
             None => raw.to_vec(),
         };
 
@@ -2465,13 +2471,15 @@ impl RequestForwarder {
         let headers = response.headers().clone();
         let encoding = get_content_encoding(&headers);
         let raw = response
-            .bytes_limited(super::hyper_client::MAX_BUFFERED_PROXY_BODY_BYTES)
+            .bytes_with_limit(MAX_BUFFERED_PROXY_BODY_BYTES)
             .await?;
         let decoded = match encoding {
-            Some(encoding) => match decompress_body(&encoding, &raw) {
-                Ok(Some(decompressed)) => decompressed,
-                _ => raw.to_vec(),
-            },
+            Some(encoding) => {
+                match decompress_body_with_limit(&encoding, &raw, MAX_BUFFERED_PROXY_BODY_BYTES) {
+                    Ok(Some(decompressed)) => decompressed,
+                    _ => raw.to_vec(),
+                }
+            }
             None => raw.to_vec(),
         };
 
@@ -4067,7 +4075,7 @@ mod tests {
 
         assert_eq!(
             prepared
-                .bytes_limited(super::super::hyper_client::MAX_BUFFERED_PROXY_BODY_BYTES)
+                .bytes_with_limit(MAX_BUFFERED_PROXY_BODY_BYTES)
                 .await
                 .unwrap(),
             Bytes::from_static(b"{\"ok\":true}")
@@ -4115,7 +4123,7 @@ mod tests {
 
         assert_eq!(
             prepared
-                .bytes_limited(super::super::hyper_client::MAX_BUFFERED_PROXY_BODY_BYTES)
+                .bytes_with_limit(MAX_BUFFERED_PROXY_BODY_BYTES)
                 .await
                 .unwrap(),
             Bytes::from_static(b"firstsecond")

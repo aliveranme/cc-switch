@@ -18,6 +18,7 @@
   "keywords": [],
   "author": "Jason Young",
   "license": "MIT",
+  "packageManager": "pnpm@10.12.3",
   "devDependencies": {
     "@lobehub/icons-static-svg": "^1.94.0",
     "@tailwindcss/postcss": "^4.3.3",
@@ -32,7 +33,7 @@
     "autoprefixer": "^10.5.4",
     "code-inspector-plugin": "^2.0.7",
     "cross-fetch": "^4.1.0",
-    "jsdom": "^29.1.1",
+    "jsdom": "^30.0.1",
     "msw": "^2.15.0",
     "postcss": "^8.5.25",
     "prettier": "^3.9.6",
