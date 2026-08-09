@@ -18,6 +18,20 @@ Fork 发布版本，版本号与上游 v3.19.2 对齐。合入上游 main 全部
 - atomic_write Windows 改用 `ReplaceFileW`；unix 创建即 0600 + 属主位收紧保留
 - 版本号首次与上游重合（此前 fork 用 `-a`/`-b` 字母后缀）
 
+本版重新发布补充（fork 重发，含以下修正，详见对应提交）：
+- **代理接管认证占位符**：普通/官方供应商接管时统一写 `ANTHROPIC_AUTH_TOKEN=PROXY_MANAGED`
+  并清除真实 `ANTHROPIC_API_KEY`。新版 Claude Code 对 `ANTHROPIC_API_KEY` 占位符会弹
+  自定义 key 确认框（默认 "No (recommended)"），会话落入 Not logged in；`AUTH_TOKEN` 作为
+  网关 Bearer 被直接信任、零弹窗。代理转发仍用 DB 供应商真实 key 构造认证头，上游认证方式不变。
+- **官方原生分类器透传**：路由目标为 `api.anthropic.com` 时，auto-mode 安全分类器请求透传
+  （保留 Claude 官方安全监控 prompt + thinking/stop_sequences/betas），不再被简化转换降级；
+  兼容网关仍走协议转换。
+- **原生透传 ALLOW 兜底**：官方原生分类器透传在转发/响应处理失败时返回 ALLOW 兜底
+  （与兼容网关转换路径一致，可用性优先），避免一次 429/5xx 让 auto-mode 全量 BLOCK。
+- **分类器检测加固**：疑似漏检 warn 日志 + 误判向量回归测试（路径 1/路径 2 双特征/漏检向量）。
+- **消息格式完整性审查**：确认路由下 SSE/非流式响应字节级透传、usage 纯旁观不注入；
+  修复接管占位符相关测试断言。
+
 ## [3.19.2] - 2026-08-06
 
 Development since v3.19.1 is a correctness and hardening pass, with the management UI picking up its two most-requested conveniences. The headline fix is to Codex usage accounting: a rollout file that interleaves several cumulative token counters — a gateway replaying the same snapshot under different rate-limit buckets, or two genuinely distinct counters alternating — could record several times its true usage, and the importer now recognizes both shapes; replaying a real corpus of ~1,900 rollout files lands within 0.001% of an independently computed ideal recount (#3011). A six-part security hardening caps every unbounded read a contributor's audit surfaced — usage scripts, Grok session logs, catalog files, proxy response bodies and their decompression — and the deep-link import dialog now shows two credential fields it previously persisted without rendering. OMO setups regain a working integration on two fronts: when OMO's unified config (`~/.omo/omo.jsonc` or `omo.json`) exists, writes land inside it instead of the legacy file the runtime no longer reads, and the model pickers merge in whatever the installed OpenCode reports at runtime. The MCP, prompt and skill panels gain search, with bulk per-app toggles joining the MCP and skill lists; the Auth Center shows each ChatGPT account's subscription usage inline; and two write-path overhauls — batched SQL backups and batched Codex session imports — cut the worst restore, sync and reimport stalls on large databases.
