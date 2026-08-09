@@ -50,7 +50,12 @@ const CLAUDE_ONE_M_MARKER_FOR_CLIENT: &str = "[1M]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClaudeTakeoverAuthPolicy {
-    PreserveExistingOrAuthToken,
+    /// 普通/官方供应商默认：统一写 ANTHROPIC_AUTH_TOKEN 占位符（零弹窗），
+    /// 删掉其它 token 键。ANTHROPIC_API_KEY 占位符会触发 Claude Code 的
+    /// 自定义 key 确认框（默认 "No (recommended)"），按默认走即 Not logged in
+    /// （与 #3784 的 Copilot 修复同源）。
+    AuthTokenOnly,
+    /// 托管账号（Copilot/Codex OAuth/xAI）：删掉全部 token 键，按需注入。
     ManagedAccount { keep_auth_token: bool },
 }
 
@@ -83,7 +88,7 @@ impl ProxyService {
         Self::apply_claude_takeover_fields_with_policy(
             config,
             proxy_url,
-            ClaudeTakeoverAuthPolicy::PreserveExistingOrAuthToken,
+            ClaudeTakeoverAuthPolicy::AuthTokenOnly,
         );
     }
 
@@ -107,7 +112,13 @@ impl ProxyService {
                     || !provider.claude_uses_api_key_field(),
             }
         } else {
-            ClaudeTakeoverAuthPolicy::PreserveExistingOrAuthToken
+            // 普通/官方供应商：一律统一写 AUTH_TOKEN 占位符，删掉真实 API_KEY
+            // 及其它 token 键。即便上游只认 x-api-key、用户显式选了 API_KEY 字段，
+            // live 占位也用 AUTH_TOKEN——代理转发用 DB 供应商的真实 key 构造认证头
+            // （extract_auth 按 provider.settings_config 里的键决定 x-api-key/Bearer），
+            // 与 live 占位符字段无关；且 AUTH_TOKEN 占位零弹窗，避免 Claude Code
+            // 的自定义 key 确认框（默认 "No (recommended)"）→ Not logged in（#3784）。
+            ClaudeTakeoverAuthPolicy::AuthTokenOnly
         };
         // Copilot/Codex 接管时 live config 可能还是旧供应商；显示模型必须跟随目标 provider。
         let takeover_model_fields = if provider.uses_managed_account_auth() {
@@ -179,21 +190,14 @@ impl ProxyService {
         ];
 
         match auth_policy {
-            ClaudeTakeoverAuthPolicy::PreserveExistingOrAuthToken => {
-                let mut replaced_any = false;
+            ClaudeTakeoverAuthPolicy::AuthTokenOnly => {
                 for key in token_keys {
-                    if env.contains_key(key) {
-                        env.insert(key.to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
-                        replaced_any = true;
-                    }
+                    env.remove(key);
                 }
-
-                if !replaced_any {
-                    env.insert(
-                        "ANTHROPIC_AUTH_TOKEN".to_string(),
-                        json!(PROXY_TOKEN_PLACEHOLDER),
-                    );
-                }
+                env.insert(
+                    "ANTHROPIC_AUTH_TOKEN".to_string(),
+                    json!(PROXY_TOKEN_PLACEHOLDER),
+                );
             }
             ClaudeTakeoverAuthPolicy::ManagedAccount { keep_auth_token } => {
                 for key in token_keys {
@@ -1705,7 +1709,7 @@ impl ProxyService {
                         Self::apply_claude_takeover_fields_with_policy(
                             &mut live_config,
                             &proxy_url,
-                            ClaudeTakeoverAuthPolicy::PreserveExistingOrAuthToken,
+                            ClaudeTakeoverAuthPolicy::AuthTokenOnly,
                         );
                     }
                     if let Err(e) = self.write_claude_live(&live_config) {
@@ -3807,6 +3811,88 @@ mod tests {
         );
     }
 
+    #[test]
+    fn normal_claude_takeover_with_api_key_injects_auth_token_placeholder() {
+        // 普通第三方供应商，env 用 ANTHROPIC_API_KEY 存真实 key（上游只认 x-api-key）。
+        // 接管必须写 AUTH_TOKEN 占位符并删掉真实 API_KEY：API_KEY=PROXY_MANAGED 会触发
+        // Claude Code 的自定义 key 确认框（默认 "No (recommended)"），落入 Not logged in。
+        // 代理转发用 DB 供应商的真实 key 发 x-api-key，与 live 占位符字段无关。
+        let provider = Provider::with_id(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_API_KEY": "sk-real-key",
+                    "ANTHROPIC_BASE_URL": "https://opencode.ai/zen/go"
+                }
+            }),
+            None,
+        );
+        let mut live_config = json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://stale.example.com",
+                "ANTHROPIC_API_KEY": "stale-key",
+                "ANTHROPIC_MODEL": "stale-model"
+            }
+        });
+
+        ProxyService::apply_claude_takeover_fields_for_provider(
+            &mut live_config,
+            "http://127.0.0.1:15721",
+            &provider,
+        );
+
+        let env = live_config
+            .get("env")
+            .and_then(|value| value.as_object())
+            .expect("env should exist");
+        assert_env_str(env, "ANTHROPIC_AUTH_TOKEN", Some(PROXY_TOKEN_PLACEHOLDER));
+        assert_env_str(env, "ANTHROPIC_API_KEY", None);
+    }
+
+    #[test]
+    fn normal_claude_takeover_explicit_api_key_field_still_injects_auth_token() {
+        // 即便用户显式选择 ANTHROPIC_API_KEY 字段（meta.apiKeyField），普通（非托管）
+        // 供应商接管也统一写 AUTH_TOKEN 占位符：API_KEY 占位会触发 Claude Code 确认框
+        // → Not logged in；且 live 占位与代理转发的真实认证头无关（代理用 DB key 发
+        // x-api-key），所以不用为"上游只认 x-api-key"保留 API_KEY 占位。
+        let mut provider = Provider::with_id(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_API_KEY": "sk-real-key",
+                    "ANTHROPIC_BASE_URL": "https://opencode.ai/zen/go"
+                }
+            }),
+            None,
+        );
+        provider.meta = Some(ProviderMeta {
+            api_key_field: Some("ANTHROPIC_API_KEY".to_string()),
+            ..Default::default()
+        });
+        let mut live_config = json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://stale.example.com",
+                "ANTHROPIC_API_KEY": "stale-key",
+                "ANTHROPIC_MODEL": "stale-model"
+            }
+        });
+
+        ProxyService::apply_claude_takeover_fields_for_provider(
+            &mut live_config,
+            "http://127.0.0.1:15721",
+            &provider,
+        );
+
+        let env = live_config
+            .get("env")
+            .and_then(|value| value.as_object())
+            .expect("env should exist");
+        assert_env_str(env, "ANTHROPIC_AUTH_TOKEN", Some(PROXY_TOKEN_PLACEHOLDER));
+        assert_env_str(env, "ANTHROPIC_API_KEY", None);
+    }
+
     #[tokio::test]
     #[serial]
     async fn start_with_takeover_ephemeral_port_writes_actual_live_url() {
@@ -5566,10 +5652,16 @@ model = "gpt-5.1-codex"
         );
         assert_eq!(
             live.get("env")
-                .and_then(|env| env.get("ANTHROPIC_API_KEY"))
+                .and_then(|env| env.get("ANTHROPIC_AUTH_TOKEN"))
                 .and_then(|v| v.as_str()),
             Some(PROXY_TOKEN_PLACEHOLDER),
             "takeover token placeholder should be preserved"
+        );
+        assert!(
+            live.get("env")
+                .and_then(|env| env.get("ANTHROPIC_API_KEY"))
+                .is_none(),
+            "API_KEY placeholder must not be written (it triggers Claude Code's approval prompt)"
         );
         assert_eq!(
             live.get("env")

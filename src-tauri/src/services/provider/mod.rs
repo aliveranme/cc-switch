@@ -1551,10 +1551,16 @@ command = "legacy-cmd"
         );
         assert_eq!(
             live.get("env")
-                .and_then(|env| env.get("ANTHROPIC_API_KEY"))
+                .and_then(|env| env.get("ANTHROPIC_AUTH_TOKEN"))
                 .and_then(|v| v.as_str()),
             Some("PROXY_MANAGED"),
             "takeover placeholder should stay intact"
+        );
+        assert!(
+            live.get("env")
+                .and_then(|env| env.get("ANTHROPIC_API_KEY"))
+                .is_none(),
+            "API_KEY placeholder must not be written (it triggers Claude Code's approval prompt)"
         );
         assert_eq!(
             live.get("env")
