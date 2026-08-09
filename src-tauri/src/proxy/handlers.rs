@@ -193,9 +193,21 @@ async fn handle_messages_for_app(
             Err(error) => return Ok(build_anthropic_request_error_response(&error)),
         };
 
-    // 安全分类器请求：协议转换后转发到上游，再转回分类器格式
-    // 不再用 mock 短路——让上游模型做真实分类，cc-switch 承担格式转换
-    if ctx.is_classifier_request {
+    // 安全分类器请求：
+    // - 官方原生上游（api.anthropic.com）：**透传**，保留 Claude 官方安全监控
+    //   system prompt + thinking/stop_sequences/betas，让官方分类器正常工作。
+    // - 兼容网关（opencode / 中转等，不支持这些原生参数）：协议转换——替换简化
+    //   prompt、去掉不兼容参数，让上游模型输出 <block>/<severity>，再转回
+    //   Claude Code 分类器格式。
+    let classifier_native_passthrough = ctx.is_classifier_request
+        && super::providers::is_official_anthropic_upstream(&ctx.provider);
+    if classifier_native_passthrough {
+        log::info!(
+            "[{}] [Classifier] 官方原生上游，分类器请求透传（保留官方安全监控协议）, model={}",
+            tag,
+            ctx.request_model
+        );
+    } else if ctx.is_classifier_request {
         log::info!(
             "[{}] [Classifier] 转换分类器请求并转发到上游 (model={})",
             tag,
@@ -365,6 +377,21 @@ async fn handle_messages_for_app(
             if let Some(provider) = err.provider.take() {
                 ctx.provider = provider;
             }
+            // 原生分类器透传：上游故障时与转换路径一致的 ALLOW 兜底（可用性优先），
+            // 避免一次 429/5xx/网络错误让 auto-mode 全量 BLOCK。
+            if classifier_native_passthrough {
+                log::warn!(
+                    "[{}] [Classifier] 原生透传上游转发失败, fallback 到 ALLOW: {:?}",
+                    tag,
+                    err.error
+                );
+                let mode = ctx
+                    .classifier_mode
+                    .unwrap_or(super::classifier::ClassifierMode::Block);
+                let fallback =
+                    super::classifier::build_classifier_success_body(&ctx.request_model, mode);
+                return Ok((StatusCode::OK, Json(fallback)).into_response());
+            }
             log_forward_error(&state, &ctx, is_stream, &err.error);
             return Err(err.error);
         }
@@ -399,7 +426,7 @@ async fn handle_messages_for_app(
     }
 
     // 通用响应处理（透传模式）
-    process_response(
+    match process_response(
         response,
         &ctx,
         &state,
@@ -407,6 +434,23 @@ async fn handle_messages_for_app(
         connection_guard,
     )
     .await
+    {
+        Ok(resp) => Ok(resp),
+        Err(e) if classifier_native_passthrough => {
+            log::warn!(
+                "[{}] [Classifier] 原生透传响应处理失败, fallback 到 ALLOW: {}",
+                tag,
+                e
+            );
+            let mode = ctx
+                .classifier_mode
+                .unwrap_or(super::classifier::ClassifierMode::Block);
+            let fallback =
+                super::classifier::build_classifier_success_body(&ctx.request_model, mode);
+            Ok((StatusCode::OK, Json(fallback)).into_response())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn validate_claude_desktop_gateway_auth(

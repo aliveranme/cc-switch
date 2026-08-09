@@ -52,8 +52,9 @@ pub use adapter::ProviderAdapter;
 pub use auth::{AuthInfo, AuthStrategy};
 pub use claude::{
     claude_api_format_needs_transform, get_claude_api_format,
-    is_deepseek_official_anthropic_endpoint, normalize_anthropic_messages_for_provider,
-    transform_claude_request_for_api_format, ClaudeAdapter,
+    is_deepseek_official_anthropic_endpoint, is_official_anthropic_upstream,
+    normalize_anthropic_messages_for_provider, transform_claude_request_for_api_format,
+    ClaudeAdapter,
 };
 pub use codex::CodexAdapter;
 pub use codex::{

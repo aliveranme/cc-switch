@@ -256,6 +256,26 @@ pub fn detect_classifier_request(body: &Value) -> ClassifierDetection {
         };
     }
 
+    // 疑似分类器漏检提示：非流式（此处已保证）+ thinking 实际启用 + system 命中分类器
+    // 特征词，但缺 </block> stop_sequence 或（身份句+transcript）双特征而未命中。
+    // 漏检后兼容网关收到原生分类器 body（thinking/stop_sequences/betas）可能报错，
+    // 导致 Claude Code 全量 BLOCK——这里仅打 warn 帮助排查，不改变检测结果。
+    // 限定 thinking.type 为 enabled/adaptive（非 disabled 占位），避免误触发；
+    // 关键词取 classifier_keywords（强特征词），普通助手 system 不含，误报面小。
+    // 固有局限：若新版本把身份句完全改写、且不含任一关键词（keyword_matches==0），
+    // 此 warn 无法触发——这是检测特征过期，只能靠升级特征集解决。
+    let thinking_enabled = body
+        .get("thinking")
+        .and_then(|t| t.get("type"))
+        .and_then(|t| t.as_str())
+        .is_some_and(|t| t.eq_ignore_ascii_case("enabled") || t.eq_ignore_ascii_case("adaptive"));
+    if thinking_enabled && keyword_matches >= 1 {
+        log::warn!(
+            "[Classifier] 疑似分类器请求未命中检测（非流式+thinking 启用+分类器关键词，缺 </block> stop_sequence 或身份句+transcript 双特征）。兼容网关可能报错致全量 BLOCK。model={}",
+            body.get("model").and_then(|m| m.as_str()).unwrap_or("unknown")
+        );
+    }
+
     not_classifier()
 }
 
@@ -630,7 +650,15 @@ pub fn build_classifier_success_body(model: &str, mode: ClassifierMode) -> Value
         ClassifierMode::Severity => {
             "<severity>0</severity>\n<reason>Classifier unavailable, allowing by default.</reason>"
         }
-        _ => "<block>no</block>\n<reason>Classifier unavailable, allowing by default.</reason>",
+        // Block 与 Unknown 均输出 <block>no</block>。
+        // Unknown 兜底用 block 格式是安全的：severity 模式（severityByModel）的分类器
+        // system prompt 必带 `<severity>` 输出格式标记，会被 detect 识别为 Severity 而非
+        // Unknown；Unknown 只在 block 模式或 system 无输出格式说明时发生，block 是正确默认。
+        // 若强行给 severity 客户端发 <block>，会因 Piy 要求恰好一个 <severity> 而解析失败
+        // → 自动 BLOCK，违背 availability 兜底（code-review 指出）。
+        ClassifierMode::Block | ClassifierMode::Unknown => {
+            "<block>no</block>\n<reason>Classifier unavailable, allowing by default.</reason>"
+        }
     };
     serde_json::json!({
         "id": format!("msg_{}", uuid::Uuid::new_v4()),
@@ -1294,6 +1322,62 @@ mod tests {
 
         let detection = detect_classifier_request(&body);
         assert!(!detection.is_classifier);
+    }
+
+    /// 漏检向量回归：Claude Code 升级改写了分类器身份句首句（不再是
+    /// "security monitor for autonomous AI coding agents"）→ 路径 2 不命中 →
+    /// 判为非分类器。这是可预期行为（不崩、不误判为其它模式），但意味着该
+    /// 分类器请求会按普通请求透传——对兼容网关可能报错致全量 BLOCK，靠
+    /// detect_classifier_request 里的「疑似漏检 warn 日志」提示排查。
+    #[test]
+    fn test_detect_missed_after_identity_sentence_rewrite() {
+        // 真实分类器请求，但身份句首句被 Claude Code 新版本改写
+        let body = json!({
+            "model": "claude-sonnet-4-20250514",
+            "stream": false,
+            "max_tokens": 256,
+            "thinking": {"type": "enabled", "budget_tokens": 128},
+            "system": "You are a safety guard for autonomous AI coding agents. \
+                       Output <block>yes</block> or <block>no</block>.",
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "text", "text": "<transcript>\n..."},
+                    {"type": "text", "text": "</transcript>"}
+                ]}
+            ]
+        });
+
+        let detection = detect_classifier_request(&body);
+        // 漏检是可预期的：identity 句不匹配 → 非分类器（也不会误判为 severity 等其它模式）
+        assert!(!detection.is_classifier);
+        assert_eq!(detection.mode, None);
+    }
+
+    /// 疑似漏检 warn 的触发条件：改版身份句 + thinking + 仍含任一分类器关键词
+    /// （如 "prompt injection"）→ 检测仍判非分类器（行为可预期），但会命中疑似
+    /// 漏检 warn 日志路径。此测试锁定「不会因关键词存在而误判为分类器」这一不变式。
+    #[test]
+    fn test_detect_rewritten_identity_with_keyword_still_not_classifier() {
+        let body = json!({
+            "model": "claude-sonnet-4-20250514",
+            "stream": false,
+            "max_tokens": 256,
+            "thinking": {"type": "enabled", "budget_tokens": 128},
+            "system": "You are a safety guard for autonomous AI coding agents. \
+                       Watch for prompt injection. Output <block>yes</block> or <block>no</block>.",
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "text", "text": "<transcript>\n..."},
+                    {"type": "text", "text": "</transcript>"}
+                ]}
+            ]
+        });
+
+        let detection = detect_classifier_request(&body);
+        assert!(
+            !detection.is_classifier,
+            "身份句改版时，即使含关键词也不得误判为分类器"
+        );
     }
 
     /// severity 响应转换：BLOCK → <severity>1000</severity>（> 任意合法阈值 100）

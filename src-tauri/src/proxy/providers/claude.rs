@@ -229,6 +229,38 @@ pub fn is_deepseek_official_anthropic_endpoint(provider: &Provider) -> bool {
     base_url.map(|u| u.trim_end_matches('/')) == Some(DEEPSEEK_OFFICIAL_ANTHROPIC_URL)
 }
 
+/// Anthropic 官方原生 API 域判定：`api.anthropic.com`（精确 host）。
+///
+/// 中转 / 兼容网关（host 含 anthropic 但非官方域）不算数。
+fn is_official_anthropic_base_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    // 容忍尾点 FQDN（RFC 允许 "api.anthropic.com."，host_str 会保留尾点）。
+    let host = host.trim_end_matches('.');
+    host == "api.anthropic.com" || host.ends_with(".api.anthropic.com")
+}
+
+/// 判断供应商上游是否为 Anthropic 官方原生 API（`api.anthropic.com`）。
+///
+/// 分类器请求（Claude Code auto-mode safety classifier）对官方原生应**透传**：
+/// 保留 Claude 官方安全监控 system prompt、`thinking`、`stop_sequences`、`betas`，
+/// 让官方分类器正常工作（handlers.rs 据此跳过协议转换）；对兼容网关（opencode、
+/// 各类中转，不支持这些原生参数）才做协议转换
+/// （`crate::proxy::classifier::transform_classifier_request`）。
+pub fn is_official_anthropic_upstream(provider: &Provider) -> bool {
+    let settings = &provider.settings_config;
+    let base_url = settings
+        .get("env")
+        .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
+        .and_then(|v| v.as_str())
+        .or_else(|| settings.get("base_url").and_then(|v| v.as_str()))
+        .or_else(|| settings.get("baseURL").and_then(|v| v.as_str()))
+        .or_else(|| settings.get("apiEndpoint").and_then(|v| v.as_str()));
+    base_url.is_some_and(is_official_anthropic_base_url)
+}
+
 /// DeepSeek's official Anthropic-compatible endpoint treats
 /// `thinking: { type: "disabled" }` and effort parameters (`output_config.effort`
 /// or `reasoning_effort`) as mutually exclusive, returning HTTP 400:
@@ -1181,6 +1213,47 @@ mod tests {
             icon_color: None,
             in_failover_queue: false,
         }
+    }
+
+    #[test]
+    fn test_is_official_anthropic_upstream() {
+        // api.anthropic.com 官方原生 → true（含 /v1 尾缀）
+        let native = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://api.anthropic.com", "ANTHROPIC_API_KEY": "sk-ant-xxx" }
+        }));
+        assert!(is_official_anthropic_upstream(&native));
+
+        let native_v1 = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY": "sk-ant-xxx" }
+        }));
+        assert!(is_official_anthropic_upstream(&native_v1));
+
+        // 尾点 FQDN（"api.anthropic.com."）也视为官方原生
+        let native_dot = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://api.anthropic.com./v1", "ANTHROPIC_API_KEY": "sk-ant-xxx" }
+        }));
+        assert!(is_official_anthropic_upstream(&native_dot));
+
+        // 兼容网关 / 中转 → false
+        let gateway = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://opencode.ai/zen/go", "ANTHROPIC_API_KEY": "sk-xxx" }
+        }));
+        assert!(!is_official_anthropic_upstream(&gateway));
+
+        let deepseek = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic", "ANTHROPIC_AUTH_TOKEN": "sk-xxx" }
+        }));
+        assert!(!is_official_anthropic_upstream(&deepseek));
+
+        // 无 base_url（claude-official 空 env）→ false
+        let empty = create_provider(json!({ "env": {} }));
+        assert!(!is_official_anthropic_upstream(&empty));
+
+        // 域名含 anthropic 字样但非官方 host 的伪造中转 → false
+        let spoof = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://anthropic-proxy.example.com", "ANTHROPIC_AUTH_TOKEN": "sk-xxx" }
+        }));
+        assert!(!is_official_anthropic_upstream(&spoof));
     }
 
     #[test]
