@@ -1556,7 +1556,7 @@ function ProviderFormFull({
       }
     }
 
-// Partner 标记来自预设，与是否添加自定义 endpoint 无关。原先嵌在
+    // Partner 标记来自预设，与是否添加自定义 endpoint 无关。原先嵌在
     // `draftCustomEndpoints.length > 0` 的 guard 里，导致没有自定义 endpoint
     // 的合作方供应商在新建时丢失 isPartner / partnerPromotionKey（最终
     // nextMeta 只从 baseMeta 展开，而 baseMeta 此时不含这两个字段）。
