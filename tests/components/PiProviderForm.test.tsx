@@ -8,6 +8,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// Pi 表单的复杂交互测试（request headers / model fetch / thinking-map 编辑）在
+// CI 较慢 runner 上偶发超过 vitest 默认 5s 阈值，文件级放宽超时避免 flaky 失败。
+vi.setConfig({ testTimeout: 15_000 });
+
 import { PiProviderForm } from "@/components/providers/forms/PiProviderForm";
 import { http, HttpResponse } from "msw";
 import { server } from "../msw/server";
