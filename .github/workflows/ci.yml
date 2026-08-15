@@ -216,7 +216,13 @@ jobs:
       - name: Compile backend tests with native temp
         # link.exe/mt.exe cannot create manifests when TEMP points at a WSL UNC path.
         # Vampire/setup-wsl 会把 TEMP/TMP 指到 WSL UNC，链接 manifest 前必须还原为原生 temp。
-        run: cargo test --lib --manifest-path src-tauri/Cargo.toml --no-run
+        shell: pwsh
+        run: |
+          Write-Host "TMP=$env:TMP TEMP=$env:TEMP GetTempPath=$([System.IO.Path]::GetTempPath())"
+          Write-Host "RUNNER_TEMP=$env:RUNNER_TEMP"
+          reg query "HKCU\Environment" /v TMP 2>$null
+          reg query "HKCU\Environment" /v TEMP 2>$null
+          cargo test --lib --manifest-path src-tauri/Cargo.toml --no-run
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
