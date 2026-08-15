@@ -195,7 +195,13 @@ jobs:
       # 因此编译必须先于 Setup WSL2，在纯净原生环境完成；WSL2 只服务于后续
       # Windows→WSL2 文件系统契约测试。
       - name: Compile backend tests
-        run: cargo test --lib --manifest-path src-tauri/Cargo.toml --no-run
+        run: |
+          Write-Host "TEMP=$env:TEMP"
+          Write-Host "TMP=$env:TMP"
+          Write-Host "GetTempPath=$([System.IO.Path]::GetTempPath())"
+          Write-Host "USERPROFILE=$env:USERPROFILE"
+          Get-ChildItem Env: | Where-Object { $_.Name -match 'TEMP|TMP|WSL|CC_SWITCH' } | ForEach-Object { Write-Host "$($_.Name)=$($_.Value)" }
+          cargo test --lib --manifest-path src-tauri/Cargo.toml --no-run
 
       - name: Setup WSL2
         uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364 # v7
