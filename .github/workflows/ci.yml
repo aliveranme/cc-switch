@@ -164,7 +164,7 @@ jobs:
 
   backend-windows-wsl2:
     name: Backend Checks (Windows + WSL2 home)
-    runs-on: windows-2025
+    runs-on: windows-latest
     timeout-minutes: 45
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.backend == 'true'
