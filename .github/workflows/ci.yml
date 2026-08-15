@@ -215,7 +215,11 @@ jobs:
 
       - name: Compile backend tests with native temp
         # link.exe/mt.exe cannot create manifests when TEMP points at a WSL UNC path.
+        # Vampire/setup-wsl 会把 TEMP/TMP 指到 WSL UNC，链接 manifest 前必须还原为原生 temp。
         run: cargo test --lib --manifest-path src-tauri/Cargo.toml --no-run
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
 
       - name: Run Windows-to-WSL2 filesystem contract
         shell: pwsh
