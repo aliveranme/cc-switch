@@ -69,6 +69,13 @@
 - updater endpoints 指向本 fork 的 GitHub Releases
 - 删除 `.github/workflows/claude.yml`；迁移 `tailwind.config.cjs` → postcss
 - CI 全绿修复（rustfmt/clippy/前端格式）
+- **WSL2 CI job 暂禁用**（2026-08-16）：`backend-windows-wsl2`（Windows+WSL2
+  文件系统契约测试）的 link.exe 在 GitHub windows runner 上写 `lnk{}.tmp` 临时
+  文件到不存在的 `\\wsl.localhost` UNC 路径（LNK1327 c1010070）。已排除编译顺序
+  （编译前置）、进程 TEMP/TMP/GetTempPath（全原生）、manifest 嵌入（`/MANIFEST:NO`
+  无效）、target 缓存（全量编译）、runner 版本（windows-2025/latest）等变量；
+  `backend-windows`（windows-latest，无 Setup WSL2 步骤）同代码编译通过。属
+  GitHub runner 环境异常，`if: false` 暂禁，待修复后恢复（见 ci.yml 注释）。
 
 ### 2.6 服务层（用量统计 / 接管）
 
