@@ -6510,8 +6510,7 @@ mod tests {
         // The standalone Codex dir is codex-specific; when not present on process/registry PATH,
         // it must not pollute other tools.
         let effective_path = effective_path_os().unwrap_or_default();
-        let path_contains_codex =
-            std::env::split_paths(&effective_path).any(|p| p == codex_dir);
+        let path_contains_codex = std::env::split_paths(&effective_path).any(|p| p == codex_dir);
         if !path_contains_codex {
             assert!(!build_tool_search_paths("gemini").contains(&codex_dir));
         }
