@@ -1472,7 +1472,7 @@ wire_api = "responses"
     // 删掉会落到后端 glm 模型名推断、错误方言原地复活
     codexChatReasoning: {
       supportsThinking: true,
-supportsEffort: false,
+      supportsEffort: false,
       thinkingParam: "enable_thinking",
       effortParam: "none",
       outputFormat: "reasoning_content",
@@ -1721,7 +1721,7 @@ supportsEffort: false,
     // Novita「Create chat completion」参数枚举与全站文档零出现
     codexChatReasoning: {
       supportsThinking: true,
-supportsEffort: false,
+      supportsEffort: false,
       thinkingParam: "enable_thinking",
       effortParam: "none",
       outputFormat: "reasoning_content",
@@ -1812,7 +1812,7 @@ supportsEffort: false,
     // {thinking:bool} 不在 thinkingParam 值域内。⚠️整块保留、thinkingParam
     // 显式置 none：删块会让后端推断按模型名命中 kimi 分支、假开关原地复活
     codexChatReasoning: {
-supportsThinking: false,
+      supportsThinking: false,
       supportsEffort: false,
       thinkingParam: "none",
       effortParam: "none",

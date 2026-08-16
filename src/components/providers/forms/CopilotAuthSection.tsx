@@ -374,7 +374,7 @@ export const CopilotAuthSection: React.FC<CopilotAuthSectionProps> = ({
       )}
 
       {/* 未认证状态 - 登录按钮 */}
-{mode === "manage" &&
+      {mode === "manage" &&
         isStatusSuccess &&
         !hasAnyAccount &&
         pollingState === "idle" && (

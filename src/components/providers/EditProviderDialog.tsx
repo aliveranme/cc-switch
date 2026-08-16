@@ -240,7 +240,7 @@ export function EditProviderDialog({
         string,
         unknown
       >;
-const convertsNativeCodexLoginToManagedAccount =
+      const convertsNativeCodexLoginToManagedAccount =
         appId === "codex" &&
         provider.id === CODEX_OFFICIAL_PROVIDER_ID &&
         Boolean(resolveManagedAccountId(values.meta, "codex_oauth")?.trim());

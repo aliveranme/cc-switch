@@ -1264,7 +1264,7 @@ function ProviderFormFull({
     }
 
     // OAuth 未登录：B 类（token 根本不存在，保存了也没法建立）
-if (isCopilotProvider && isCopilotStatusError) {
+    if (isCopilotProvider && isCopilotStatusError) {
       toast.error(
         t("copilot.statusLoadFailed", {
           defaultValue: "无法加载 GitHub Copilot 账号状态，请重试。",
@@ -1506,7 +1506,7 @@ if (isCopilotProvider && isCopilotStatusError) {
       return;
     }
 
-let settingsConfig: string;
+    let settingsConfig: string;
 
     if (appId === "codex") {
       try {
@@ -2405,7 +2405,7 @@ let settingsConfig: string;
               websiteUrl={claudeWebsiteUrl}
               isPartner={isClaudePartner}
               partnerPromotionKey={claudePartnerPromotionKey}
-isCopilotPreset={isCopilotProvider}
+              isCopilotPreset={isCopilotProvider}
               isCodexOauthPreset={isClaudeCodexOauthProvider}
               isXaiOauthPreset={isXaiOauthProvider}
               usesOAuth={
