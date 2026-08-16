@@ -62,6 +62,7 @@ import type { UniversalProviderPreset } from "@/config/universalProviderPresets"
 import {
   applyTemplateValues,
   hasApiKeyField,
+  isMatchingDomain,
 } from "@/utils/providerConfigUtils";
 import { mergeProviderMeta } from "@/utils/providerMetaUtils";
 import {
@@ -801,7 +802,7 @@ function ProviderFormFull({
     appId === "claude" &&
     (presetProviderType === "github_copilot" ||
       initialProviderType === "github_copilot" ||
-      baseUrl.includes("githubcopilot.com"));
+      isMatchingDomain(baseUrl, "githubcopilot.com"));
   const isClaudeCodexOauthProvider =
     appId === "claude" &&
     (presetProviderType === "codex_oauth" ||
