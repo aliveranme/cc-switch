@@ -6,6 +6,10 @@ import { describe, expect, it, vi } from "vitest";
 import { ClaudeDesktopProviderForm } from "@/components/providers/forms/ClaudeDesktopProviderForm";
 import { createTestQueryClient } from "../utils/testQueryClient";
 
+// 全量 vitest 并行时该文件部分复杂交互测试接近默认 5s 阈值偶发超时
+// （如"直连预设保留预设模型列表"），文件级放宽超时避免 flaky 失败（同 PiProviderForm）。
+vi.setConfig({ testTimeout: 15_000 });
+
 vi.mock("@/lib/api/providers", () => ({
   providersApi: {
     getClaudeDesktopDefaultRoutes: () => Promise.resolve([]),
