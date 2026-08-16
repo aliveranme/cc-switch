@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | `40cac1a6`（2026-08-16，v3.19.2 之后 42 个提交：Pi 原生 coding agent、per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject 黑名单、供应商表单层级重构等） |
+| 上游基线 | `4080a8e9`（2026-08-16，`40cac1a6` 之后 9 个提交：Baidu Qianfan/BytePlus/Kimi Codex thinking 方言、Codex reasoning levels 补全、managed OAuth 账户选择 #3879） |
 | 本地领先 | 领先上游的本地提交（fork 全特性 + 历次上游 merge 同步） |
-| 本次 merge | 234 文件（53 新增 + 181 修改；合入上游 42 个提交） |
+| 本次 merge | 63 文件（合入上游 9 个提交） |
 | 本地版本 | `v3.19.2`（fork 发布序列：`v3.19.1-a` → `v3.19.1-b` → `v3.19.2`；本版与上游版本号对齐，未 bump） |
 | 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-08-16 |
-| 测试规模 | Rust 2628（隔离 HOME 全绿；本机默认 HOME 下 5 个因 Windows v3.10.3 legacy 回退环境触发失败，与 merge 无关）+ 前端 vitest 886 |
+| 测试规模 | Rust 2693（隔离 HOME 全绿；本机默认 HOME 下 5 个因 Windows v3.10.3 legacy 回退环境触发失败，与 merge 无关）+ 前端 vitest 973 |
 
 ## 2. 修改总览（按主题）
 
@@ -311,6 +311,28 @@ tests/config/universalProviderPresets.test.ts
   low_high 专用模式同样钳到自身最高合法档。
 - ⚠️ 上游合并时若恢复透传，M1 回归测试（`responses_request_to_chat_fallback_
   filters_invalid_reasoning_effort`）会失败，需复核。
+
+### 4.15 保留供应商（openai 等）bearer token 注入策略
+
+- **上游**（base 即有）：`set_codex_experimental_bearer_token` 对无 `model_provider`
+  路由或保留 provider ID 时**写顶层 `experimental_bearer_token`**（uses-top-level）。
+- **fork**：**显式报错**（`bearer_token_needs_provider` / `bearer_token_reserved_provider`），
+  不写无效键。
+- **原因**：fork 观察到的 Codex 行为是 `experimental_bearer_token` 只存在于
+  `[model_providers.<id>]` 表内，顶层写盘被 serde 静默忽略——鉴权注入落空后请求以
+  登录态打到第三方 base_url（认证失败且无报错）。显式报错让用户补充 model_provider
+  路由，而非静默写无效键。**注意**：上游新增测试
+  `prepare_provider_live_config_uses_top_level_token_for_reserved_provider` 期望
+  uses-top-level，fork 保留的是 reject 测试（`..._rejects_reserved_provider_...`）。
+- ⚠️ 上游若确认顶层 token 在新 Codex 有效，本项可移除；否则 fork 保留防御性报错。
+
+### 4.16 lucide-react 品牌图标（Github 等）用内联 SVG
+
+- **上游**：`lucide-react ^0.542` 导出 `Github` 品牌图标（AuthCenterPanel、
+  CopilotAuthSection 使用）。
+- **fork**：`lucide-react ^1.31`（#54 升级）移除了 `Github` 品牌导出，改回**内联 SVG**。
+- **原因**：fork 依赖版本较新（lucide 1.x 移除品牌图标）。
+- ⚠️ 上游若新增 lucide 品牌图标（Github/GitLab 等），fork 需同步改内联 SVG。
 
 ## 5. 本地发布序列
 
