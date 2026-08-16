@@ -210,7 +210,7 @@ pub fn anthropic_to_openai(body: Value) -> Result<Value, ProxyError> {
 
 /// Anthropic 请求 → OpenAI Chat Completions 请求
 ///
-/// `preserve_reasoning_content` 仅用于明确需要 Moonshot/Kimi/DeepSeek
+/// `preserve_reasoning_content` 仅用于明确需要 DeepSeek/MiMo
 /// `reasoning_content` 兼容字段的 provider。默认转换保持通用 OpenAI-compatible
 /// 请求体，避免向严格后端发送未知字段。
 ///
@@ -547,7 +547,7 @@ fn convert_message_to_openai(
         let mut content_parts = Vec::new();
         let mut tool_calls = Vec::new();
         let mut pending_tool_media = Vec::new();
-        // reasoning_parts: 仅在兼容 Moonshot/Kimi/DeepSeek thinking tool-call 路径时
+        // reasoning_parts: 仅在兼容 DeepSeek/MiMo thinking tool-call 路径时
         // 生成 reasoning_content，通用 OpenAI-compatible 路径不发送该非标准字段。
         let mut reasoning_parts = Vec::new();
         // 网关层缓存上游：保留源消息首个 cache_control 断点（Anthropic 约定
@@ -1300,7 +1300,7 @@ mod tests {
     #[test]
     fn test_anthropic_to_openai_tool_use_preserves_reasoning_content() {
         let input = json!({
-            "model": "kimi-k2.6",
+            "model": "deepseek-v4-flash",
             "max_tokens": 1024,
             "messages": [{
                 "role": "assistant",
@@ -1322,7 +1322,7 @@ mod tests {
     #[test]
     fn test_anthropic_to_openai_tool_use_injects_placeholder_reasoning_content_when_missing() {
         let input = json!({
-            "model": "kimi-k2.6",
+            "model": "deepseek-v4-flash",
             "max_tokens": 1024,
             "messages": [{
                 "role": "assistant",

@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | `413c09e0`（2026-08-09，v3.19.2 安全加固） |
-| 本地领先 | 325 commits（其中非 merge 本地提交约 243 个，其余为上游 merge 同步） |
-| 本次 merge | 92 文件，+12 344 / −1 537（合入上游 15 个提交） |
-| 本地版本 | `v3.19.2`（fork 发布序列：`v3.19.1-a` → `v3.19.1-b` → `v3.19.2`；本版与上游版本号对齐，首次无字母后缀） |
-| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-08-09 |
-| 测试规模 | Rust 2487（本机 2 个 model_pricing 测试因 Windows v3.10.3 legacy 回退环境触发失败，与 merge 无关）+ 前端 vitest 705 |
+| 上游基线 | `40cac1a6`（2026-08-16，v3.19.2 之后 42 个提交：Pi 原生 coding agent、per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject 黑名单、供应商表单层级重构等） |
+| 本地领先 | 领先上游的本地提交（fork 全特性 + 历次上游 merge 同步） |
+| 本次 merge | 234 文件（53 新增 + 181 修改；合入上游 42 个提交） |
+| 本地版本 | `v3.19.2`（fork 发布序列：`v3.19.1-a` → `v3.19.1-b` → `v3.19.2`；本版与上游版本号对齐，未 bump） |
+| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-08-16 |
+| 测试规模 | Rust 2628（隔离 HOME 全绿；本机默认 HOME 下 5 个因 Windows v3.10.3 legacy 回退环境触发失败，与 merge 无关）+ 前端 vitest 886 |
 
 ## 2. 修改总览（按主题）
 
@@ -54,7 +54,7 @@
 
 ### 2.4 前端 / UI
 
-- JsonEditor / MarkdownEditor 拆分重构（Impl 分离，修复编辑丢数据）
+- JsonEditor / MarkdownEditor 拆分重构（Impl 分离，修复编辑丢数据）；2026-08-16 同步吸收上游 readOnly / ariaLabel / 光标位置保持（minimalTextChange / mapPositionByContext），lazy 加载拆分保留
 - 供应商表单提交防 stale/lost（codex/gemini/partners）
 - 供应商默认模型回退与预设清理（sponsor 预设调整同步上游）
 - AuthCenter 账户用量展示（合入上游 #4887）
@@ -69,6 +69,13 @@
 - updater endpoints 指向本 fork 的 GitHub Releases
 - 删除 `.github/workflows/claude.yml`；迁移 `tailwind.config.cjs` → postcss
 - CI 全绿修复（rustfmt/clippy/前端格式）
+- **WSL2 CI job 暂禁用**（2026-08-16）：`backend-windows-wsl2`（Windows+WSL2
+  文件系统契约测试）的 link.exe 在 GitHub windows runner 上写 `lnk{}.tmp` 临时
+  文件到不存在的 `\\wsl.localhost` UNC 路径（LNK1327 c1010070）。已排除编译顺序
+  （编译前置）、进程 TEMP/TMP/GetTempPath（全原生）、manifest 嵌入（`/MANIFEST:NO`
+  无效）、target 缓存（全量编译）、runner 版本（windows-2025/latest）等变量；
+  `backend-windows`（windows-latest，无 Setup WSL2 步骤）同代码编译通过。属
+  GitHub runner 环境异常，`if: false` 暂禁，待修复后恢复（见 ci.yml 注释）。
 
 ### 2.6 服务层（用量统计 / 接管）
 
@@ -276,6 +283,35 @@ tests/config/universalProviderPresets.test.ts
   （继续 carry-over），让 UI 删除真正生效。
 - ⚠️ 上游合并时若去掉排除表，UI 删除操作会再次失效（本地提交 `63632ade`）。
 
+### 4.13 NativeResponses 模板保留完整能力（gpt-5.6-sol vs 上游中性模板）
+
+- **上游**（40cac1a6）：NativeResponses 用中性模板 `codex_native_responses_template.json`
+  （无 apply_patch、web_search，仅 none/high 两档 reasoning），因 MiMo 等网关拒绝
+  freeform apply_patch（400）。
+- **fork**：NativeResponses 用 `gpt5_6_sol_template.json`（gpt-5.6-sol 全量模板：
+  `apply_patch_tool_type: freeform`、`web_search_tool_type: text_and_image`、
+  `model_messages`/`tool_mode`/`use_responses_lite` 等全字段、6 档 reasoning
+  low…ultra）。
+- **原因**：fork 的核心特性是第三方模型 reasoning 滑块（low…ultra，gpt-5.6-sol
+  兼容）与 `use_responses_lite=false` 强制；上游中性模板只声明两档会削弱该功能。
+  fork 主要面向 DeepSeek/OpenRouter 等支持 freeform apply_patch 的网关，保留
+  完整能力收益大于 MiMo 等少数网关的兼容风险（此类网关走 ProxyChat 路径规避）。
+- ⚠️ 后果：NativeResponses 直连 MiMo/LongCat 等拒绝 freeform apply_patch 的网关
+  可能 400（fork 用户经 ProxyChat 规避）。fork 的 `load_codex_native_responses_template`
+  引用 `gpt5_6_sol_template.json`，上游的中性模板文件被 fork 删除；上游若调整模板
+  策略需复核此分歧。
+
+### 4.14 map_reasoning_effort passthrough 下 ultra 钳制到 max
+
+- **上游**（40cac1a6）：passthrough 下 `ultra` 原值透传（`Some("ultra")`），依赖
+  per-model reasoningLevels 背书。
+- **fork**：passthrough 下 `ultra` 钳到 `max`。
+- **原因**：严格 OpenAI 兼容上游不认 `ultra`（`400 reasoning_effort: Invalid
+  option`，M1 回归）；钳制不损失"最深思考"语义且避免被拒收。deepseek/openrouter/
+  low_high 专用模式同样钳到自身最高合法档。
+- ⚠️ 上游合并时若恢复透传，M1 回归测试（`responses_request_to_chat_fallback_
+  filters_invalid_reasoning_effort`）会失败，需复核。
+
 ## 5. 本地发布序列
 
 | 版本 | 内容 |
@@ -283,6 +319,12 @@ tests/config/universalProviderPresets.test.ts
 | `v3.19.1-a` | CI/发布基础设施修复（tag 推送正式版、wix.version 绕过 prerelease） |
 | `v3.19.1-b` | proxy 协议修复收尾（安全分类器、prefix-cache 稳定性、流式终态容错、工具历史恢复会话隔离） |
 | `v3.19.2` | 合入上游 v3.19.2（15 提交）+ fork 全特性；字节上限统一为 `bytes_with_limit`（200MB）；content_encoding 解压 bomb 防护；atomic_write Windows 改用 `ReplaceFileW`；版本号与上游对齐（首次无后缀，wix.version 3.19.2.0）；重发补充：接管统一 `ANTHROPIC_AUTH_TOKEN` 占位符避免 Not logged in、官方原生分类器透传 + ALLOW 兜底、分类器检测加固 |
+
+> 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
+> per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
+> 黑名单、供应商表单层级重构、IME safe input、路由激活动画等）。fork 版本号保持
+> `v3.19.2` 未 bump。fork 全部 4.1–4.14 行为分歧点保留；新增 4.13（NativeResponses
+> 模板保留完整能力）与 4.14（passthrough 下 ultra 钳制到 max）。
 
 ## 6. 维护约定
 
