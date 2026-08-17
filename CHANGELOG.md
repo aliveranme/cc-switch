@@ -5,6 +5,13 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.19.2-a] - 2026-08-17 (fork)
+
+Fork 临时修复版本（字母后缀标记，不与上游版本号重合）：
+- **DeepSeek 多模态能力支持**：`deepseek-v4-pro` 从纯文本名单移除并开启 `["text", "image"]` 模态支持，修复使用 Claude Code 中转时图片输入被剥离的问题；`deepseek-v4-flash` 保持纯文本设定。
+- **合入上游最新提交**：同步上游趋势图表点位对齐（#6337）与 Grok Build 表单文案修正（#6511）。
+- Windows MSI 版本号递增至 `3.19.2.1`。
+
 ## [3.19.2] - 2026-08-09 (fork)
 
 Fork 发布版本，版本号与上游 v3.19.2 对齐。合入上游 main 全部 15 个提交

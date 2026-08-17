@@ -11,7 +11,7 @@
 | 上游基线 | `4080a8e9`（2026-08-16，`40cac1a6` 之后 9 个提交：Baidu Qianfan/BytePlus/Kimi Codex thinking 方言、Codex reasoning levels 补全、managed OAuth 账户选择 #3879） |
 | 本地领先 | 领先上游的本地提交（fork 全特性 + 历次上游 merge 同步） |
 | 本次 merge | 63 文件（合入上游 9 个提交） |
-| 本地版本 | `v3.19.2`（fork 发布序列：`v3.19.1-a` → `v3.19.1-b` → `v3.19.2`；本版与上游版本号对齐，未 bump） |
+| 本地版本 | `v3.19.2-a`（fork 发布序列：`v3.19.1-a` → `v3.19.1-b` → `v3.19.2` → `v3.19.2-a`） |
 | 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-08-16 |
 | 测试规模 | Rust 2693（隔离 HOME 全绿；本机默认 HOME 下 5 个因 Windows v3.10.3 legacy 回退环境触发失败，与 merge 无关）+ 前端 vitest 973 |
 
@@ -341,6 +341,7 @@ tests/config/universalProviderPresets.test.ts
 | `v3.19.1-a` | CI/发布基础设施修复（tag 推送正式版、wix.version 绕过 prerelease） |
 | `v3.19.1-b` | proxy 协议修复收尾（安全分类器、prefix-cache 稳定性、流式终态容错、工具历史恢复会话隔离） |
 | `v3.19.2` | 合入上游 v3.19.2（15 提交）+ fork 全特性；字节上限统一为 `bytes_with_limit`（200MB）；content_encoding 解压 bomb 防护；atomic_write Windows 改用 `ReplaceFileW`；版本号与上游对齐（首次无后缀，wix.version 3.19.2.0）；重发补充：接管统一 `ANTHROPIC_AUTH_TOKEN` 占位符避免 Not logged in、官方原生分类器透传 + ALLOW 兜底、分类器检测加固 |
+| `v3.19.2-a` | DeepSeek 多模态能力支持（`deepseek-v4-pro` 支持图片输入；`deepseek-v4-flash` 维持纯文本）；同步上游趋势图表点位与 Grok Build 文案修正；wix.version 递增至 3.19.2.1 |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
