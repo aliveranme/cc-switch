@@ -4642,8 +4642,8 @@ model_providers = { custom = { name = "custom", base_url = "http://127.0.0.1:500
                 default_reasoning_level: None,
             },
             CodexCatalogModelSpec {
-                model: "deepseek/deepseek-v4-pro".to_string(),
-                display_name: Some("DeepSeek V4 Pro".to_string()),
+                model: "deepseek/deepseek-chat".to_string(),
+                display_name: Some("DeepSeek Chat".to_string()),
                 context_window: Some(128_000),
                 supports_parallel_tool_calls: None,
                 input_modalities: None,
@@ -4662,7 +4662,7 @@ model_providers = { custom = { name = "custom", base_url = "http://127.0.0.1:500
                 default_reasoning_level: None,
             },
             CodexCatalogModelSpec {
-                model: "deepseek-v4-flash".to_string(),
+                model: "deepseek-reasoner".to_string(),
                 display_name: Some("Explicit Visual Override".to_string()),
                 context_window: Some(128_000),
                 supports_parallel_tool_calls: None,
@@ -4700,10 +4700,10 @@ model_providers = { custom = { name = "custom", base_url = "http://127.0.0.1:500
             };
 
             assert_eq!(modalities("gpt-5.4"), json!(["text", "image"]));
-            assert_eq!(modalities("deepseek/deepseek-v4-pro"), json!(["text"]));
+            assert_eq!(modalities("deepseek/deepseek-chat"), json!(["text"]));
             assert_eq!(modalities("glm-5.2v"), json!(["text", "image"]));
             assert_eq!(
-                modalities("deepseek-v4-flash"),
+                modalities("deepseek-reasoner"),
                 json!(["text", "image"]),
                 "explicit provider metadata must override the text-only registry"
             );
@@ -4828,6 +4828,7 @@ wire_api = "responses"
             pro.get("slug").and_then(|v| v.as_str()),
             Some("deepseek-v4-pro")
         );
+        assert_eq!(pro.get("input_modalities"), Some(&json!(["text", "image"])));
         // Explicit user context window override wins…
         assert_eq!(
             pro.get("context_window").and_then(|v| v.as_u64()),
@@ -5266,9 +5267,9 @@ web_search = "disabled"
         let catalog = r#"{
             "models": [
                 { "slug": "gpt-5.4", "input_modalities": ["text", "image"] },
-                { "slug": "deepseek-v4-pro", "input_modalities": ["text"] },
+                { "slug": "deepseek-chat", "input_modalities": ["text"] },
                 { "slug": "gpt-text-override", "input_modalities": ["text"] },
-                { "slug": "deepseek-v4-flash", "input_modalities": ["text", "image"] }
+                { "slug": "deepseek-reasoner", "input_modalities": ["text", "image"] }
             ]
         }"#;
 

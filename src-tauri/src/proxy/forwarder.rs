@@ -5192,7 +5192,7 @@ mod tests {
     fn prevention_replaces_when_all_switches_on_and_model_in_heuristic_list() {
         let fwd = forwarder_with_rectifier(RectifierConfig::default());
         let provider = provider_with_settings(json!({}));
-        let mut body = body_with_image("deepseek-v4-pro");
+        let mut body = body_with_image("deepseek-chat");
 
         let replaced = fwd.apply_media_prevention(&mut body, &provider);
 
@@ -5208,7 +5208,7 @@ mod tests {
             ..RectifierConfig::default()
         });
         let provider = provider_with_settings(json!({}));
-        let mut body = body_with_image("deepseek-v4-pro");
+        let mut body = body_with_image("deepseek-chat");
 
         let replaced = fwd.apply_media_prevention(&mut body, &provider);
 
@@ -5223,7 +5223,7 @@ mod tests {
             ..RectifierConfig::default()
         });
         let provider = provider_with_settings(json!({}));
-        let mut body = body_with_image("deepseek-v4-pro");
+        let mut body = body_with_image("deepseek-chat");
 
         assert_eq!(fwd.apply_media_prevention(&mut body, &provider), 0);
         assert_eq!(body["messages"][0]["content"][0]["type"], "image");
@@ -5239,7 +5239,7 @@ mod tests {
 
         // (a) 名单内模型、无显式声明 → 不再预替换
         let bare_provider = provider_with_settings(json!({}));
-        let mut list_body = body_with_image("deepseek-v4-pro");
+        let mut list_body = body_with_image("deepseek-chat");
         assert_eq!(
             fwd.apply_media_prevention(&mut list_body, &bare_provider),
             0,
@@ -5270,7 +5270,7 @@ mod tests {
     #[test]
     fn reactive_triggers_for_codex_image_url_deserialize_errors() {
         let fwd = forwarder_with_rectifier(RectifierConfig::default());
-        let body = body_with_codex_input_image("deepseek-v4-flash");
+        let body = body_with_codex_input_image("deepseek-chat");
         let error = ProxyError::UpstreamError {
             status: 400,
             body: Some(

@@ -74,7 +74,6 @@ pub(crate) fn is_confirmed_text_only_model(model: &str) -> bool {
         "deepseek-chat",
         "deepseek-reasoner",
         "deepseek-v4-flash",
-        "deepseek-v4-pro",
         "glm-5.1",
         // Exact rather than prefix matching: GLM visual models use a `v`
         // suffix (for example glm-5.2v), which must remain image-capable.
@@ -215,7 +214,8 @@ mod tests {
 
     #[test]
     fn confirmed_text_only_registry_normalizes_namespaces_and_context_markers() {
-        assert!(is_confirmed_text_only_model("deepseek/deepseek-v4-pro"));
+        assert!(is_confirmed_text_only_model("deepseek/deepseek-chat"));
+        assert!(is_confirmed_text_only_model("deepseek-v4-flash"));
         assert!(is_confirmed_text_only_model("GLM-5.2[1M]"));
         assert!(is_confirmed_text_only_model("qwen/qwen3-coder-plus"));
         assert!(is_confirmed_text_only_model(
@@ -224,11 +224,13 @@ mod tests {
         assert!(is_confirmed_text_only_model("MiniMax-M2.7-Highspeed"));
         assert!(is_confirmed_text_only_model("step-3.5-flash-2603"));
         assert!(!is_confirmed_text_only_model("glm-5.2v"));
+        assert!(!is_confirmed_text_only_model("deepseek/deepseek-v4-pro"));
     }
 
     #[test]
     fn unconfirmed_family_suffixes_fail_open() {
         for model in [
+            "deepseek-v4-pro",
             "minimax-m2.7-vision",
             "qwen3-coder-ultra",
             "qwen3-coder-vl",

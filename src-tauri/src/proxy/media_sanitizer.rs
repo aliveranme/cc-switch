@@ -487,7 +487,7 @@ mod tests {
     fn confirmed_text_only_models_replace_images_before_send() {
         let provider = provider(json!({}));
         let mut body = json!({
-            "model": "deepseek/deepseek-v4-pro",
+            "model": "deepseek/deepseek-chat",
             "messages": [{
                 "role": "user",
                 "content": [
@@ -530,10 +530,30 @@ mod tests {
     }
 
     #[test]
+    fn multimodal_deepseek_v4_pro_preserves_images() {
+        let provider = provider(json!({}));
+        let mut body = json!({
+            "model": "deepseek-v4-pro",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": "look" },
+                    { "type": "image_url", "image_url": { "url": "data:image/png;base64,abc" } }
+                ]
+            }]
+        });
+
+        let count = replace_images_for_text_only_model(&mut body, &provider, true);
+
+        assert_eq!(count, 0);
+        assert_eq!(body["messages"][0]["content"][1]["type"], "image_url");
+    }
+
+    #[test]
     fn confirmed_text_only_models_replace_codex_input_image_before_send() {
         let provider = provider(json!({}));
         let mut body = json!({
-            "model": "deepseek-v4-flash",
+            "model": "deepseek-chat",
             "input": [{
                 "role": "user",
                 "content": [
@@ -1264,7 +1284,7 @@ mod tests {
         // allow_heuristic = false：内置列表不再预测性剥图，避免误判多模态模型时静默丢图。
         let provider = provider(json!({}));
         let mut body = json!({
-            "model": "deepseek/deepseek-v4-pro",
+            "model": "deepseek/deepseek-chat",
             "messages": [{
                 "role": "user",
                 "content": [
