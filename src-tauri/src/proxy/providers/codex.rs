@@ -247,7 +247,7 @@ fn has_explicit_codex_third_party_upstream(provider: &Provider) -> bool {
             .and_then(crate::codex_config::extract_codex_base_url)
             .is_some()
         || config
-            .and_then(|text| text.parse::<TomlValue>().ok())
+            .and_then(|text| toml::from_str::<toml::Table>(text).ok())
             .and_then(|doc| {
                 doc.get("model_provider")
                     .and_then(TomlValue::as_str)

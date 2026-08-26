@@ -193,7 +193,7 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
   }, [localValue]);
 
   // Debounce timer for compact limit input
-  const compactTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const compactTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleContextWindowToggle = useCallback(
     (checked: boolean) => {
@@ -222,7 +222,9 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
 
   const handleCompactLimitChange = useCallback(
     (inputValue: string) => {
-      clearTimeout(compactTimerRef.current);
+      if (compactTimerRef.current) {
+        clearTimeout(compactTimerRef.current);
+      }
       compactTimerRef.current = setTimeout(() => {
         const num = parseInt(inputValue, 10);
         if (!Number.isNaN(num) && num > 0) {
@@ -241,7 +243,11 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
 
   // Cleanup debounce timer
   useEffect(() => {
-    return () => clearTimeout(compactTimerRef.current);
+    return () => {
+      if (compactTimerRef.current) {
+        clearTimeout(compactTimerRef.current);
+      }
+    };
   }, []);
 
   return (

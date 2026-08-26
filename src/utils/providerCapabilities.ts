@@ -15,9 +15,7 @@ export const CODEX_OFFICIAL_PROVIDER_ID = "codex-official";
 export const GROKBUILD_OFFICIAL_PROVIDER_ID = "grokbuild-official";
 
 export type CodexOfficialIdentity =
-  | "native_login"
-  | "managed_account"
-  | "api_key";
+  "native_login" | "managed_account" | "api_key";
 
 const nonEmptyString = (value: unknown): boolean =>
   typeof value === "string" && value.trim().length > 0;
