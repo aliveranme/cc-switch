@@ -714,6 +714,33 @@ pub(crate) fn write_live_with_common_config_for_state(
     )
 }
 
+/// Validate the target provider's Codex live projection without writing:
+/// build the effective settings exactly like the live write would, then run
+/// the write-layer plan (legacy normalization, safety gates, token
+/// injection, TOML parsing). Called before `current` is committed — a
+/// write-layer refusal after `current` moved would let the next switch
+/// backfill the old live config into the new provider's DB row.
+pub(crate) fn preflight_codex_live_write_for_state(
+    state: &AppState,
+    provider: &Provider,
+) -> Result<(), AppError> {
+    let effective = build_effective_provider_for_live_with_codex_oauth_manager(
+        state.db.as_ref(),
+        &AppType::Codex,
+        provider,
+        &state.codex_oauth_manager,
+    )?;
+    let obj = effective
+        .settings_config
+        .as_object()
+        .ok_or_else(|| AppError::Config("Codex 供应商配置必须是 JSON 对象".to_string()))?;
+    let auth = obj
+        .get("auth")
+        .ok_or_else(|| AppError::Config("Codex 供应商配置缺少 'auth' 字段".to_string()))?;
+    let config_str = obj.get("config").and_then(|v| v.as_str());
+    crate::codex_config::preflight_codex_live_write(effective.category.as_deref(), auth, config_str)
+}
+
 pub(crate) fn write_live_with_common_config_for_codex_oauth_manager(
     db: &Database,
     app_type: &AppType,

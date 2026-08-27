@@ -2690,16 +2690,17 @@ wire_api = "responses"
                 )
                 .as_deref(),
                 Some("cli-refresh-b1"),
-                "B's CLI generation must be adopted before third-party auth overwrites auth.json"
+                "B's CLI generation must be adopted before the third-party switch removes auth.json"
             );
-            let live_third_party: Value =
-                read_json_file(&crate::codex_config::get_codex_auth_path())
-                    .expect("read third-party auth");
-            assert_eq!(
-                live_third_party
-                    .get("OPENAI_API_KEY")
-                    .and_then(Value::as_str),
-                Some("sk-third-party")
+            assert!(
+                !crate::codex_config::get_codex_auth_path().exists(),
+                "third-party switches are config-only: auth.json is removed"
+            );
+            let live_config = std::fs::read_to_string(crate::codex_config::get_codex_config_path())
+                .expect("read third-party config");
+            assert!(
+                live_config.contains("experimental_bearer_token = \"sk-third-party\""),
+                "the third-party key rides in config.toml; got:\n{live_config}"
             );
         });
     }
@@ -3623,10 +3624,15 @@ wire_api = "responses"
             crate::settings::reload_settings().expect("reload settings");
 
             // 基线：一个普通第三方 provider，可正常切换，作为初始 current。
+            // config 必须带自定义 provider 表：config-only 切换要求 key 有
+            // provider 级落点。
             let mut baseline = Provider::with_id(
                 "baseline".to_string(),
                 "Baseline".to_string(),
-                json!({ "auth": { "OPENAI_API_KEY": "sk-baseline" }, "config": "" }),
+                json!({
+                    "auth": { "OPENAI_API_KEY": "sk-baseline" },
+                    "config": "model_provider = \"baseline\"\n[model_providers.baseline]\nbase_url = \"https://baseline.example/v1\"\n"
+                }),
                 None,
             );
             baseline.category = Some("custom".to_string());
@@ -5343,6 +5349,15 @@ impl ProviderService {
                 ));
             }
         } else {
+            // Codex: validate the live projection before committing current —
+            // the write-layer safety gates can refuse the switch, and a
+            // refusal after current moved would let the next switch backfill
+            // the old live config into the new provider's DB row. (The
+            // managed branch above has its own snapshot rollback instead.)
+            if matches!(app_type, AppType::Codex) && preflighted_provider.is_none() {
+                live::preflight_codex_live_write_for_state(state, provider)?;
+            }
+
             // Additive mode apps skip setting is_current (no such concept).
             let previous_local_current = crate::settings::get_current_provider(&app_type);
             let previous_db_current = state.db.get_current_provider(app_type.as_str())?;
@@ -5408,6 +5423,23 @@ impl ProviderService {
                 Ok(false) => {}
                 Err(e) => log::warn!("Failed to clean stale Codex auth.json: {e}"),
             }
+        }
+        // Third-party dual of the block above: with preservation off, the
+        // config-only write is expected to delete auth.json. A deletion
+        // failure (read-only dir, ACL, file lock) must not fail the switch —
+        // config and current are already committed — but the user has to see
+        // that the official login is still on disk, so surface it as a
+        // switch warning instead of only a log line.
+        if matches!(app_type, AppType::Codex)
+            && provider.category.as_deref() != Some("official")
+            && !crate::proxy::providers::is_codex_official_provider(provider)
+            && !crate::settings::preserve_codex_official_auth_on_switch()
+            && crate::codex_config::get_codex_auth_path().exists()
+        {
+            log::warn!("Codex auth.json still present after a preservation-off third-party switch");
+            result
+                .warnings
+                .push("codex_auth_cleanup_failed".to_string());
         }
         // Hermes is additive, so "switching" doesn't overwrite a live config file
         // — we instead update the top-level `model:` section to point at this

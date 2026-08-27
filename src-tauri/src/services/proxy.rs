@@ -6419,7 +6419,7 @@ experimental_bearer_token = "PROXY_MANAGED"
 
     #[test]
     #[serial]
-    fn codex_custom_provider_live_write_can_overwrite_auth_when_preserve_disabled() {
+    fn codex_custom_provider_live_write_removes_auth_when_preserve_disabled() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
         crate::settings::update_settings(crate::settings::AppSettings {
@@ -6485,22 +6485,22 @@ wire_api = "responses"
             .write_codex_live_for_provider(&takeover_settings, Some(&provider))
             .expect("write provider-driven Codex live config");
 
-        let live_auth: Value =
-            crate::config::read_json_file(&crate::codex_config::get_codex_auth_path())
-                .expect("read live auth");
-        assert_eq!(
-            live_auth,
-            json!({
-                "OPENAI_API_KEY": PROXY_TOKEN_PLACEHOLDER
-            }),
-            "disabled preservation should let third-party switches overwrite auth.json"
+        // Disabled preservation historically overwrote the OAuth login with
+        // the placeholder; config-only switching removes auth.json instead —
+        // the login is equally gone, and the placeholder now travels as the
+        // provider-scoped bearer token that Codex >= 0.149 actually sends.
+        assert!(
+            !crate::codex_config::get_codex_auth_path().exists(),
+            "disabled preservation removes auth.json on a third-party takeover write"
         );
 
         let live_config = std::fs::read_to_string(crate::codex_config::get_codex_config_path())
             .expect("read live config");
         assert!(
-            !live_config.contains("experimental_bearer_token"),
-            "provider token should stay in auth.json when preservation is disabled"
+            live_config.contains(&format!(
+                "experimental_bearer_token = \"{PROXY_TOKEN_PLACEHOLDER}\""
+            )),
+            "the placeholder must ride in config.toml as the provider token; got:\n{live_config}"
         );
 
         crate::settings::update_settings(crate::settings::AppSettings::default())
