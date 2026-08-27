@@ -491,22 +491,31 @@ fn extract_codex_auth_user_identity(auth: &Value) -> Option<String> {
 }
 
 pub(crate) fn extract_codex_id_token_user_identity(id_token: &str) -> Option<String> {
-    match extract_codex_id_token_subject(id_token) {
-        Some(subject) => Some(format!("sub:{subject}")),
-        None => {
-            #[cfg(test)]
-            return Some("test-user".to_string());
-            #[cfg(not(test))]
-            return None;
-        }
-    }
+    extract_codex_id_token_subject(id_token).map(|subject| format!("sub:{subject}"))
 }
 
 pub(crate) fn extract_codex_id_token_subject(id_token: &str) -> Option<String> {
-    let claims: Value = id_token
-        .split('.')
-        .nth(1)
-        .and_then(|payload| URL_SAFE_NO_PAD.decode(payload).ok())
+    let mut segments = id_token.split('.');
+    let header = segments.next()?;
+    let payload = segments.next()?;
+    segments.next()?;
+    if segments.next().is_some() {
+        return None;
+    }
+
+    let header: Value = URL_SAFE_NO_PAD
+        .decode(header)
+        .ok()
+        .and_then(|decoded| serde_json::from_slice(&decoded).ok())?;
+    header
+        .get("alg")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+
+    let claims: Value = URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()
         .and_then(|decoded| serde_json::from_slice(&decoded).ok())?;
     claims
         .get("sub")
@@ -4153,6 +4162,39 @@ mod tests {
     use serde_json::json;
     use serial_test::serial;
     use std::ffi::OsString;
+
+    #[test]
+    fn codex_id_token_user_identity_requires_a_nonempty_subject() {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+        let subject_payload = URL_SAFE_NO_PAD.encode(json!({ "sub": "stable-user" }).to_string());
+        assert_eq!(
+            extract_codex_id_token_user_identity(&test_codex_id_token("stable-user")),
+            Some("sub:stable-user".to_string())
+        );
+        assert_eq!(extract_codex_id_token_user_identity("not-a-jwt"), None);
+        assert_eq!(
+            extract_codex_id_token_user_identity(&format!("{header}.{subject_payload}")),
+            None
+        );
+        assert_eq!(
+            extract_codex_id_token_user_identity(&format!("{header}.{subject_payload}..extra")),
+            None
+        );
+        assert_eq!(
+            extract_codex_id_token_user_identity(&format!("invalid.{subject_payload}.signature")),
+            None
+        );
+        assert_eq!(
+            extract_codex_id_token_user_identity(&test_codex_id_token("   ")),
+            None
+        );
+
+        let payload = URL_SAFE_NO_PAD.encode(json!({ "email": "user@example.test" }).to_string());
+        assert_eq!(
+            extract_codex_id_token_user_identity(&format!("{header}.{payload}.")),
+            None
+        );
+    }
 
     struct CodexLiveTestHome {
         _dir: tempfile::TempDir,

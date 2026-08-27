@@ -2856,13 +2856,14 @@ base_url = "https://a.example/v1"
     fn category_less_managed_codex_binding_with_null_config_uses_selected_account_token() {
         let temp = tempfile::tempdir().expect("tempdir");
         let manager = Arc::new(CodexOAuthManager::new(temp.path().to_path_buf()));
+        let id_token = crate::codex_config::test_codex_id_token("managed-user");
         tauri::async_runtime::block_on(async {
             manager
                 .add_test_account_with_workspace_and_access_token(
                     "local-managed",
                     "workspace-shared",
                     "managed-token",
-                    Some("managed-id-token"),
+                    Some(&id_token),
                 )
                 .await
                 .expect("seed managed account");
@@ -2914,7 +2915,7 @@ base_url = "https://a.example/v1"
         );
         assert_eq!(
             tokens.get("id_token").and_then(|v| v.as_str()),
-            Some("managed-id-token")
+            Some(id_token.as_str())
         );
         assert_eq!(
             tokens.get("refresh_token").and_then(|v| v.as_str()),
