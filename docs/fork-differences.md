@@ -325,10 +325,19 @@ tests/config/universalProviderPresets.test.ts
   登录态打到第三方 base_url（认证失败且无报错）。
 - **移除原因**：上游 v3.20.1 的 `bedrock_runtime_is_a_reserved_provider_id` 测试期望
   保留 ID（amazon-bedrock-runtime）的 prepare 成功且不合成表，与 fork 的 reject 行为
-  互斥，合并后 CI 红。上游重构已将防御前移到 plan 层安全门，符合本条预设的
-  "上游确认后移除"条件；完全无路由（`bearer_token_needs_provider` 分支）仍保留 fork 报错。
+  互斥，合并后 CI 红。上游集成测试 `switch_codex_projects_mcp_despite_broken_claude_json`
+  同样依赖无路由场景的顶层 fallback。上游重构已将防御前移到 plan 层安全门，符合本条
+  预设的"上游确认后移除"条件。无路由与保留 ID 两个分支均已改为顶层 fallback。
 - **对应测试**：`prepare_provider_live_config_uses_top_level_token_for_reserved_provider`
   （正向断言顶层写入）。
+
+### 4.15a custom 表缺失时自动补建并写入 bearer token（fork 保留）
+
+- **上游**：custom `model_provider` 引用存在但 `[model_providers.<id>]` 表缺失时，
+  `set_codex_experimental_bearer_token` 写顶层 `experimental_bearer_token`。
+- **fork**：自动补建缺失的表并写入表内 token（顶层写入会被当前 Codex 静默忽略，
+  不能作为兜底；`model_providers` 不是表时仍报错）。
+- **对应测试**：`prepare_provider_live_config_creates_missing_provider_table_for_bearer_token`。
 
 ### 4.16 lucide-react 品牌图标（Github 等）用内联 SVG
 

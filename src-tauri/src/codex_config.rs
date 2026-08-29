@@ -3128,15 +3128,10 @@ fn set_codex_experimental_bearer_token(config_text: &str, token: &str) -> Result
         .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
 
     let Some(provider_id) = active_codex_model_provider_id(&doc) else {
-        // 当前 Codex 的 experimental_bearer_token 只存在于 [model_providers.<id>]
-        // 表内（ModelProviderInfo 字段）；顶层写盘会被 serde 静默忽略，鉴权注入
-        // 落空后请求以 ChatGPT 登录态打到第三方 base_url → 认证失败且无报错。
-        // 显式报错让调用方提示用户补充 model_provider 路由，而不是静默写无效键。
-        return Err(AppError::localized(
-            "provider.codex.bearer_token_needs_provider",
-            "Codex 配置缺少 model_provider 路由：experimental_bearer_token 只能写入 [model_providers.<id>] 表，请先为供应商配置自定义 model_provider",
-            "Codex config has no model_provider route: experimental_bearer_token can only live inside [model_providers.<id>]; configure a custom model_provider for this provider first",
-        ));
+        // 对齐上游（fork-differences 4.15）：无路由时顶层 fallback。第三方密钥
+        // 误配无路由配置的场景由 plan_codex_live_write 的安全门统一拦截。
+        doc["experimental_bearer_token"] = toml_edit::value(token);
+        return Ok(doc.to_string());
     };
 
     if !is_custom_codex_model_provider_id(&provider_id) {
