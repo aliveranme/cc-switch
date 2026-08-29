@@ -3140,14 +3140,12 @@ fn set_codex_experimental_bearer_token(config_text: &str, token: &str) -> Result
     };
 
     if !is_custom_codex_model_provider_id(&provider_id) {
-        // Reserved Codex provider IDs are owned by the CLI. Writing the token at
-        // the top level is silently ignored by current Codex, so fail loudly
-        // instead of shipping a credential that never reaches the upstream.
-        return Err(AppError::localized(
-            "provider.codex.bearer_token_reserved_provider",
-            format!("Codex 当前 model_provider 是保留供应商（{provider_id}）：experimental_bearer_token 无法注入，请切换到自定义 model_provider"),
-            format!("Codex model_provider '{provider_id}' is a reserved provider: experimental_bearer_token cannot be injected; switch to a custom model_provider"),
-        ));
+        // Reserved Codex provider IDs are owned by the CLI. Keep third-party
+        // bearer tokens at the top level so we do not shadow built-in tables.
+        // Bedrock 内置 provider 走 AWS 认证，写入顶层是合法的 no-op；
+        // 第三方密钥误配保留 ID 的场景由 plan_codex_live_write 的安全门拦截。
+        doc["experimental_bearer_token"] = toml_edit::value(token);
+        return Ok(doc.to_string());
     }
 
     // `as_table_like_mut` (not `as_table_mut`): inline tables would return
@@ -4824,20 +4822,25 @@ base_url = "https://single.example.com/v1"
     }
 
     #[test]
-    fn prepare_provider_live_config_rejects_reserved_provider_for_bearer_token() {
-        // fork 有意偏离上游（uses-top-level）：当前 Codex 的 experimental_bearer_token
-        // 只存在于 [model_providers.<id>] 表内；保留 provider（openai 等）顶层写入
-        // 会被 serde 静默忽略，鉴权注入落空后请求以登录态打到第三方 base_url。
-        // 显式报错优于静默写无效键（见 fork-differences 4.15）。
+    fn prepare_provider_live_config_uses_top_level_token_for_reserved_provider() {
+        // 对齐上游（uses-top-level，fork-differences 4.15 按预设条件移除防御性
+        // 报错）：保留 provider 的 token 写顶层。Bedrock 等内置 provider 走 AWS
+        // 认证，顶层写入是合法的 no-op；第三方密钥误配保留 ID 的场景由
+        // plan_codex_live_write 的安全门拦截，不再由本函数把关。
         let input = r#"model_provider = "openai"
 model = "gpt-5"
 "#;
 
-        let result =
-            prepare_codex_provider_live_config(&json!({"OPENAI_API_KEY": "sk-test"}), input);
-        assert!(
-            result.is_err(),
-            "reserved provider 的 bearer token 注入必须显式失败而非静默写顶层"
+        let output =
+            prepare_codex_provider_live_config(&json!({"OPENAI_API_KEY": "sk-test"}), input)
+                .expect("prepare live config");
+        let parsed: toml::Value = toml::from_str(&output).expect("parse output");
+        assert_eq!(
+            parsed
+                .get("experimental_bearer_token")
+                .and_then(|v| v.as_str()),
+            Some("sk-test"),
+            "保留 provider 的 bearer token 应写入顶层（对齐上游 uses-top-level）"
         );
     }
 

@@ -312,19 +312,23 @@ tests/config/universalProviderPresets.test.ts
 - ⚠️ 上游合并时若恢复透传，M1 回归测试（`responses_request_to_chat_fallback_
   filters_invalid_reasoning_effort`）会失败，需复核。
 
-### 4.15 保留供应商（openai 等）bearer token 注入策略
+### 4.15 保留供应商（openai 等）bearer token 注入策略（已移除偏离）
 
-- **上游**（base 即有）：`set_codex_experimental_bearer_token` 对无 `model_provider`
-  路由或保留 provider ID 时**写顶层 `experimental_bearer_token`**（uses-top-level）。
-- **fork**：**显式报错**（`bearer_token_needs_provider` / `bearer_token_reserved_provider`），
-  不写无效键。
-- **原因**：fork 观察到的 Codex 行为是 `experimental_bearer_token` 只存在于
+- **状态**：**已对齐上游**（2026-08-30，v3.20.1 合并后按本条预设的退出条件移除）。
+- **上游**（cbb79127 config-only 重构后）：`set_codex_experimental_bearer_token` 对
+  保留 provider ID **写顶层 `experimental_bearer_token`**（uses-top-level）；
+  安全性由 `plan_codex_live_write` 的前置安全门统一把关（第三方密钥 + 无 token 槽位 /
+  无密钥回退官方登录均被拒绝）。
+- **fork 历史**：曾**显式报错**（`bearer_token_needs_provider` / `bearer_token_reserved_provider`），
+  不写无效键。原因：观察到的 Codex 行为是 `experimental_bearer_token` 只存在于
   `[model_providers.<id>]` 表内，顶层写盘被 serde 静默忽略——鉴权注入落空后请求以
-  登录态打到第三方 base_url（认证失败且无报错）。显式报错让用户补充 model_provider
-  路由，而非静默写无效键。**注意**：上游新增测试
-  `prepare_provider_live_config_uses_top_level_token_for_reserved_provider` 期望
-  uses-top-level，fork 保留的是 reject 测试（`..._rejects_reserved_provider_...`）。
-- ⚠️ 上游若确认顶层 token 在新 Codex 有效，本项可移除；否则 fork 保留防御性报错。
+  登录态打到第三方 base_url（认证失败且无报错）。
+- **移除原因**：上游 v3.20.1 的 `bedrock_runtime_is_a_reserved_provider_id` 测试期望
+  保留 ID（amazon-bedrock-runtime）的 prepare 成功且不合成表，与 fork 的 reject 行为
+  互斥，合并后 CI 红。上游重构已将防御前移到 plan 层安全门，符合本条预设的
+  "上游确认后移除"条件；完全无路由（`bearer_token_needs_provider` 分支）仍保留 fork 报错。
+- **对应测试**：`prepare_provider_live_config_uses_top_level_token_for_reserved_provider`
+  （正向断言顶层写入）。
 
 ### 4.16 lucide-react 品牌图标（Github 等）用内联 SVG
 
