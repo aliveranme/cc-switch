@@ -152,12 +152,10 @@ base_url = "https://codex.test""#
 }
 
 #[test]
-fn sync_codex_provider_without_model_provider_route_fails_loudly() {
-    // 官方 Codex config.schema.json：experimental_bearer_token 仅存在于
-    // ModelProviderInfo（[model_providers.<id>] 表内），顶层写盘会被 serde
-    // 静默忽略 → 鉴权注入落空后请求以 ChatGPT 登录态打到第三方 base_url，
-    // 认证失败且无报错。无 model_provider 路由时必须显式报错，不能静默写
-    // 无效键（此前行为）。
+fn sync_codex_provider_without_model_provider_route_writes_top_level_token() {
+    // 对齐上游（fork-differences 4.15）：无 model_provider 路由时 bearer token
+    // 写顶层 experimental_bearer_token（uses-top-level），sync 不再拒绝。第三方
+    // 密钥误配无路由配置的防御由 plan_codex_live_write 的前置安全门统一把关。
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     enable_codex_official_auth_preservation();
@@ -184,16 +182,14 @@ fn sync_codex_provider_without_model_provider_route_fails_loudly() {
     manager.providers.insert("codex-1".to_string(), provider);
     manager.current = "codex-1".to_string();
 
-    let err = ConfigService::sync_current_providers_to_live(&mut config)
-        .expect_err("sync must fail: no model_provider route for bearer token");
-    let message = format!("{err}");
+    ConfigService::sync_current_providers_to_live(&mut config)
+        .expect("sync should succeed with the top-level token fallback");
+
+    let live = std::fs::read_to_string(cc_switch_lib::get_codex_config_path())
+        .expect("config.toml should be written");
     assert!(
-        message.contains("model_provider"),
-        "error should explain the missing model_provider route, got: {message}"
-    );
-    assert!(
-        !cc_switch_lib::get_codex_config_path().exists(),
-        "config.toml must not be written when the bearer token cannot be routed"
+        live.contains("experimental_bearer_token = \"codex-key\""),
+        "bearer token should be written at the top level, got: {live}"
     );
 }
 
