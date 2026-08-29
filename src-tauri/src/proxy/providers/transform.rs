@@ -242,6 +242,8 @@ pub fn anthropic_to_openai_with_reasoning_content(
                 messages.push(json!({"role": "system", "content": cleaned}));
             }
         } else if let Some(arr) = system.as_array() {
+            // 顶层 system 数组合并为一条 system 消息（跨轮字节稳定，不影响前缀缓存）
+            let mut parts = Vec::new();
             for msg in arr {
                 if preserve_cache_control && system_cache_control.is_none() {
                     if let Some(cc) = msg.get("cache_control") {
@@ -254,8 +256,11 @@ pub fn anthropic_to_openai_with_reasoning_content(
                     if cleaned.is_empty() {
                         continue;
                     }
-                    messages.push(json!({"role": "system", "content": cleaned}));
+                    parts.push(cleaned.to_string());
                 }
+            }
+            if !parts.is_empty() {
+                messages.push(json!({"role": "system", "content": parts.join("\n")}));
             }
         }
     }
@@ -1252,6 +1257,43 @@ mod tests {
             "You are Claude Code.\nBe concise."
         );
         assert!(result["messages"][0].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn test_anthropic_to_openai_preserves_mid_conversation_system_in_place() {
+        // Claude Code 会在对话中间注入 system 消息（如 <total_tokens>），
+        // 必须保持原位，不合并不上提，否则破坏前缀缓存。
+        let input = json!({
+            "model": "claude-3-sonnet",
+            "max_tokens": 1024,
+            "system": "You are Claude Code.",
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+                {"role": "system", "content": "<total_tokens>14963538 tokens left</total_tokens>"},
+                {"role": "user", "content": "Continue"}
+            ]
+        });
+
+        let result = anthropic_to_openai(input).unwrap();
+        let messages = result["messages"].as_array().unwrap();
+
+        // 顶层 system 在最前面
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "You are Claude Code.");
+
+        // 中途 system 保持原位（第 3 条，index=3），不被合并或上提。
+        // 本 fork 相比上游额外将其重写为 role=user：DeepSeek/OpenCode 等
+        // OpenAI 兼容上游会把所有 system 消息提升到前缀，保持 system 角色仍会
+        // 每轮重写前缀导致缓存逐出；重写为 user 使前缀稳定且内容留在对话尾部。
+        assert_eq!(messages[3]["role"], "user");
+        assert_eq!(
+            messages[3]["content"],
+            "<total_tokens>14963538 tokens left</total_tokens>"
+        );
+
+        // 总共 5 条消息，没有合并
+        assert_eq!(messages.len(), 5);
     }
 
     #[test]
