@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | `4080a8e9`（2026-08-16，`40cac1a6` 之后 9 个提交：Baidu Qianfan/BytePlus/Kimi Codex thinking 方言、Codex reasoning levels 补全、managed OAuth 账户选择 #3879） |
+| 上游基线 | `d8065cc6`（2026-08-29，v3.20.1 之后 1 个提交：#6941 mid-conversation system 原位保留防前缀缓存逐出） |
 | 本地领先 | 领先上游的本地提交（fork 全特性 + 历次上游 merge 同步） |
-| 本次 merge | 63 文件（合入上游 9 个提交） |
-| 本地版本 | `v3.19.2-a`（fork 发布序列：`v3.19.1-a` → `v3.19.1-b` → `v3.19.2` → `v3.19.2-a`） |
-| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-08-16 |
-| 测试规模 | Rust 2693（隔离 HOME 全绿；本机默认 HOME 下 5 个因 Windows v3.10.3 legacy 回退环境触发失败，与 merge 无关）+ 前端 vitest 973 |
+| 本次 merge | 2026-08-28/30 两批：`8927aba5` 合入 v3.20.1（7 提交，24 文件 +2042/-175，session_usage.rs 冲突保留 fork upsert）+ `d83d426d` 合入 #6941（transform.rs 冲突保留 fork user 重写） |
+| 本地版本 | `v3.20.1`（随 merge 对齐上游版本号，无后缀；fork 发布序列见第 5 节） |
+| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-08-30 |
+| 测试规模 | Rust 2867（`--lib` 全绿）+ 前端 vitest 1022（135 文件全绿） |
 
 ## 2. 修改总览（按主题）
 
@@ -86,6 +86,7 @@
 | 接管判定 | 统一收敛到 `AppType::takeover_active` 策略矩阵，见 4.10 |
 | 热切换回滚 | live 写失败时回滚 DB 中 current-provider 指针（`7cebd071`，上游只回滚 backup/live） |
 | stale backup | 接管/热切换中 stale live backup 不阻塞 Codex/Gemini 供应商写入（`06b57082`/`7efdc361`） |
+| v3.20.1 会话扫描重构 | 合入上游增量 byte-cursor 扫描、auto/manual 会话扫描模式、non-append rewrite 检测与 Sync Now 门控；fork 的 Claude upsert 分歧保留（见 4.9），`should_skip_session_insert` 封装继续供 gemini/codex/opencode 使用 |
 
 ### 2.7 个人工具链（非上游内容，同步时忽略）
 
@@ -93,8 +94,8 @@
 
 ### 2.8 测试
 
-- 单测从上游基线约 2000 增至 **2434**（proxy 协议层每个改动点都有行为钉桩测试）
-- 前端 vitest **592**（新增 codex 预设默认值、universal 预设、TOML 边界等套件）
+- 单测从上游基线约 2000 增至 **2867**（proxy 协议层每个改动点都有行为钉桩测试）
+- 前端 vitest **1022**（新增 codex 预设默认值、universal 预设、TOML 边界等套件）
 
 ## 3. 本地新增文件（上游不存在）
 
@@ -114,21 +115,25 @@ tests/config/universalProviderPresets.test.ts
 为什么必须偏离）与同步注意。每次 `merge upstream/main` 后逐条复核，防止上游
 重构把 fork 的行为覆盖回去（或反之，fork 的改动被误并进上游语义）。
 
-### 4.1 mid-conversation system 重写为 user（prefix-cache 稳定性）
+### 4.1 mid-conversation system 重写为 user（prefix-cache 稳定性，已收窄）
 
-- **上游**：所有 system 消息（含 mid-conversation）hoist 到头部合并。
-- **fork**：合并 leading system，mid-conversation system **原地重写为 role=user**。
-- **原因**：上游的 hoist 会把**每一次**新增的 mid-conversation reminder 移进
-  system 前缀。而 system 前缀正是 prefix-cache 的缓存键核心——前缀里任何一个
-  字节变化都会逐出**全部**缓存 token。Claude Code 的 Workflow/Dynamic Workflow
-  每轮都可能注入新 reminder，hoist 导致每轮缓存全失效、全价重发。fork 的主要
-  用户场景是第三方网关（DeepSeek/OpenRouter/Kimi 等），这些网关的 prefix-cache
-  命中价差 10 倍以上，且首 token 延迟随前缀重发线性上升。重写为 user 保持前缀
-  字节级稳定。指令强度下降是权衡结果——reminder 的指令文本仍在 user 消息里，
-  语义不丢失，只损失"system 特权"。
-- ⚠️ 语义损失：操作指令强度下降；且四桥行为不一致（Claude→Chat 重写 /
-  Codex→Chat hoist / Claude→Responses 透传 / Claude→Gemini hoist 进 systemInstruction）。
-  上游若改为"不 hoist"，本项可整体移除。
+- **上游**（`d8065cc6`，#6941 起）：mid-conversation system **原位保留**，不再
+  hoist 到头部合并；顶层 system 数组合并为一条 system（跨轮字节稳定）。
+- **fork**：上游行为之上**额外把 mid-conversation system 重写为 role=user**。
+- **原因**：上游修复只保证 Anthropic→OpenAI 转换自身不再上提；但 fork 的主要
+  用户场景是第三方网关（DeepSeek/OpenRouter/Kimi/OpenCode Go 网关等），这些
+  OpenAI 兼容上游会**自行把所有 system 消息提升回前缀**——保持 system 角色
+  仍会每轮重写前缀、逐出全部缓存 token。重写为 user 使前缀字节级稳定，内容
+  留在对话尾部。背景（历史 hoist 问题）：system 前缀是 prefix-cache 的缓存键
+  核心，Claude Code 的 Workflow 每轮注入新 reminder 时，任何上提/合并都会
+  全价重发；第三方网关 prefix-cache 命中价差 10 倍以上。
+- **对应测试**：`test_anthropic_to_openai_preserves_mid_conversation_system_in_place`
+  （断言原位 + role=user，注释说明与上游的差异原因）。
+- ⚠️ 原定的退出条件"上游改为不 hoist"已部分满足（#6941），但 user 重写在
+  网关自行提升 system 的场景下仍有收益，故保留。语义损失仅剩"system 特权"
+  差异（指令文本仍在消息里）；四桥行为不一致依旧存在（Claude→Chat 重写 /
+  Codex→Chat hoist / Claude→Responses 透传 / Claude→Gemini hoist 进
+  systemInstruction）。
 
 ### 4.2 安全分类器 fail-open vs 官方 fail-closed
 
@@ -243,6 +248,10 @@ tests/config/universalProviderPresets.test.ts
   守卫保证：只推 `session_log` 源（代理实时记的 `proxy` 行是权威值，不得覆盖）、
   只前进不回退（并发乱序时取最大值）。
 - ⚠️ merge 上游时若被恢复成 `INSERT OR IGNORE`，冻结行会再次停在中间态（本地提交 `026f6634`）。
+- **v3.20.1 同步**（`8927aba5`）：上游会话扫描重构（增量 byte-cursor、auto/manual
+  模式）引入 `should_skip_session_insert` 封装；fork 的 Claude upsert 分歧保留，
+  仅 gemini/codex/opencode 走 skip 封装；两个 upsert 单测适配
+  `insert_session_log_entry_on_conn` 新签名。
 
 ### 4.10 接管（takeover）判定策略（app_config.rs / services/proxy.rs / live.rs）
 
@@ -362,10 +371,18 @@ tests/config/universalProviderPresets.test.ts
 > `v3.19.2` 未 bump。fork 全部 4.1–4.14 行为分歧点保留；新增 4.13（NativeResponses
 > 模板保留完整能力）与 4.14（passthrough 下 ultra 钳制到 max）。
 
+> 2026-08-28/30 同步：合入上游 v3.20.1（7 提交：会话扫描重构——增量 byte-cursor
+> 扫描、auto/manual 模式切换、non-append rewrite 检测、Sync Now 门控——及
+> v3.20.1 发版）与 #6941（mid-conversation system 原位保留）。fork 版本号随
+> merge 对齐上游 `3.20.1`（未单独发版）。分歧点变化：4.15 移除（bearer token
+> 对齐上游顶层 fallback，保留 4.15a custom 表自动补建）；4.1 收窄（上游不再
+> hoist，fork 保留 user 重写）；4.9 保留（upsert 适配新签名）；其余 4.x 分歧点
+> 经逐条核对全部保留。
+
 ## 6. 维护约定
 
 - **上游同步**：`git fetch upstream && git merge upstream/main`，merge 后跑
-  `cargo test --lib`（2434）+ `pnpm vitest run`（592）+ `cargo fmt/clippy` 全绿再提交。
+  `cargo test --lib`（2867）+ `pnpm vitest run`（1022）+ `cargo fmt/clippy` 全绿再提交。
 - **协议修改**：必须先有失败测试（TDD），改动点必须带行为钉桩测试。
 - **行为分歧**：凡是有意偏离上游语义的改动，在代码注释中注明理由，并同步本节文档。
 - **推送目标**：`origin`（GitHub）+ `cnb`（cnb.cool）双远端。
