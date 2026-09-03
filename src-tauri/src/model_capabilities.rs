@@ -78,6 +78,7 @@ pub(crate) fn is_confirmed_text_only_model(model: &str) -> bool {
         // Exact rather than prefix matching: GLM visual models use a `v`
         // suffix (for example glm-5.2v), which must remain image-capable.
         "glm-5.2",
+        "glm-5.3",
         "kat-coder",
         "kat-coder-pro",
         "kat-coder-pro v1",
@@ -217,6 +218,7 @@ mod tests {
         assert!(is_confirmed_text_only_model("deepseek/deepseek-chat"));
         assert!(is_confirmed_text_only_model("deepseek-v4-flash"));
         assert!(is_confirmed_text_only_model("GLM-5.2[1M]"));
+        assert!(is_confirmed_text_only_model("GLM-5.3[1M]"));
         assert!(is_confirmed_text_only_model("qwen/qwen3-coder-plus"));
         assert!(is_confirmed_text_only_model(
             "Qwen/Qwen3-Coder-480B-A35B-Instruct"
@@ -224,6 +226,7 @@ mod tests {
         assert!(is_confirmed_text_only_model("MiniMax-M2.7-Highspeed"));
         assert!(is_confirmed_text_only_model("step-3.5-flash-2603"));
         assert!(!is_confirmed_text_only_model("glm-5.2v"));
+        assert!(!is_confirmed_text_only_model("glm-5.3v"));
         assert!(!is_confirmed_text_only_model("deepseek/deepseek-v4-pro"));
     }
 
