@@ -813,33 +813,6 @@ wire_api = "responses"
     icon: "a6api",
   },
   {
-    name: "AtlasCloud",
-    websiteUrl: "https://www.atlascloud.ai/console/coding-plan",
-    apiKeyUrl: "https://www.atlascloud.ai/console/coding-plan",
-    category: "aggregator",
-    auth: generateThirdPartyAuth(""),
-    config: `model_provider = "custom"
-model = "zai-org/glm-5.1"
-
-[model_providers.custom]
-name = "AtlasCloud"
-base_url = "https://api.atlascloud.ai/v1"
-wire_api = "responses"
-`,
-    endpointCandidates: ["https://api.atlascloud.ai/v1"],
-    apiFormat: "openai_chat",
-    modelCatalog: modelCatalog([
-      {
-        model: "zai-org/glm-5.1",
-        displayName: "GLM 5.1",
-        contextWindow: 200000,
-      },
-    ]),
-    isPartner: true,
-    partnerPromotionKey: "atlascloud",
-    icon: "atlascloud",
-  },
-  {
     name: "Compshare",
     nameKey: "providerForm.presets.ucloud",
     websiteUrl: "https://www.compshare.cn",
@@ -913,6 +886,22 @@ wire_api = "responses"
     partnerPromotionKey: "sssaicode", // 促销信息 i18n key
     icon: "sssaicode",
     iconColor: "#000000",
+  },
+  {
+    name: "SoleAPI",
+    websiteUrl: "https://soleapi.com",
+    apiKeyUrl: "https://soleapi.com/r/ccswitch",
+    category: "aggregator",
+    auth: generateThirdPartyAuth(""),
+    config: generateThirdPartyConfig(
+      "soleapi",
+      "https://soleapi.com/v1",
+      "gpt-5.6-sol",
+    ),
+    endpointCandidates: ["https://soleapi.com/v1"],
+    isPartner: true,
+    partnerPromotionKey: "soleapi",
+    icon: "soleapi",
   },
   {
     name: "Micu",
@@ -1094,6 +1083,32 @@ wire_api = "responses"
     ),
     endpointCandidates: ["https://api.amux.ai/v1"],
     icon: "amux",
+  },
+  {
+    name: "AtlasCloud",
+    websiteUrl: "https://www.atlascloud.ai/console/coding-plan",
+    apiKeyUrl: "https://www.atlascloud.ai/console/coding-plan",
+    category: "aggregator",
+    auth: generateThirdPartyAuth(""),
+    config: `model_provider = "custom"
+model = "zai-org/glm-5.1"
+disable_response_storage = true
+
+[model_providers.custom]
+name = "AtlasCloud"
+base_url = "https://api.atlascloud.ai/v1"
+wire_api = "responses"
+requires_openai_auth = true`,
+    endpointCandidates: ["https://api.atlascloud.ai/v1"],
+    apiFormat: "openai_chat",
+    modelCatalog: modelCatalog([
+      {
+        model: "zai-org/glm-5.1",
+        displayName: "GLM 5.1",
+        contextWindow: 200000,
+      },
+    ]),
+    icon: "atlascloud",
   },
   {
     name: "Azure OpenAI",
@@ -1603,13 +1618,6 @@ wire_api = "responses"
         reasoningLevels: ["high"],
       },
       {
-        // 不在套餐文档表，/models 收录 + 真 Key 实测可用（2026-08-31）
-        model: "minimax-m2.5",
-        displayName: "MiniMax M2.5",
-        contextWindow: 200000,
-        reasoningLevels: ["high"],
-      },
-      {
         model: "glm-5",
         displayName: "GLM-5",
         contextWindow: 200000,
@@ -1831,13 +1839,6 @@ wire_api = "responses"
         displayName: "MiniMax M3",
         contextWindow: 1048576,
         reasoningLevels: ["none", "high"],
-      },
-      {
-        // 型号列表已除名，真 Key 实测仍可用（2026-08-31）
-        model: "minimax-m2.5",
-        displayName: "MiniMax M2.5",
-        contextWindow: 200000,
-        reasoningLevels: ["high"],
       },
       {
         model: "deepseek-v4-flash",
@@ -2266,7 +2267,6 @@ wire_api = "responses"
       },
     ]),
     category: "cn_official",
-    partnerPromotionKey: "minimax_cn",
     theme: {
       backgroundColor: "#f64551",
       textColor: "#FFFFFF",
@@ -2305,7 +2305,6 @@ wire_api = "responses"
       },
     ]),
     category: "cn_official",
-    partnerPromotionKey: "minimax_en",
     theme: {
       backgroundColor: "#f64551",
       textColor: "#FFFFFF",
