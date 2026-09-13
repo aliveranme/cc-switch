@@ -364,6 +364,8 @@ tests/config/universalProviderPresets.test.ts
 | `v3.19.1-b` | proxy 协议修复收尾（安全分类器、prefix-cache 稳定性、流式终态容错、工具历史恢复会话隔离） |
 | `v3.19.2` | 合入上游 v3.19.2（15 提交）+ fork 全特性；字节上限统一为 `bytes_with_limit`（200MB）；content_encoding 解压 bomb 防护；atomic_write Windows 改用 `ReplaceFileW`；版本号与上游对齐（首次无后缀，wix.version 3.19.2.0）；重发补充：接管统一 `ANTHROPIC_AUTH_TOKEN` 占位符避免 Not logged in、官方原生分类器透传 + ALLOW 兜底、分类器检测加固 |
 | `v3.19.2-a` | DeepSeek 多模态能力支持（`deepseek-v4-pro` 支持图片输入；`deepseek-v4-flash` 维持纯文本）；同步上游趋势图表点位与 Grok Build 文案修正；wix.version 递增至 3.19.2.1 |
+| `v3.20.2` | 合入上游 v3.20.2（`2d54e261`，26 提交）；Grok 走 xAI 原生 Responses 路由、一批 catalog/兼容性修复、预设与定价扩充 |
+| `v3.20.3` | 合入上游 v3.20.3（`bd247a4a`）；Kimi 等 Codex 预设改原生 Responses 直连、代理正确性修复、预设与定价维护。**首次发布失败**：标签误指上游提交，Release 跑的是上游工作流（硬校验 `TAURI_SIGNING_PRIVATE_KEY`），5 个平台全部在签名步骤失败、附件为空；把标签改指 fork 提交 `b24deaa9` 后重发成功 |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -386,3 +388,32 @@ tests/config/universalProviderPresets.test.ts
 - **协议修改**：必须先有失败测试（TDD），改动点必须带行为钉桩测试。
 - **行为分歧**：凡是有意偏离上游语义的改动，在代码注释中注明理由，并同步本节文档。
 - **推送目标**：`origin`（GitHub）+ `cnb`（cnb.cool）双远端。
+
+### 6.1 发布纪律（tag 必须指向 fork 提交）
+
+fork 与上游**共用 tag 名**（`v3.20.x`），两边指向不同提交。因此：
+
+- **绝不推送上游标签**。上游标签一旦进入本仓库并被 `git push --tags` 推上去，
+  该 tag 上跑的 Release 会用**上游的 `release.yml`**——它硬校验
+  `TAURI_SIGNING_PRIVATE_KEY`，而 fork 仓库不配置任何 Secrets（签名/公证/R2
+  全部按"个人使用模式"降级跳过）。结果就是 5 个平台全部在签名步骤失败、
+  Release 附件为空。`v3.20.3` 首次发布即为此故障（见第 5 节）。
+- upstream 远端已配置 `tagOpt = --no-tags`，`git fetch upstream` 不再拉取上游
+  标签；如换机器克隆需重新执行：
+
+  ```bash
+  git config remote.upstream.tagOpt --no-tags
+  ```
+
+- 发布前必须核对 tag 指向并显式重建（轻量标签，与 `v3.20.0`–`v3.20.2` 一致）：
+
+  ```bash
+  git tag -f v3.20.x <fork-main-commit>     # 必须是 fork 提交，不是上游提交
+  git push -f origin v3.20.x                # 推送 tag 触发 Release
+  git log -1 --oneline v3.20.x              # 复核：提交信息应为 fork 的提交
+  ```
+
+- 发布前确认 `package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json`
+  三处版本号与 tag 一致（`resolve-version` 作业会硬校验并中止）。
+- **手动重跑**：`Actions → Release → Run workflow`（`workflow_dispatch` 从
+  `Cargo.toml` 推导 tag，需把 `prerelease` 置为 false 才会发正式版）。
