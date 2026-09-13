@@ -1405,7 +1405,7 @@ mod tests {
             ]
         });
 
-        let result = anthropic_to_openai_with_reasoning_content(input, false).unwrap();
+        let result = anthropic_to_openai_with_reasoning_content(input, false, false).unwrap();
         let tools = result["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 3);
         // 带 description 的工具原样保留
