@@ -7372,7 +7372,8 @@ model_providers = { custom = { name = "custom", base_url = "http://127.0.0.1:500
     #[test]
     fn vendor_catalog_matched_model_keeps_vendor_modalities() {
         // A model that IS in the official catalog must keep the vendor's
-        // declared modalities verbatim (deepseek-v4-pro is text-only there).
+        // declared modalities verbatim. Fork 的捆绑模板声明 deepseek-v4-pro
+        // 支持图片（2026-09-14 起官方把 v4-pro 路由到识图的 V4.1 Flash）。
         let settings = json!({
             "modelCatalog": {
                 "models": [
@@ -7398,7 +7399,7 @@ model_providers = { custom = { name = "custom", base_url = "http://127.0.0.1:500
             .iter()
             .filter_map(|v| v.as_str())
             .collect();
-        assert_eq!(modalities, vec!["text"]);
+        assert_eq!(modalities, vec!["text", "image"]);
     }
 
     #[test]
