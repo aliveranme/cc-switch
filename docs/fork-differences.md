@@ -417,3 +417,28 @@ fork 与上游**共用 tag 名**（`v3.20.x`），两边指向不同提交。因
   三处版本号与 tag 一致（`resolve-version` 作业会硬校验并中止）。
 - **手动重跑**：`Actions → Release → Run workflow`（`workflow_dispatch` 从
   `Cargo.toml` 推导 tag，需把 `prerelease` 置为 false 才会发正式版）。
+
+### 6.2 已知缺陷：应用内更新实际不生效（待定夺）
+
+`tauri.conf.json` 的 updater 是启用的（`bundle.createUpdaterArtifacts = true`，
+endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 fork 未配置
+`TAURI_SIGNING_PRIVATE_KEY`，构建不产出 `.sig`；而 `assemble-latest-json` 作业只在
+签名非空时才写入对应平台，于是每个 fork 版本的 `latest.json` 都是：
+
+```json
+{ "version": "3.20.3", "notes": "...", "pub_date": "...", "platforms": {} }
+```
+
+`platforms` 为空 → 更新器找不到任何平台的更新，**自动更新静默失效**。
+已确认 v3.20.2 与 v3.20.3 均为空，属既有问题（非本次回归）。
+
+两条修复路径（需人工决策，涉及密钥，未擅自执行）：
+
+1. 把与该 `pubkey`（minisign key id `RWTjKDlXmowCyC9Q`）配对的**私钥**配成仓库
+   Secret `TAURI_SIGNING_PRIVATE_KEY`（+ 可选 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`），
+   构建即产出 `.sig`，清单自动填满——变更面最小，老用户可无缝升级。
+2. 重新生成密钥对，并把新公钥写回 `tauri.conf.json` 的 `plugins.updater.pubkey`
+   ——会让**已在旧版本的用户无法验证新包**（签名公钥不匹配），仅在私钥确实丢失时使用。
+
+⚠️ 注意 `release.yml` 的构建步骤对签名失败是"吞掉继续"（`|| echo "⚠️ 已忽略"`），
+所以配好密钥后仍需复核产物里确实带 `.sig`，否则会再次静默产出空 `platforms`。
