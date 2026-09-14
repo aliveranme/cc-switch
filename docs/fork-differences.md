@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | `d8065cc6`（2026-08-29，v3.20.1 之后 1 个提交：#6941 mid-conversation system 原位保留防前缀缓存逐出） |
+| 上游基线 | `42ac174d`（2026-09-14，v3.20.3 之后 1 个提交：#7331 Claude Desktop 3P 配置支持 Linux） |
 | 本地领先 | 领先上游的本地提交（fork 全特性 + 历次上游 merge 同步） |
-| 本次 merge | 2026-08-28/30 两批：`8927aba5` 合入 v3.20.1（7 提交，24 文件 +2042/-175，session_usage.rs 冲突保留 fork upsert）+ `d83d426d` 合入 #6941（transform.rs 冲突保留 fork user 重写） |
-| 本地版本 | `v3.20.1`（随 merge 对齐上游版本号，无后缀；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-08-30 |
-| 测试规模 | Rust 2867（`--lib` 全绿）+ 前端 vitest 1022（135 文件全绿） |
+| 本次 merge | 2026-09-15：`42ac174d` 合入 #7331（1 提交，4 文件 +136/-12，全部自动合并、无冲突） |
+| 本地版本 | `v3.20.3`（随 merge 对齐上游版本号，无后缀；fork 发布序列见第 5 节） |
+| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-09-15（此前已吸收 v3.20.2 `2d54e261` 与 v3.20.3 `bd247a4a`） |
+| 测试规模 | Rust 2988（`--lib` 全绿；Windows 本地需隔离 `HOME`，见 6.3）+ 前端 vitest 1121（139 文件全绿） |
 
 ## 2. 修改总览（按主题）
 
@@ -381,6 +381,14 @@ tests/config/universalProviderPresets.test.ts
 > hoist，fork 保留 user 重写）；4.9 保留（upsert 适配新签名）；其余 4.x 分歧点
 > 经逐条核对全部保留。
 
+> 2026-09-15 同步：合入上游 #7331（Claude Desktop 3P 配置支持 Linux——从**绝对**
+> `XDG_CONFIG_HOME` 解析配置根、未设置或相对路径时回落 `~/.config`；CC Switch 自身
+> 以 Flatpak 运行时刻意改用宿主机 `~/.config` 而非沙箱私有的 `XDG_CONFIG_HOME`；
+> en/zh/ja 用户手册补 Linux 路径与 Flatpak 边界说明）。1 提交 / 4 文件（+136/-12），
+> 与 fork 无冲突自动合并；分歧点 4.1–4.16 逐条核对无变化（改动全部落在新的
+> `#[cfg(target_os = "linux")]` 分支，未与 fork 的 claude-desktop 3P 逻辑相交）。
+> fork 版本号保持 `v3.20.3` 未 bump。
+
 ## 6. 维护约定
 
 - **上游同步**：`git fetch upstream && git merge upstream/main`，merge 后跑
@@ -442,3 +450,34 @@ endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 for
 
 ⚠️ 注意 `release.yml` 的构建步骤对签名失败是"吞掉继续"（`|| echo "⚠️ 已忽略"`），
 所以配好密钥后仍需复核产物里确实带 `.sig`，否则会再次静默产出空 `platforms`。
+
+### 6.3 Windows 本地跑 Rust 测试必须隔离 `HOME`（2026-09-15 同步时发现）
+
+**直接跑 `cargo test --lib` 会改写真实的 `~/.cc-switch`，并留下夹具状态导致 5 个用例
+确定性失败**（现象是 `assertion left: 0, right: 1` + `assert!(state.config.include_common_models)`，
+集中出现在 `services::model_pricing::tests` 的 4 个用例与
+`services::skill::tests::migrate_storage_safely_leaves_an_existing_pi_ssot_alias`），
+**看起来像回归，实为环境污染**。
+
+- **根因**：`get_app_config_dir()`（`src-tauri/src/config.rs` 的 `#[cfg(windows)]` 分支）
+  保留了 v3.10.3 兼容回退——若默认目录 `<home>/.cc-switch` 下**没有** `cc-switch.db`，
+  而 `$HOME/.cc-switch/cc-switch.db` 存在，则返回后者。测试统一用 `Database::memory()`，
+  从不落盘 db 文件，于是该回退恒被触发，`CC_SWITCH_TEST_HOME` 的隔离被绕过。
+- **后果**：`model-pricing.json`、`skills/`、`skill-backups/` 会被测试写入真实配置目录；
+  一旦 `model-pricing.json` 带上夹具状态（`includeCommonModels: false`、
+  `deletedModelIds: ["claude-sonnet-5"]`），上述 5 个用例就会稳定失败（`claude-sonnet-5`
+  被 tombstone 后 seeding 缺失，`UPDATE ... WHERE model_id='claude-sonnet-5'` 影响 0 行）。
+- **规避**（已验证 2988 用例全绿）：跑测试时把 `HOME` 指向临时目录，
+  使 `$HOME/.cc-switch/cc-switch.db` 不存在，回退不再命中真实目录。
+
+  ```bash
+  mkdir -p "$TEMP/ccswitch-iso-probe"
+  cd src-tauri && HOME="$TEMP/ccswitch-iso-probe" cargo test --lib
+  ```
+
+- **根治方向**（未擅自实施，涉及 Windows 兼容语义与用户数据路径，需人工定夺）：
+  测试构建下检测到 `CC_SWITCH_TEST_HOME` 已设置即跳过该回退；或把回退条件从
+  `$HOME/.cc-switch` 收紧为"仅在默认目录确实无 db 且 `$HOME` 与真实用户目录不同"。
+- **残留清理**：受污染的真实 `~/.cc-switch/model-pricing.json` 内容是纯测试夹具数据
+  （`custom-model` 两条 + `deletedModelIds: ["claude-sonnet-5"]`），删除后应用会按默认值
+  （`includeCommonModels: true`）重建。`cc-switch.db` 未被测试改写。
