@@ -463,8 +463,12 @@ endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 for
   保留了 v3.10.3 兼容回退——若默认目录 `<home>/.cc-switch` 下**没有** `cc-switch.db`，
   而 `$HOME/.cc-switch/cc-switch.db` 存在，则返回后者。测试统一用 `Database::memory()`，
   从不落盘 db 文件，于是该回退恒被触发，`CC_SWITCH_TEST_HOME` 的隔离被绕过。
-- **后果**：`model-pricing.json`、`skills/`、`skill-backups/` 会被测试写入真实配置目录；
-  一旦 `model-pricing.json` 带上夹具状态（`includeCommonModels: false`、
+- **后果**：`model-pricing.json`、`settings.json`、`skills/`、`skill-backups/` 会被测试写入
+  真实配置目录，测试执行删除时还会把文件送进用户回收站；其中 `settings.json` 会被覆盖成
+  "默认开关 + `skillSyncMethod: auto` / `skillStorageLocation: cc_switch`"（skill 迁移测试
+  写入的形态），原始内容在 `~/.cc-switch/backups/*.db` 的 `settings` 表里**不存**
+  （该表只有 `*_migrated_v1` / `default_skill_repos_initialized` 等 10 个 key），
+  **DB 备份无法还原**。一旦 `model-pricing.json` 带上夹具状态（`includeCommonModels: false`、
   `deletedModelIds: ["claude-sonnet-5"]`），上述 5 个用例就会稳定失败（`claude-sonnet-5`
   被 tombstone 后 seeding 缺失，`UPDATE ... WHERE model_id='claude-sonnet-5'` 影响 0 行）。
 - **规避**（已验证 2988 用例全绿）：跑测试时把 `HOME` 指向临时目录，
@@ -480,4 +484,6 @@ endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 for
   `$HOME/.cc-switch` 收紧为"仅在默认目录确实无 db 且 `$HOME` 与真实用户目录不同"。
 - **残留清理**：受污染的真实 `~/.cc-switch/model-pricing.json` 内容是纯测试夹具数据
   （`custom-model` 两条 + `deletedModelIds: ["claude-sonnet-5"]`），删除后应用会按默认值
-  （`includeCommonModels: true`）重建。`cc-switch.db` 未被测试改写。
+  （`includeCommonModels: true`）重建。`cc-switch.db` 未被测试改写，但 `settings.json`
+  已被覆盖且**无备份可还原**（见上），需在应用设置页人工核对托盘／代理／会话自动同步／
+  skill 存储位置等开关。
