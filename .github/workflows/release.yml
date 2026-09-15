@@ -680,7 +680,10 @@ jobs:
           TAG: ${{ needs.resolve-version.outputs.tag }}
         run: |
           set -euxo pipefail
-          gh release upload "$GITHUB_REF_NAME" latest.json --clobber --repo "$GITHUB_REPOSITORY"
+          # 必须用 resolve-version 解析出的 tag，不能用 $GITHUB_REF_NAME：
+          # workflow_dispatch 手动重跑时 GITHUB_REF_NAME 是分支名（main），
+          # 上传 latest.json 会因找不到名为 "main" 的 release 而失败。
+          gh release upload "$TAG" latest.json --clobber --repo "$GITHUB_REPOSITORY"
 
   # Mirror the release assets to Cloudflare R2 so ccswitch.io/download can
   # serve them directly (dl.ccswitch.io). Skips itself when the R2 secrets

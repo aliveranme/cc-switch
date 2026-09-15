@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | `d8065cc6`（2026-08-29，v3.20.1 之后 1 个提交：#6941 mid-conversation system 原位保留防前缀缓存逐出） |
+| 上游基线 | `42ac174d`（2026-09-14，v3.20.3 之后 1 个提交：#7331 Claude Desktop 3P 配置支持 Linux） |
 | 本地领先 | 领先上游的本地提交（fork 全特性 + 历次上游 merge 同步） |
-| 本次 merge | 2026-08-28/30 两批：`8927aba5` 合入 v3.20.1（7 提交，24 文件 +2042/-175，session_usage.rs 冲突保留 fork upsert）+ `d83d426d` 合入 #6941（transform.rs 冲突保留 fork user 重写） |
-| 本地版本 | `v3.20.1`（随 merge 对齐上游版本号，无后缀；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-08-30 |
-| 测试规模 | Rust 2867（`--lib` 全绿）+ 前端 vitest 1022（135 文件全绿） |
+| 本次 merge | 2026-09-15：`42ac174d` 合入 #7331（1 提交，4 文件 +136/-12，全部自动合并、无冲突） |
+| 本地版本 | `v3.20.3`（随 merge 对齐上游版本号，无后缀；fork 发布序列见第 5 节） |
+| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-09-15（此前已吸收 v3.20.2 `2d54e261` 与 v3.20.3 `bd247a4a`） |
+| 测试规模 | Rust 2988（`--lib` 全绿；Windows 本地需隔离 `HOME`，见 6.3）+ 前端 vitest 1121（139 文件全绿） |
 
 ## 2. 修改总览（按主题）
 
@@ -59,7 +59,10 @@
 - 供应商默认模型回退与预设清理（sponsor 预设调整同步上游）
 - AuthCenter 账户用量展示（合入上游 #4887）
 - DeepLink 导入支持 `claude-desktop` app（见 4.11）
-- Claude Desktop 3P 供应商 profile 默认启用 `chatAdvancedFileAnalysisEnabled`（上游无此字段）
+- Claude Desktop 3P 供应商 profile 默认启用 `chatAdvancedFileAnalysisEnabled`、
+  `modelPrefer1mContext`、`skipWebFetchPreflight`、`coworkVmIpv6Enabled`
+  （上游无这四个字段；direct 与 proxy 两种模式共用 `build_gateway_profile`，
+  两处钉桩测试各断言一次）
 
 ### 2.5 发布 / CI
 
@@ -364,6 +367,8 @@ tests/config/universalProviderPresets.test.ts
 | `v3.19.1-b` | proxy 协议修复收尾（安全分类器、prefix-cache 稳定性、流式终态容错、工具历史恢复会话隔离） |
 | `v3.19.2` | 合入上游 v3.19.2（15 提交）+ fork 全特性；字节上限统一为 `bytes_with_limit`（200MB）；content_encoding 解压 bomb 防护；atomic_write Windows 改用 `ReplaceFileW`；版本号与上游对齐（首次无后缀，wix.version 3.19.2.0）；重发补充：接管统一 `ANTHROPIC_AUTH_TOKEN` 占位符避免 Not logged in、官方原生分类器透传 + ALLOW 兜底、分类器检测加固 |
 | `v3.19.2-a` | DeepSeek 多模态能力支持（`deepseek-v4-pro` 支持图片输入；`deepseek-v4-flash` 维持纯文本）；同步上游趋势图表点位与 Grok Build 文案修正；wix.version 递增至 3.19.2.1 |
+| `v3.20.2` | 合入上游 v3.20.2（`2d54e261`，26 提交）；Grok 走 xAI 原生 Responses 路由、一批 catalog/兼容性修复、预设与定价扩充 |
+| `v3.20.3` | 合入上游 v3.20.3（`bd247a4a`）；Kimi 等 Codex 预设改原生 Responses 直连、代理正确性修复、预设与定价维护。**首次发布失败**：标签误指上游提交，Release 跑的是上游工作流（硬校验 `TAURI_SIGNING_PRIVATE_KEY`），5 个平台全部在签名步骤失败、附件为空；把标签改指 fork 提交 `b24deaa9` 后重发成功 |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -379,6 +384,14 @@ tests/config/universalProviderPresets.test.ts
 > hoist，fork 保留 user 重写）；4.9 保留（upsert 适配新签名）；其余 4.x 分歧点
 > 经逐条核对全部保留。
 
+> 2026-09-15 同步：合入上游 #7331（Claude Desktop 3P 配置支持 Linux——从**绝对**
+> `XDG_CONFIG_HOME` 解析配置根、未设置或相对路径时回落 `~/.config`；CC Switch 自身
+> 以 Flatpak 运行时刻意改用宿主机 `~/.config` 而非沙箱私有的 `XDG_CONFIG_HOME`；
+> en/zh/ja 用户手册补 Linux 路径与 Flatpak 边界说明）。1 提交 / 4 文件（+136/-12），
+> 与 fork 无冲突自动合并；分歧点 4.1–4.16 逐条核对无变化（改动全部落在新的
+> `#[cfg(target_os = "linux")]` 分支，未与 fork 的 claude-desktop 3P 逻辑相交）。
+> fork 版本号保持 `v3.20.3` 未 bump。
+
 ## 6. 维护约定
 
 - **上游同步**：`git fetch upstream && git merge upstream/main`，merge 后跑
@@ -386,3 +399,94 @@ tests/config/universalProviderPresets.test.ts
 - **协议修改**：必须先有失败测试（TDD），改动点必须带行为钉桩测试。
 - **行为分歧**：凡是有意偏离上游语义的改动，在代码注释中注明理由，并同步本节文档。
 - **推送目标**：`origin`（GitHub）+ `cnb`（cnb.cool）双远端。
+
+### 6.1 发布纪律（tag 必须指向 fork 提交）
+
+fork 与上游**共用 tag 名**（`v3.20.x`），两边指向不同提交。因此：
+
+- **绝不推送上游标签**。上游标签一旦进入本仓库并被 `git push --tags` 推上去，
+  该 tag 上跑的 Release 会用**上游的 `release.yml`**——它硬校验
+  `TAURI_SIGNING_PRIVATE_KEY`，而 fork 仓库不配置任何 Secrets（签名/公证/R2
+  全部按"个人使用模式"降级跳过）。结果就是 5 个平台全部在签名步骤失败、
+  Release 附件为空。`v3.20.3` 首次发布即为此故障（见第 5 节）。
+- upstream 远端已配置 `tagOpt = --no-tags`，`git fetch upstream` 不再拉取上游
+  标签；如换机器克隆需重新执行：
+
+  ```bash
+  git config remote.upstream.tagOpt --no-tags
+  ```
+
+- 发布前必须核对 tag 指向并显式重建（轻量标签，与 `v3.20.0`–`v3.20.2` 一致）：
+
+  ```bash
+  git tag -f v3.20.x <fork-main-commit>     # 必须是 fork 提交，不是上游提交
+  git push -f origin v3.20.x                # 推送 tag 触发 Release
+  git log -1 --oneline v3.20.x              # 复核：提交信息应为 fork 的提交
+  ```
+
+- 发布前确认 `package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json`
+  三处版本号与 tag 一致（`resolve-version` 作业会硬校验并中止）。
+- **手动重跑**：`Actions → Release → Run workflow`（`workflow_dispatch` 从
+  `Cargo.toml` 推导 tag，需把 `prerelease` 置为 false 才会发正式版）。
+
+### 6.2 已知缺陷：应用内更新实际不生效（待定夺）
+
+`tauri.conf.json` 的 updater 是启用的（`bundle.createUpdaterArtifacts = true`，
+endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 fork 未配置
+`TAURI_SIGNING_PRIVATE_KEY`，构建不产出 `.sig`；而 `assemble-latest-json` 作业只在
+签名非空时才写入对应平台，于是每个 fork 版本的 `latest.json` 都是：
+
+```json
+{ "version": "3.20.3", "notes": "...", "pub_date": "...", "platforms": {} }
+```
+
+`platforms` 为空 → 更新器找不到任何平台的更新，**自动更新静默失效**。
+已确认 v3.20.2 与 v3.20.3 均为空，属既有问题（非本次回归）。
+
+两条修复路径（需人工决策，涉及密钥，未擅自执行）：
+
+1. 把与该 `pubkey`（minisign key id `RWTjKDlXmowCyC9Q`）配对的**私钥**配成仓库
+   Secret `TAURI_SIGNING_PRIVATE_KEY`（+ 可选 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`），
+   构建即产出 `.sig`，清单自动填满——变更面最小，老用户可无缝升级。
+2. 重新生成密钥对，并把新公钥写回 `tauri.conf.json` 的 `plugins.updater.pubkey`
+   ——会让**已在旧版本的用户无法验证新包**（签名公钥不匹配），仅在私钥确实丢失时使用。
+
+⚠️ 注意 `release.yml` 的构建步骤对签名失败是"吞掉继续"（`|| echo "⚠️ 已忽略"`），
+所以配好密钥后仍需复核产物里确实带 `.sig`，否则会再次静默产出空 `platforms`。
+
+### 6.3 Windows 本地跑 Rust 测试必须隔离 `HOME`（2026-09-15 同步时发现）
+
+**直接跑 `cargo test --lib` 会改写真实的 `~/.cc-switch`，并留下夹具状态导致 5 个用例
+确定性失败**（现象是 `assertion left: 0, right: 1` + `assert!(state.config.include_common_models)`，
+集中出现在 `services::model_pricing::tests` 的 4 个用例与
+`services::skill::tests::migrate_storage_safely_leaves_an_existing_pi_ssot_alias`），
+**看起来像回归，实为环境污染**。
+
+- **根因**：`get_app_config_dir()`（`src-tauri/src/config.rs` 的 `#[cfg(windows)]` 分支）
+  保留了 v3.10.3 兼容回退——若默认目录 `<home>/.cc-switch` 下**没有** `cc-switch.db`，
+  而 `$HOME/.cc-switch/cc-switch.db` 存在，则返回后者。测试统一用 `Database::memory()`，
+  从不落盘 db 文件，于是该回退恒被触发，`CC_SWITCH_TEST_HOME` 的隔离被绕过。
+- **后果**：`model-pricing.json`、`settings.json`、`skills/`、`skill-backups/` 会被测试写入
+  真实配置目录，测试执行删除时还会把文件送进用户回收站；其中 `settings.json` 会被覆盖成
+  "默认开关 + `skillSyncMethod: auto` / `skillStorageLocation: cc_switch`"（skill 迁移测试
+  写入的形态），原始内容在 `~/.cc-switch/backups/*.db` 的 `settings` 表里**不存**
+  （该表只有 `*_migrated_v1` / `default_skill_repos_initialized` 等 10 个 key），
+  **DB 备份无法还原**。一旦 `model-pricing.json` 带上夹具状态（`includeCommonModels: false`、
+  `deletedModelIds: ["claude-sonnet-5"]`），上述 5 个用例就会稳定失败（`claude-sonnet-5`
+  被 tombstone 后 seeding 缺失，`UPDATE ... WHERE model_id='claude-sonnet-5'` 影响 0 行）。
+- **规避**（已验证 2988 用例全绿）：跑测试时把 `HOME` 指向临时目录，
+  使 `$HOME/.cc-switch/cc-switch.db` 不存在，回退不再命中真实目录。
+
+  ```bash
+  mkdir -p "$TEMP/ccswitch-iso-probe"
+  cd src-tauri && HOME="$TEMP/ccswitch-iso-probe" cargo test --lib
+  ```
+
+- **根治方向**（未擅自实施，涉及 Windows 兼容语义与用户数据路径，需人工定夺）：
+  测试构建下检测到 `CC_SWITCH_TEST_HOME` 已设置即跳过该回退；或把回退条件从
+  `$HOME/.cc-switch` 收紧为"仅在默认目录确实无 db 且 `$HOME` 与真实用户目录不同"。
+- **残留清理**：受污染的真实 `~/.cc-switch/model-pricing.json` 内容是纯测试夹具数据
+  （`custom-model` 两条 + `deletedModelIds: ["claude-sonnet-5"]`），删除后应用会按默认值
+  （`includeCommonModels: true`）重建。`cc-switch.db` 未被测试改写，但 `settings.json`
+  已被覆盖且**无备份可还原**（见上），需在应用设置页人工核对托盘／代理／会话自动同步／
+  skill 存储位置等开关。
