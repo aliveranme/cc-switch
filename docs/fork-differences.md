@@ -59,7 +59,10 @@
 - 供应商默认模型回退与预设清理（sponsor 预设调整同步上游）
 - AuthCenter 账户用量展示（合入上游 #4887）
 - DeepLink 导入支持 `claude-desktop` app（见 4.11）
-- Claude Desktop 3P 供应商 profile 默认启用 `chatAdvancedFileAnalysisEnabled`（上游无此字段）
+- Claude Desktop 3P 供应商 profile 默认启用 `chatAdvancedFileAnalysisEnabled`、
+  `modelPrefer1mContext`、`skipWebFetchPreflight`、`coworkVmIpv6Enabled`
+  （上游无这四个字段；direct 与 proxy 两种模式共用 `build_gateway_profile`，
+  两处钉桩测试各断言一次）
 
 ### 2.5 发布 / CI
 

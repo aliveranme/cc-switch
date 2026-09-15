@@ -1043,6 +1043,11 @@ fn build_gateway_profile(
         "autoModeEnabled": true,
         "chatTabEnabled": true,
         "chatAdvancedFileAnalysisEnabled": true,
+        // 上下文与网络偏好：优先选用 1M 上下文模型、跳过 WebFetch 预检（预检在第三方
+        // 网关下常因跨域/证书链路失败而误判）、并允许 cowork 虚拟机启用 IPv6。
+        "modelPrefer1mContext": true,
+        "skipWebFetchPreflight": true,
+        "coworkVmIpv6Enabled": true,
         // 启用工具搜索，允许用户在对话中搜索和发现已安装的 MCP 工具
         "toolSearchEnabled": true,
         "disableEssentialTelemetry": true,
@@ -1617,6 +1622,9 @@ mod tests {
         assert_eq!(profile["disableNonessentialTelemetry"], json!(true));
         assert_eq!(profile["disableNonessentialServices"], json!(true));
         assert!(profile.get("inferenceModels").is_none());
+        assert_eq!(profile["modelPrefer1mContext"], json!(true));
+        assert_eq!(profile["skipWebFetchPreflight"], json!(true));
+        assert_eq!(profile["coworkVmIpv6Enabled"], json!(true));
         assert_eq!(meta["appliedId"], json!(PROFILE_ID));
         assert!(meta["entries"]
             .as_array()
@@ -1683,6 +1691,9 @@ mod tests {
         assert_eq!(profile["disableEssentialTelemetry"], json!(true));
         assert_eq!(profile["disableNonessentialTelemetry"], json!(true));
         assert_eq!(profile["disableNonessentialServices"], json!(true));
+        assert_eq!(profile["modelPrefer1mContext"], json!(true));
+        assert_eq!(profile["skipWebFetchPreflight"], json!(true));
+        assert_eq!(profile["coworkVmIpv6Enabled"], json!(true));
         assert_ne!(profile["inferenceGatewayApiKey"], json!("test-token"));
         assert!(profile["inferenceGatewayApiKey"]
             .as_str()
