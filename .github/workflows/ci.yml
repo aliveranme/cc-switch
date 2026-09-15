@@ -28,7 +28,7 @@ jobs:
       # on push it needs a local git history to diff against.
       - name: Checkout
         if: github.event_name == 'push'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Detect changed paths
         id: filter
