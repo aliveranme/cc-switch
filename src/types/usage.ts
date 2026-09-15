@@ -190,13 +190,7 @@ export interface UsageRangeSelection {
  * managed apps elsewhere.
  */
 export type AppType =
-  | "claude"
-  | "codex"
-  | "gemini"
-  | "grokbuild"
-  | "opencode"
-  | "pi"
-  | "mcode";
+  "claude" | "codex" | "gemini" | "grokbuild" | "opencode" | "pi" | "mcode";
 
 export type AppTypeFilter = "all" | AppType;
 

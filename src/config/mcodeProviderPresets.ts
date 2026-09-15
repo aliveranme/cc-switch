@@ -7,8 +7,10 @@ export const MCODE_API_FORMATS = [
 ] as const;
 
 // Reuse endpoint/model metadata only where the preset needs no Pi-specific compatibility options.
-export interface McodeProviderPreset
-  extends Omit<PiProviderPreset, "settingsConfig"> {
+export interface McodeProviderPreset extends Omit<
+  PiProviderPreset,
+  "settingsConfig"
+> {
   settingsConfig: {
     name: string;
     kind: string;

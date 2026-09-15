@@ -108,10 +108,10 @@ export function McodeProviderForm({
   const name = form.watch("name");
   const ready = Boolean(
     jsonValid &&
-      name.trim() &&
-      config.options?.baseURL?.trim() &&
-      config.options?.apiKey?.trim() &&
-      Object.keys(config.models ?? {}).length,
+    name.trim() &&
+    config.options?.baseURL?.trim() &&
+    config.options?.apiKey?.trim() &&
+    Object.keys(config.models ?? {}).length,
   );
   useEffect(() => {
     onSubmitReadyChange?.(ready);
