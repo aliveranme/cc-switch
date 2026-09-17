@@ -6,7 +6,10 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      // vitest 5 起 Vite config loader 不再注入 `__dirname`（configLoader:
+      // 'native' 将成为默认，届时会直接失败），改用 ESM 原生的
+      // `import.meta.dirname`（Node 20.11+，CI 用 Node 22）。
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   test: {
