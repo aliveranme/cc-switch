@@ -2007,27 +2007,26 @@ impl RequestForwarder {
         let should_send_anthropic_headers = adapter.name() == "Claude"
             && matches!(resolved_claude_api_format.as_deref(), Some("anthropic"));
 
-        // 预计算 anthropic-beta 值（仅 Claude）
-        // 注入 claude-code + 1M context beta，让所有 proxy 请求自动获得
-        // 上下文窗口扩展能力。1M context 的最终生效仍受上游 API 控制。
-        // 从客户端已有的 beta 值追加缺失项，避免重复。
+        // 预计算 anthropic-beta 值（仅 Claude 原生 Messages 上游）
+        //
+        // 1M-context beta 改为**条件式**：`context-1m-2025-08-07` 会把请求切到 1M-context
+        // 变体，而上游对 1M 变体另起一套前缀缓存池；直连时 Claude Code 只在自己声明
+        // 1M（模型名带 `[1M]`）时才发送该 beta。此前代理无条件给每条 native 请求都补上，
+        // 等于把同一端点的全部流量从默认缓存池挪到 1M 缓存池，同一前缀在两侧互不命中，
+        // 命中率被稳定压低（实测 99% → 85%）。现在只在客户端**确有 1M 意图**时保留/补齐。
+        //
+        // `claude-code-20250219` 保持注入：它是客户端身份标记，原生 Claude Code 每条
+        // 请求本就携带（去重后等同透传），保留可兼容依赖该标记的网关。客户端自带的其它
+        // beta 一律按原顺序原样保留，不增删。
+        let client_beta = headers
+            .get("anthropic-beta")
+            .and_then(|value| value.to_str().ok());
+        // 用**原始** body 判定 1M 意图——映射与 [1M] 剥离都会改写模型名，晚判会丢标记。
+        let client_declared_one_m =
+            client_declared_one_m_context(body.get("model").and_then(Value::as_str), client_beta);
+
         let anthropic_beta_value = if should_send_anthropic_headers {
-            const BASE_BETAS: [&str; 2] = ["claude-code-20250219", "context-1m-2025-08-07"];
-            Some(if let Some(beta) = headers.get("anthropic-beta") {
-                if let Ok(beta_str) = beta.to_str() {
-                    let mut parts: Vec<&str> = beta_str.split(',').collect();
-                    for required in &BASE_BETAS {
-                        if !parts.iter().any(|p| p.trim() == *required) {
-                            parts.push(required);
-                        }
-                    }
-                    parts.join(",")
-                } else {
-                    BASE_BETAS.join(",")
-                }
-            } else {
-                BASE_BETAS.join(",")
-            })
+            native_anthropic_beta_value(client_beta, client_declared_one_m)
         } else if codex_impersonate_claude_code || codex_anthropic_one_m {
             // Codex→Anthropic: emulation injects the claude-code marker; a [1m]
             // model injects the context-1m marker.
@@ -3019,6 +3018,67 @@ fn split_endpoint_and_query(endpoint: &str) -> (&str, Option<&str>) {
     endpoint
         .split_once('?')
         .map_or((endpoint, None), |(path, query)| (path, Some(query)))
+}
+
+/// Whether the client declared 1M-context intent for this request.
+///
+/// Two declaration forms exist: the `[1M]` model-name marker (Claude Code takeover
+/// writes aliases such as `claude-sonnet-5[1M]`) and a client-sent
+/// [`NATIVE_CLAUDE_CONTEXT_ONE_M_BETA`] beta. Called with the **original** client body,
+/// before model mapping and the `[1M]` suffix strip, so the marker is still present.
+fn client_declared_one_m_context(model: Option<&str>, client_beta: Option<&str>) -> bool {
+    let model_has_marker = model.is_some_and(|model| {
+        model
+            .trim_end()
+            .to_ascii_lowercase()
+            .ends_with(crate::claude_desktop_config::ONE_M_CONTEXT_MARKER)
+    });
+
+    model_has_marker
+        || client_beta.is_some_and(|beta| {
+            beta.split(',')
+                .any(|part| part.trim() == NATIVE_CLAUDE_CONTEXT_ONE_M_BETA)
+        })
+}
+
+/// The Claude Code client-identity beta. Native Claude Code sends it on every request,
+/// so forwarding it keeps parity with a direct connection.
+const NATIVE_CLAUDE_CLIENT_BETA: &str = "claude-code-20250219";
+
+/// The 1M-context beta. It switches the request to the 1M-context serving variant,
+/// which uses a separate prompt-cache pool, so it must not be added unconditionally on
+/// the native Anthropic path.
+const NATIVE_CLAUDE_CONTEXT_ONE_M_BETA: &str = "context-1m-2025-08-07";
+
+/// Build the `anthropic-beta` header for the native Claude Messages path.
+///
+/// The client's own beta tokens are preserved in order; only the two betas the proxy may
+/// need are appended when missing — `claude-code-20250219` always, and
+/// `context-1m-2025-08-07` only when the client declared 1M intent. Returns `None` when
+/// the header would be empty so the caller omits it entirely.
+fn native_anthropic_beta_value(
+    client_beta: Option<&str>,
+    client_declared_one_m: bool,
+) -> Option<String> {
+    let mut parts: Vec<String> = client_beta
+        .map(|beta| {
+            beta.split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    for required in std::iter::once(NATIVE_CLAUDE_CLIENT_BETA)
+        .chain(client_declared_one_m.then_some(NATIVE_CLAUDE_CONTEXT_ONE_M_BETA))
+    {
+        if !parts.iter().any(|part| part == required) {
+            parts.push(required.to_string());
+        }
+    }
+
+    (!parts.is_empty()).then(|| parts.join(","))
 }
 
 fn strip_beta_query(query: Option<&str>) -> Option<String> {
@@ -4663,6 +4723,83 @@ mod tests {
             "https://host.example/v1/chat/completions?api-version=2024",
             "/chat/completions"
         ));
+    }
+
+    #[test]
+    fn native_anthropic_beta_keeps_client_betas_and_adds_identity_only() {
+        // No 1M intent: only the client-identity beta is added on top of whatever the
+        // client sent. The context-1m beta must NOT be injected — that is the regression
+        // that moved native traffic onto the 1M serving variant and its separate cache pool.
+        assert_eq!(
+            native_anthropic_beta_value(None, false).as_deref(),
+            Some(NATIVE_CLAUDE_CLIENT_BETA)
+        );
+        assert_eq!(
+            native_anthropic_beta_value(Some("oauth-2025-04-20"), false).as_deref(),
+            Some("oauth-2025-04-20,claude-code-20250219")
+        );
+
+        // The client already sent the identity beta: no duplicate, order preserved.
+        assert_eq!(
+            native_anthropic_beta_value(Some("claude-code-20250219,oauth-2025-04-20"), false)
+                .as_deref(),
+            Some("claude-code-20250219,oauth-2025-04-20")
+        );
+
+        // 1M intent declared: the context-1m beta is preserved/appended.
+        assert_eq!(
+            native_anthropic_beta_value(None, true).as_deref(),
+            Some("claude-code-20250219,context-1m-2025-08-07")
+        );
+        assert_eq!(
+            native_anthropic_beta_value(Some("context-1m-2025-08-07"), true).as_deref(),
+            Some("context-1m-2025-08-07,claude-code-20250219")
+        );
+    }
+
+    #[test]
+    fn native_anthropic_beta_treats_blank_client_header_as_absent() {
+        // A whitespace-only header must not produce an empty token; the proxy value still
+        // carries the identity beta.
+        assert_eq!(
+            native_anthropic_beta_value(Some("  "), false).as_deref(),
+            Some(NATIVE_CLAUDE_CLIENT_BETA)
+        );
+    }
+
+    #[test]
+    fn client_declared_one_m_context_detects_both_declaration_forms() {
+        // Model-name marker (as written by the takeover) — case-insensitive.
+        assert!(client_declared_one_m_context(
+            Some("claude-sonnet-5[1M]"),
+            None
+        ));
+        assert!(client_declared_one_m_context(
+            Some("claude-sonnet-5[1m]  "),
+            None
+        ));
+        // Client-sent beta, alone or inside a multi-value header.
+        assert!(client_declared_one_m_context(
+            None,
+            Some("context-1m-2025-08-07")
+        ));
+        assert!(client_declared_one_m_context(
+            Some("claude-sonnet-5"),
+            Some("oauth-2025-04-20, context-1m-2025-08-07")
+        ));
+
+        // Neither form present → no 1M intent.
+        assert!(!client_declared_one_m_context(
+            Some("claude-sonnet-5"),
+            None
+        ));
+        assert!(!client_declared_one_m_context(
+            Some("claude-sonnet-5"),
+            Some("oauth-2025-04-20")
+        ));
+        assert!(!client_declared_one_m_context(None, None));
+        // A plain model that merely contains "1m" mid-string is not the marker.
+        assert!(!client_declared_one_m_context(Some("claude-1m-pro"), None));
     }
 
     #[test]
