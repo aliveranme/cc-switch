@@ -63,6 +63,14 @@
   `modelPrefer1mContext`、`skipWebFetchPreflight`、`coworkVmIpv6Enabled`
   （上游无这四个字段；direct 与 proxy 两种模式共用 `build_gateway_profile`，
   两处钉桩测试各断言一次）
+- **vitest 5 的类型适配**（2026-09-17）：vitest 5 把 `Assertion` 的签名从
+  `Assertion<T = any>` 改为 `Assertion<R, T>`（两个必需类型参数），而
+  `@testing-library/jest-dom` 7.0.1 的 `declare module 'vitest'` 声明合并因
+  类型参数列表不一致**静默失效**——jest-dom 匹配器全部从 `Assertion` 上消失，
+  `typecheck` 报 600+ 处 TS2339（运行时不受影响）。新增
+  `tests/vitest-jest-dom.d.ts` 按新签名补齐；同时 `vitest.config.ts` 的
+  `__dirname` 改为 `import.meta.dirname`（vitest 5 起 Vite config loader 不再
+  注入 `__dirname`）。⚠️ jest-dom 上游适配 vitest 5 后应删除该声明文件
 
 ### 2.5 发布 / CI
 
@@ -117,6 +125,7 @@ src/components/JsonEditorImpl.tsx
 src/components/MarkdownEditorImpl.tsx
 tests/config/codexProviderPresetDefaults.test.ts
 tests/config/universalProviderPresets.test.ts
+tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接（上游适配后可删）
 ```
 
 ## 4. 与上游的行为分歧点（同步合并时必须核对）
