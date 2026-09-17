@@ -8,11 +8,11 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | `42ac174d`（2026-09-14，v3.20.3 之后 1 个提交：#7331 Claude Desktop 3P 配置支持 Linux） |
-| 本地领先 | 领先上游的本地提交（fork 全特性 + 历次上游 merge 同步） |
-| 本次 merge | 2026-09-15：`42ac174d` 合入 #7331（1 提交，4 文件 +136/-12，全部自动合并、无冲突） |
+| 上游基线 | `06082e18`（2026-09-15，v3.20.3 之后 9 个提交，含 `42ac174d` #7331 Claude Desktop Linux 3P、`15884b20` #7395 codex stale account bindings、`06082e18` #7383 MiniMax Code harness） |
+| 本地领先 | 398 提交（`git rev-list --count upstream/main..main`）= fork 全特性 + 历次上游 merge 同步 |
+| 本次 merge | 2026-09-15 共**两次** merge：① `7a4df797` 合入 `42ac174d`（#7331，4 文件 +136/-12，无冲突）；② `1a2d24c6` 合入 `15884b20`+`06082e18`（#7395 + #7383，89 文件 +4090/-275，冲突 `README.md`/`README_DE.md`/`README_JA.md`/`README_ZH.md`/`src/types/usage.ts` 已解） |
 | 本地版本 | `v3.20.3`（随 merge 对齐上游版本号，无后缀；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-09-15（此前已吸收 v3.20.2 `2d54e261` 与 v3.20.3 `bd247a4a`） |
+| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-09-15；2026-09-17 核对上游无新提交/新版本（见第 5 节末） |
 | 测试规模 | Rust 2988（`--lib` 全绿；Windows 本地需隔离 `HOME`，见 6.3）+ 前端 vitest 1121（139 文件全绿） |
 
 ## 2. 修改总览（按主题）
@@ -361,14 +361,22 @@ tests/config/universalProviderPresets.test.ts
 
 ## 5. 本地发布序列
 
-| 版本 | 内容 |
-|---|---|
-| `v3.19.1-a` | CI/发布基础设施修复（tag 推送正式版、wix.version 绕过 prerelease） |
-| `v3.19.1-b` | proxy 协议修复收尾（安全分类器、prefix-cache 稳定性、流式终态容错、工具历史恢复会话隔离） |
-| `v3.19.2` | 合入上游 v3.19.2（15 提交）+ fork 全特性；字节上限统一为 `bytes_with_limit`（200MB）；content_encoding 解压 bomb 防护；atomic_write Windows 改用 `ReplaceFileW`；版本号与上游对齐（首次无后缀，wix.version 3.19.2.0）；重发补充：接管统一 `ANTHROPIC_AUTH_TOKEN` 占位符避免 Not logged in、官方原生分类器透传 + ALLOW 兜底、分类器检测加固 |
-| `v3.19.2-a` | DeepSeek 多模态能力支持（`deepseek-v4-pro` 支持图片输入；`deepseek-v4-flash` 维持纯文本）；同步上游趋势图表点位与 Grok Build 文案修正；wix.version 递增至 3.19.2.1 |
-| `v3.20.2` | 合入上游 v3.20.2（`2d54e261`，26 提交）；Grok 走 xAI 原生 Responses 路由、一批 catalog/兼容性修复、预设与定价扩充 |
-| `v3.20.3` | 合入上游 v3.20.3（`bd247a4a`）；Kimi 等 Codex 预设改原生 Responses 直连、代理正确性修复、预设与定价维护。**首次发布失败**：标签误指上游提交，Release 跑的是上游工作流（硬校验 `TAURI_SIGNING_PRIVATE_KEY`），5 个平台全部在签名步骤失败、附件为空；把标签改指 fork 提交 `b24deaa9` 后重发成功 |
+下表按 GitHub Releases 实际发布时间排序补全（2026-09-17 核对：共 11 个 release，与 `aliveranme/cc-switch` 实况一致）。
+早于 `v3.19.1-a` 的版本随上游同步对齐版本号发布，变更内容即上游对应版本的变更日志。
+
+| 版本 | 发布时间 | 内容 |
+|---|---|---|
+| `v3.18.0` | 2026-06-28 | 合入上游 v3.18.0：Grok Build 成为第八个受管 app（独立 `/grokbuild/v1/responses` 路由命名空间与独立预设集）、xAI Grok OAuth 设备流登录、用量统计重建（schema v16）（52 提交 / 217 文件，+21452/-6285）。GitHub 上为 prerelease |
+| `v3.19.0` | 2026-07-30 | 合入上游 v3.19.0：安全加固（skill 安装 zip-slip 与路径穿越、Gemini 通用配置凭据泄漏清理、SQL 导入 SQLite authorizer、终端路径转义、deeplink 确认完整展示）、代理工具图片 token 膨胀修复、models.dev 定价自动同步（38 提交 / 132 文件，+14926/-1415）。GitHub 上为 prerelease |
+| `v3.19.1` | 2026-07-31 | 合入上游 v3.19.1：DeepSeek/火山 Ark/腾讯混元 Codex 网关改原生 Responses、Claude Desktop 用量双重计数修复（#5938）、Codex 官方 provider 回切残留第三方 key 修复、删除 3,166 行废弃代码（12 提交 / 71 文件，+2324/-3680，首个删除多于新增的版本）。GitHub 上为 prerelease |
+| `v3.19.1-a` | 2026-08-02 | CI/发布基础设施修复（tag 推送正式版、wix.version 绕过 prerelease） |
+| `v3.19.1-b` | 2026-08-02 | proxy 协议修复收尾（安全分类器、prefix-cache 稳定性、流式终态容错、工具历史恢复会话隔离）。注：GitHub 上该 release 为 prerelease（与 a 同日，应为手动重跑时 `prerelease` 未置 false，见 6.1） |
+| `v3.19.2` | 2026-08-09 | 合入上游 v3.19.2（15 提交）+ fork 全特性；字节上限统一为 `bytes_with_limit`（200MB）；content_encoding 解压 bomb 防护；atomic_write Windows 改用 `ReplaceFileW`；版本号与上游对齐（首次无后缀，wix.version 3.19.2.0）；重发补充：接管统一 `ANTHROPIC_AUTH_TOKEN` 占位符避免 Not logged in、官方原生分类器透传 + ALLOW 兜底、分类器检测加固 |
+| `v3.19.2-a` | 2026-08-17 | DeepSeek 多模态能力支持（`deepseek-v4-pro` 支持图片输入；`deepseek-v4-flash` 维持纯文本）；同步上游趋势图表点位与 Grok Build 文案修正；wix.version 递增至 3.19.2.1 |
+| `v3.20.0` | 2026-08-19 | 合入上游 v3.20.0：Pi 成为第九个受管 app（schema v16→v17）、Codex 多账号 ChatGPT 管理（#3879）、Windows+WSL2 `ReplaceFileW` 修复（#6232）、CLI 检测改用注册表 PATH（#6284）（69 提交 / 284 文件，+53108/-6678） |
+| `v3.20.1` | 2026-08-29 | 合入上游 v3.20.1：Codex CLI 0.149 改 config-only 切换（第三方 key 不再写 `auth.json`）、Team workspace 账号互相覆盖修复（#6780）、会话扫描增量 byte-cursor（schema v17→v18）（26 提交 / 66 文件，+7474/-1000） |
+| `v3.20.2` | 2026-09-09 | 合入上游 v3.20.2（`2d54e261`，26 提交）；Grok 走 xAI 原生 Responses 路由、一批 catalog/兼容性修复、预设与定价扩充 |
+| `v3.20.3` | 2026-09-13 | 合入上游 v3.20.3（`bd247a4a`）；Kimi 等 Codex 预设改原生 Responses 直连、代理正确性修复、预设与定价维护。**首次发布失败**：标签误指上游提交，Release 跑的是上游工作流（硬校验 `TAURI_SIGNING_PRIVATE_KEY`），5 个平台全部在签名步骤失败、附件为空；把标签改指 fork 提交 `b24deaa9` 后重发成功 |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -379,7 +387,9 @@ tests/config/universalProviderPresets.test.ts
 > 2026-08-28/30 同步：合入上游 v3.20.1（7 提交：会话扫描重构——增量 byte-cursor
 > 扫描、auto/manual 模式切换、non-append rewrite 检测、Sync Now 门控——及
 > v3.20.1 发版）与 #6941（mid-conversation system 原位保留）。fork 版本号随
-> merge 对齐上游 `3.20.1`（未单独发版）。分歧点变化：4.15 移除（bearer token
+> merge 对齐上游 `3.20.1`，并发布了同名 release `v3.20.1`（2026-08-29，13 资产；
+> 本注记原记「未单独发版」，2026-09-17 核对 GitHub Releases 后更正）。
+> 分歧点变化：4.15 移除（bearer token
 > 对齐上游顶层 fallback，保留 4.15a custom 表自动补建）；4.1 收窄（上游不再
 > hoist，fork 保留 user 重写）；4.9 保留（upsert 适配新签名）；其余 4.x 分歧点
 > 经逐条核对全部保留。
@@ -392,10 +402,30 @@ tests/config/universalProviderPresets.test.ts
 > `#[cfg(target_os = "linux")]` 分支，未与 fork 的 claude-desktop 3P 逻辑相交）。
 > fork 版本号保持 `v3.20.3` 未 bump。
 
+> 2026-09-15 同日**第二次**合并（本注记补记于 2026-09-17，此前仅记录了上面
+> 的 #7331 一次）：`1a2d24c6 Merge remote-tracking branch 'upstream/main'` 合入
+> 上游 `15884b20`（#7395 Codex 接管时恢复 stale 账号绑定）与 `06082e18`
+> （#7383 MiniMax Code harness 支持）。89 文件 +4090/-275；冲突 5 处
+> （`README.md` / `README_DE.md` / `README_JA.md` / `README_ZH.md` /
+> `src/types/usage.ts`）已解，随后以 `c27300b1`（prettier 格式化 mcode 与 usage
+> 类型）与 `37ef5010`（mcode 预设按钮可访问名兼容 dom-accessibility-api 0.6 的
+> SVG title 拼接）收尾。fork 版本号保持 `v3.20.3` 未 bump。
+
+> 2026-09-17 核对（本次无 merge / push / release）：上游自 `06082e18`
+> （2026-09-15 04:33 UTC）起**无新提交、无新 release/tag**（最新仍为 `v3.20.3`），
+> 上游 126 个分支中无任何 tip 晚于该提交；`git merge-base --is-ancestor
+> upstream/main main` 成立、`git rev-list --count upstream/main..main` = 398、
+> `git log upstream/main ^main` 为空。fork `main` 与 `origin/main` 一致
+> （`aa39d944`），无待推送提交，全部发布标签均指向 fork 提交 → 无需 merge /
+> push / release。fork `main` 领先最新 release 标签 `b24deaa9`（`v3.20.3`）
+> 17 个提交。
+
 ## 6. 维护约定
 
-- **上游同步**：`git fetch upstream && git merge upstream/main`，merge 后跑
-  `cargo test --lib`（2867）+ `pnpm vitest run`（1022）+ `cargo fmt/clippy` 全绿再提交。
+- **上游同步**：`git fetch upstream --no-tags && git merge upstream/main`，merge 后跑
+  `cargo test --lib` + `pnpm vitest run` + `cargo fmt/clippy` 全绿再提交
+  （用例规模以第 1 节为准）。必须显式带 `--no-tags`：命令行 `--tags` 会**覆盖** 6.1
+  配置的 `remote.upstream.tagOpt=--no-tags`，把上游标签拉进本地。
 - **协议修改**：必须先有失败测试（TDD），改动点必须带行为钉桩测试。
 - **行为分歧**：凡是有意偏离上游语义的改动，在代码注释中注明理由，并同步本节文档。
 - **推送目标**：`origin`（GitHub）+ `cnb`（cnb.cool）双远端。
