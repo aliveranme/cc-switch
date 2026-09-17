@@ -449,11 +449,14 @@ jobs:
           mkdir -p release-assets
           VERSION="${TAG}"  # e.g., v3.5.0
           ARCH="${{ matrix.arch || 'x86_64' }}"
-          # ARM64 交叉编译产物在独立 target 目录下
+          # ubuntu-22.04-arm 是**原生** ARM64 runner，上面的构建步骤不带 --target，
+          # 因此产物与 x86_64 落在同一路径 target/release/bundle（Windows ARM64
+          # 才显式 --target，产物在 target/<triple>/ 下）。此处原先对 arm64 指向
+          # 交叉编译路径 target/aarch64-unknown-linux-gnu/...，使
+          # Linux-arm64.AppImage 在**每次发布中静默缺失**——而同一段的 .deb/.rpm
+          # 走下面写死的 target/release/bundle，所以 arm64 的 deb/rpm 一直正常。
+          # 路径与上游保持一致。
           BUNDLE_DIR="src-tauri/target/release/bundle"
-          if [ "$ARCH" = "arm64" ]; then
-            BUNDLE_DIR="src-tauri/target/aarch64-unknown-linux-gnu/release/bundle"
-          fi
           # Updater artifact: AppImage（含对应 .sig）
           APPIMAGE=$(find "$BUNDLE_DIR" -name "*.AppImage" | head -1 || true)
           if [ -n "$APPIMAGE" ]; then
@@ -462,10 +465,13 @@ jobs:
             [ -f "$APPIMAGE.sig" ] && cp "$APPIMAGE.sig" "release-assets/$NEW_APPIMAGE.sig" || echo ".sig for AppImage not found"
             echo "AppImage copied: $NEW_APPIMAGE"
           else
-            echo "No AppImage found under target/release/bundle" >&2
+            # 注解只标记不使作业失败：AppImage 是 Linux 端的 Updater 产物，
+            # 缺失会让该架构用户收不到应用内更新，必须显式可见（此前只写
+            # stderr，发布照样成功、资产静默缺失）。
+            echo "::error::No AppImage found under $BUNDLE_DIR（Linux Updater 产物缺失）" >&2
           fi
           # 额外上传 .deb（用于手动安装，不参与 Updater）
-          DEB=$(find src-tauri/target/release/bundle -name "*.deb" | head -1 || true)
+          DEB=$(find "$BUNDLE_DIR" -name "*.deb" | head -1 || true)
           if [ -n "$DEB" ]; then
             cp "$DEB" "release-assets/CC-Switch-${VERSION}-Linux-${ARCH}.deb"
             echo "Deb package copied: CC-Switch-${VERSION}-Linux-${ARCH}.deb"
@@ -473,7 +479,7 @@ jobs:
             echo "No .deb found (optional)"
           fi
           # 额外上传 .rpm（用于 Fedora/RHEL/openSUSE 等，不参与 Updater）
-          RPM=$(find src-tauri/target/release/bundle -name "*.rpm" | head -1 || true)
+          RPM=$(find "$BUNDLE_DIR" -name "*.rpm" | head -1 || true)
           if [ -n "$RPM" ]; then
             cp "$RPM" "release-assets/CC-Switch-${VERSION}-Linux-${ARCH}.rpm"
             echo "RPM package copied: CC-Switch-${VERSION}-Linux-${ARCH}.rpm"

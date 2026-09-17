@@ -72,6 +72,13 @@
 - updater endpoints 指向本 fork 的 GitHub Releases
 - 删除 `.github/workflows/claude.yml`；迁移 `tailwind.config.cjs` → postcss
 - CI 全绿修复（rustfmt/clippy/前端格式）
+- **Linux 资产查找路径统一为 `src-tauri/target/release/bundle`**（2026-09-17 修复，
+  回归上游写法）：此前 fork 给 arm64 分支加了交叉编译路径
+  `target/aarch64-unknown-linux-gnu/release/bundle`，但 `ubuntu-22.04-arm` 是**原生**
+  ARM64 runner、构建步骤不带 `--target`，产物与 x86_64 同落 `target/release/bundle`
+  ——于是 `Linux-arm64.AppImage` 在**每次发布中静默缺失**（同段的 `.deb`/`.rpm` 走
+  写死路径所以正常，v3.20.3 上 arm64 的 deb/rpm 存在而 AppImage 不存在即为此故）。
+  同时把 AppImage 缺失的提示从 stderr 提升为 `::error::` 注解，使发布时可见。
 - **WSL2 CI job 暂禁用**（2026-08-16）：`backend-windows-wsl2`（Windows+WSL2
   文件系统契约测试）的 link.exe 在 GitHub windows runner 上写 `lnk{}.tmp` 临时
   文件到不存在的 `\\wsl.localhost` UNC 路径（LNK1327 c1010070）。已排除编译顺序
