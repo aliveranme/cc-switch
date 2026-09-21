@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | `fdbe3a85`（2026-09-21，v3.20.3 之后 14 个提交，含 `42ac174d` #7331 Claude Desktop Linux 3P、`15884b20` #7395 codex stale account bindings、`06082e18` #7383 MiniMax Code harness，以及本次 5 提交：`33c80626` #7489 技能归档上限、`a659440b` #7194 prompts 刷新、`f2d0b2a6` #7522 README 赞助 CTA、`1408f382` #7526 Kimi Global 预设、`fdbe3a85` #7515 OpenCode 模型批量添加） |
-| 本地领先 | 410 提交（`git rev-list --count upstream/main..main`）= fork 全特性 + 历次上游 merge 同步 |
-| 本次 merge | 2026-09-21 `e56a239b` 合入上游 `fdbe3a85`（5 提交，24 文件 +1153/-45，冲突 `README.md`/`README_DE.md`/`README_JA.md`/`README_ZH.md` 的 Kimi 赞助段落已解：取上游文案、保留 fork 本地横幅资源）；上一次 2026-09-15 两次 merge 见第 5 节 |
+| 上游基线 | `37d04760`（2026-09-22，v3.20.3 之后 13 个提交，含 `8272707d` #6381 技能 skillId 与目录名不一致、`37d04760` #7550 WSL 侧 OMO 统一配置探测、`2c735bd9` 卡片陈旧用量档、`09498c30` 单色预设图标、`48e572cc`/`e06ff90f`/`d8e98be2`/`0859fa6a`/`4d2c6f07` 预设与定价刷新、`f6c99822` DeepSeek 1M 变体、`7f39d885` Linux 测试覆盖） |
+| 本地领先 | 412 提交（`git rev-list --count upstream/main..main`）= fork 全特性 + 历次上游 merge 同步 |
+| 本次 merge | 2026-09-22 `0b4621e8` 合入上游 `37d04760`（13 提交，53 文件 +1729/-213，**零冲突**自动合并，无需人工解冲突）；上一次 2026-09-21 见第 5 节 |
 | 本地版本 | `v3.20.3`（上游最新 tag 仍为 `v3.20.3`，未 bump；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 `Merge upstream/main (…, N commits) into fork`，最近一次 2026-09-21 |
-| 测试规模 | Rust 3016（`--lib` 全绿；Windows 本地需隔离 `HOME`，见 6.3）+ 前端 vitest 1140（140 文件全绿） |
+| 同步方式 | 定期 `Merge upstream/main (…, N commits) into fork`，最近一次 2026-09-22 |
+| 测试规模 | Rust 3030（`--lib` 全绿；Windows 本地需隔离 `HOME`，见 6.3）+ 前端 vitest 1164（141 文件全绿） |
 
 ## 2. 修改总览（按主题）
 
@@ -450,6 +450,27 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 触碰。验证全绿：`cargo test --lib` 3016、`pnpm vitest run` 1140（140 文件）、
 > `cargo fmt --check` / `cargo clippy` / `pnpm typecheck`。上游最新 tag 仍为 `v3.20.3`
 > （无新版本），fork 版本号保持未 bump。merge 提交 `e56a239b` 已推送 `origin/main`
+> （本机克隆未配置 `cnb` 远端，见 6）。
+
+> 2026-09-22 同步（无 release）：合入上游 `fdbe3a85` 起的 13 提交——`8272707d` #6381 技能
+> 在 skillId 与目录名不一致时按「已保存源路径 → 目录名 → metadata name 唯一兜底」定位
+> （`skill.rs` 新增 `find_remote_skill_for_install` / `choose_doc_path`）；`37d04760` #7550
+> OpenCode 目录在 WSL 时改探 WSL 侧 home 的 OMO 统一配置（`config.rs` 新增
+> `derive_wsl_home_dir`，`omo.rs` 的探测改为 home 候选列表，WSL 侧优先）；`2c735bd9` 卡片
+> 不再展开陈旧缓存的用量档位、`09498c30` 单色预设图标改取前景色；预设与定价批次
+> `48e572cc`/`e06ff90f`/`d8e98be2`/`0859fa6a`/`4d2c6f07`（CN Codex 预设按 Responses API 审计
+> 刷新、MiniMax CN → `api.minimax.cn`、BaiLing → `api.ant-ling.com` 且 Ling-2.5-1T →
+> Ling-2.6-1T、AICodeWith → `/v1`、新增 FluxA Token Plan 三端预设、DeepSeek V4 Pro 定价修回
+> 高峰档 1.32/3.96/0.044 并补 Qwen3.8 2.4T A95B / 27B 与 Hy4 Preview）；`f6c99822` DeepSeek
+> 路由暴露 1M 上下文变体。53 文件 +1729/-213，**零冲突**自动合并（首次全自动）；分歧点
+> 核对：上游改动未触及第 4 节任何分歧实现（proxy 转换、分类器、atomic_write、wire_api
+> 迁移、deeplink、session_usage、接管判定、NativeResponses 模板、`hermes_config.rs` 排除表、
+> lucide 图标），第 3 节 fork 专属文件未被触碰；上游在 `codex_config.rs` 的 web_search 拒绝
+> 名单与 `services/provider`、`coding_plan` 的 MiniMax host 判定均为新增条目，与 fork 现有
+> 逻辑不冲突。验证全绿：`cargo test --lib` 3030、`pnpm vitest run` 1164（141 文件）、
+> `cargo fmt --check` / `cargo clippy --all-targets -D warnings` / `pnpm typecheck` /
+> `pnpm format:check` / `pnpm build:renderer`。上游最新 tag 仍为 `v3.20.3`（无新版本），
+> fork 版本号保持未 bump。merge 提交 `0b4621e8` 已推送 `origin/main`
 > （本机克隆未配置 `cnb` 远端，见 6）。
 
 ## 6. 维护约定
