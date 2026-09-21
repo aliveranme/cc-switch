@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | `06082e18`（2026-09-15，v3.20.3 之后 9 个提交，含 `42ac174d` #7331 Claude Desktop Linux 3P、`15884b20` #7395 codex stale account bindings、`06082e18` #7383 MiniMax Code harness） |
-| 本地领先 | 398 提交（`git rev-list --count upstream/main..main`）= fork 全特性 + 历次上游 merge 同步 |
-| 本次 merge | 2026-09-15 共**两次** merge：① `7a4df797` 合入 `42ac174d`（#7331，4 文件 +136/-12，无冲突）；② `1a2d24c6` 合入 `15884b20`+`06082e18`（#7395 + #7383，89 文件 +4090/-275，冲突 `README.md`/`README_DE.md`/`README_JA.md`/`README_ZH.md`/`src/types/usage.ts` 已解） |
-| 本地版本 | `v3.20.3`（随 merge 对齐上游版本号，无后缀；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 `Merge remote-tracking branch 'upstream/main'`，最近一次 2026-09-15；2026-09-17 核对上游无新提交/新版本（见第 5 节末） |
-| 测试规模 | Rust 2988（`--lib` 全绿；Windows 本地需隔离 `HOME`，见 6.3）+ 前端 vitest 1121（139 文件全绿） |
+| 上游基线 | `fdbe3a85`（2026-09-21，v3.20.3 之后 14 个提交，含 `42ac174d` #7331 Claude Desktop Linux 3P、`15884b20` #7395 codex stale account bindings、`06082e18` #7383 MiniMax Code harness，以及本次 5 提交：`33c80626` #7489 技能归档上限、`a659440b` #7194 prompts 刷新、`f2d0b2a6` #7522 README 赞助 CTA、`1408f382` #7526 Kimi Global 预设、`fdbe3a85` #7515 OpenCode 模型批量添加） |
+| 本地领先 | 410 提交（`git rev-list --count upstream/main..main`）= fork 全特性 + 历次上游 merge 同步 |
+| 本次 merge | 2026-09-21 `e56a239b` 合入上游 `fdbe3a85`（5 提交，24 文件 +1153/-45，冲突 `README.md`/`README_DE.md`/`README_JA.md`/`README_ZH.md` 的 Kimi 赞助段落已解：取上游文案、保留 fork 本地横幅资源）；上一次 2026-09-15 两次 merge 见第 5 节 |
+| 本地版本 | `v3.20.3`（上游最新 tag 仍为 `v3.20.3`，未 bump；fork 发布序列见第 5 节） |
+| 同步方式 | 定期 `Merge upstream/main (…, N commits) into fork`，最近一次 2026-09-21 |
+| 测试规模 | Rust 3016（`--lib` 全绿；Windows 本地需隔离 `HOME`，见 6.3）+ 前端 vitest 1140（140 文件全绿） |
 
 ## 2. 修改总览（按主题）
 
@@ -435,6 +435,22 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > （`aa39d944`），无待推送提交，全部发布标签均指向 fork 提交 → 无需 merge /
 > push / release。fork `main` 领先最新 release 标签 `b24deaa9`（`v3.20.3`）
 > 17 个提交。
+>
+> 2026-09-21 同步（无 release）：合入上游 `fdbe3a85` 起的 5 提交——`33c80626` #7489 技能归档
+> 条目上限 10_000→30_000，并新增「文件至少计一个磁盘块」的字节预算（`skill.rs` 与
+> `webdav_sync/archive.rs` 两处上限对齐，否则技能装得上、同步却恢复不了）；`a659440b`
+> #7194 外部改动文件后刷新活跃 prompts；`f2d0b2a6` #7522 README 赞助 CTA 围绕 Kimi Code
+> 双区链接重排；`1408f382` #7526 新增 Kimi Global 预设变体（7 个 preset 文件）；
+> `fdbe3a85` #7515 OpenCode 从拉取模型列表搜索并批量添加。24 文件 +1153/-45；冲突 4 个
+> README 的 Kimi 赞助段落——取上游新文案（双区链接 + 首充福利），保留 fork 的本地横幅
+> 资源 `assets/partners/banners/*`（CNB CSP 只放行白名单域，外链图不显示）。
+> 分歧点核对：上游改动全部落在归档预算 / prompts 刷新 / 预设数据 / OpenCode 表单 / 测试 /
+> README，未触及第 4 节任何分歧实现（proxy 转换、分类器、atomic_write、wire_api、deeplink、
+> `hermes_config.rs` 排除表、NativeResponses 模板、lucide 图标）；第 3 节 fork 专属文件未被
+> 触碰。验证全绿：`cargo test --lib` 3016、`pnpm vitest run` 1140（140 文件）、
+> `cargo fmt --check` / `cargo clippy` / `pnpm typecheck`。上游最新 tag 仍为 `v3.20.3`
+> （无新版本），fork 版本号保持未 bump。merge 提交 `e56a239b` 已推送 `origin/main`
+> （本机克隆未配置 `cnb` 远端，见 6）。
 
 ## 6. 维护约定
 
