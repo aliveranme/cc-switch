@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | `37d04760`（2026-09-22，v3.20.3 之后 13 个提交，含 `8272707d` #6381 技能 skillId 与目录名不一致、`37d04760` #7550 WSL 侧 OMO 统一配置探测、`2c735bd9` 卡片陈旧用量档、`09498c30` 单色预设图标、`48e572cc`/`e06ff90f`/`d8e98be2`/`0859fa6a`/`4d2c6f07` 预设与定价刷新、`f6c99822` DeepSeek 1M 变体、`7f39d885` Linux 测试覆盖） |
-| 本地领先 | 412 提交（`git rev-list --count upstream/main..main`）= fork 全特性 + 历次上游 merge 同步 |
-| 本次 merge | 2026-09-22 `0b4621e8` 合入上游 `37d04760`（13 提交，53 文件 +1729/-213，**零冲突**自动合并，无需人工解冲突）；上一次 2026-09-21 见第 5 节 |
-| 本地版本 | `v3.20.3`（上游最新 tag 仍为 `v3.20.3`，未 bump；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 `Merge upstream/main (…, N commits) into fork`，最近一次 2026-09-22 |
-| 测试规模 | Rust 3030（`--lib` 全绿；Windows 本地需隔离 `HOME`，见 6.3）+ 前端 vitest 1164（141 文件全绿） |
+| 上游基线 | `f2537fdf`（2026-09-22，含 v3.20.4 发版在内共 25 个提交：`5a80e300` #7434 Codex live auth 无凭据时保留已存登录、`56df6513` #5404 Copilot Chat 剥离 `stop`、`a35e5000` #7454 `additional_tools` 载体抬升、`83a24dfb` #7476 `detail:original` 图片归一化、`c8e76bbc` #7378 工具描述缺失省略、`d6e05152` #7531 GPT-5.6/Astra 保留 `max`、`8e478b2b` #7369 grok-4.x 家族白名单、`f2537fdf` #7595 models 形状容错、`701c079b` #7348 WSL 探测忽略 shell 启动输出、`6f6087cd` #6348 skip_taskbar 重置、`c715ee2b` #7053 会话 URL 归因、`4837fe2c` #5211 切换 app 重置滚动、`09c5d39d` #7578 mcode 刷新、`06c03621` #6826 Pi logo、`4b1ec8b5` CI 前端稳定化、`f8821c03` About star 提示、`bbee784d` Soshow 预设、`54640b95` SudoCode 备用端点、`bccfaf37`/`de970c13` i18n、定价 `85caa69e`/`85894582`/`42200b42`） |
+| 本地领先 | 414 提交（`git rev-list --count upstream/main..main`）= fork 全特性 + 历次上游 merge 同步 |
+| 本次 merge | 2026-09-23 `476d3723` 合入上游 `f2537fdf`（25 提交，50 文件 +2906/-93，**5 处冲突**均已手工解：`ci.yml`/`vitest.config.ts` 取 fork 既有版本、`claude.rs` Copilot `stop` 剥离与 DeepSeek `tool_choice` 降级并存、`AboutSection.tsx` 取上游新布局配 fork 内联 SVG、`codexProviderPresets.ts` 保留 fork 的 `requires_openai_auth` 清理并采纳上游新端点）；上一次 2026-09-22 见第 5 节 |
+| 本地版本 | `v3.20.4`（随 merge 对齐上游版本号；上游已打 tag `v3.20.4`，fork 最新 release 仍为 `v3.20.3`，未发同名版本；fork 发布序列见第 5 节） |
+| 同步方式 | 定期 `Merge upstream/main (…, N commits) into fork`，最近一次 2026-09-23 |
+| 测试规模 | Rust 3050（`--lib` 全绿；Windows 本地需隔离 `HOME`，见 6.3）+ 前端 vitest 1173（141 文件；32 线程默认并发下两个长用例贴在超时边界，见 6.4） |
 
 ## 2. 修改总览（按主题）
 
@@ -472,6 +472,43 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > `pnpm format:check` / `pnpm build:renderer`。上游最新 tag 仍为 `v3.20.3`（无新版本），
 > fork 版本号保持未 bump。merge 提交 `0b4621e8` 已推送 `origin/main`
 > （本机克隆未配置 `cnb` 远端，见 6）。
+>
+> 2026-09-23 同步（无 release）：合入上游 `f2537fdf` 起的 25 提交（自 `37d04760` 之后），含
+> v3.20.4 发版（`84efe1fb` 四处版本号 + `43e1d990` 三语 release notes）与其余 23 个修复/特性：
+> proxy 协议层 `56df6513` #5404 Copilot Chat 端点剥离 `stop`（auto mode classifier 恢复可用）、
+> `a35e5000` #7454 `additional_tools` 载体抬升为工具、`83a24dfb` #7476 Codex `detail:original`
+> 图片归一化、`c8e76bbc` #7378 工具描述缺失时省略字段而非写 null、`d6e05152` #7531
+> GPT-5.6/GPT-6 Astra 保留 `max` 档、`8e478b2b` #7369 grok-4.x（x≥5）家族进入 reasoning 白名单；
+> Codex `5a80e300` #7434 live auth 无凭据时保留 DB 中的登录态；其余为 `f2537fdf` #7595 models
+> 响应形状容错、`701c079b` #7348 WSL 探测工具版本时忽略 shell 启动输出、`6f6087cd` #6348 各入口
+> `window.show()` 前重置 skip_taskbar、`c715ee2b` #7053 隐藏会话 URL 归因、`4837fe2c` #5211
+> 切 app 时重置供应商滚动、`09c5d39d` #7578 mcode 移除后刷新供应商状态、`06c03621` #6826
+> Pi 供应商 logo、`4b1ec8b5` 前端测试稳定化 + renderer 构建校验、`f8821c03` About 卡片 GitHub
+> star 提示、`bbee784d` Soshow 聚合商预设、`54640b95` SudoCode.chat 备用端点、`bccfaf37`/
+> `de970c13` i18n 修正、定价批次 `85caa69e`/`85894582`/`42200b42`。50 文件 +2906/-93。
+> 冲突 5 处（上游 4 个提交与 fork 本地改动相交，全部手工解）：`ci.yml` 与 `vitest.config.ts`
+> ——#4b1ec8b5 新增的 renderer 构建步骤 / vitest include 与 fork 既有版本重复，取 fork 版，
+> 两文件最终与 merge 前**逐字节一致**（净零改动）；`src/proxy/providers/claude.rs`——#5404 的
+> Copilot `stop` 剥离与 fork 的 DeepSeek `tool_choice` 降级插在同一位置，**两侧都保留**；
+> `AboutSection.tsx`——#f8821c03 重排 GitHub 按钮并新增 star 提示，取上游新布局，并按 4.16
+> 把上游的 lucide `Github` 图标换回 fork 的**内联 SVG**；`codexProviderPresets.ts`——SudoCode
+> 预设保留 fork 已移除 `requires_openai_auth` 的清理，同时采纳上游新增的 `api.sudorelay.com`
+> 备用端点。
+> 分歧点核对：4.1–4.16 逐条复核全部保留——4.16 因上游新增 lucide `Github` 使用而再次套用内联
+> SVG（见上）；4.9（Claude upsert）、4.10（`takeover_active` 策略矩阵）、4.13/4.14（NativeResponses
+> 模板、`ultra` 钳制）的对应实现与钉桩测试均未被上游触及；上游对 `transform.rs` 的推理档位改动
+> 落在 `resolve_reasoning_effort`（Claude→OpenAI 方向），与 fork 的 `map_reasoning_effort`（Codex
+> 方向）钳制不冲突。第 3 节 fork 专属文件（`classifier.rs`、`codex_chat_history.rs`、两个
+> `*Impl.tsx`、`gpt5_6_sol_template.json`、`tests/vitest-jest-dom.d.ts` 等）未被触碰。
+> 附带修正：`src-tauri/Cargo.lock` 与 `Cargo.toml` 长期不一致——`cfg(windows-aarch64)` 的
+> `rquickjs 0.12`（`bindgen`）分支没落到锁文件里，此前每次本地 `cargo` 调用都会重写它（工作区
+> 从 2026-09-18 起一直挂着这份未提交改动）。本次 `cargo test` 重新解析后已并入 merge 提交
+> `476d3723`（convert_case 0.12→0.11；新增 rquickjs/-core/-sys/-macro 0.12.2）。
+> 验证：`cargo test --lib` 3050、`cargo fmt --check`、`cargo clippy --all-targets -D warnings`
+> 全绿；前端 `pnpm vitest run --maxWorkers=8` 141 文件 1173 用例全绿（32 线程默认并发下两个长
+> 用例贴在超时边界，见 6.4）、`pnpm typecheck` / `pnpm format:check` / `pnpm build:renderer` 全绿。
+> 上游最新 tag 已为 `v3.20.4`，fork 版本号随 merge 对齐 `3.20.4`（未发同名 release）。merge 提交
+> `476d3723` 已推送 `origin/main`（本机克隆未配置 `cnb` 远端，见 6）。
 
 ## 6. 维护约定
 
@@ -498,6 +535,10 @@ fork 与上游**共用 tag 名**（`v3.20.x`），两边指向不同提交。因
   ```bash
   git config remote.upstream.tagOpt --no-tags
   ```
+
+  - 2026-09-23 同步时一次 `git fetch upstream --tags` 绕过了该配置（命令行 `--tags` 会
+    **覆盖** `remote.upstream.tagOpt`），把上游新标签 `v3.20.4`（指向上游提交）拉进了本地；
+    已用 `git tag -d v3.20.4` 删除且未推送。日常同步 fetch 务必显式带 `--no-tags`。
 
 - 发布前必须核对 tag 指向并显式重建（轻量标签，与 `v3.20.0`–`v3.20.2` 一致）：
 
@@ -573,3 +614,28 @@ endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 for
   （`includeCommonModels: true`）重建。`cc-switch.db` 未被测试改写，但 `settings.json`
   已被覆盖且**无备份可还原**（见上），需在应用设置页人工核对托盘／代理／会话自动同步／
   skill 存储位置等开关。
+
+### 6.4 前端全量测试在 32 线程机器上的超时边界（2026-09-23 同步时发现）
+
+本机（i9-13900HX，32 逻辑核）跑 `pnpm vitest run` 默认并发（`maxWorkers = cpus-1 = 31`）时，
+全档会稳定产出 1 个失败，且每次失败的长用例不同：
+
+- `tests/components/ProviderForm.codexManagedAccount.test.tsx`「requires confirmation before
+  falling back when a selected account disappears」——默认预算 5s，并发下实测 **5.14s**
+  （单文件跑 1.3s）；
+- `tests/integration/App.test.tsx`「covers basic provider flows via real hooks」——自带 10s 预算，
+  单独跑已需 8.3s，并发下被顶穿。
+
+根因是环境开销量级：141 个测试文件各建一次 jsdom（累计 ≈512s，占 whole-run tracked time 47%），
+31 个 worker 争抢 CPU 时长用例被拖慢约 4 倍。**不是代码回归**——`--testTimeout=30000` 的全量跑
+141 文件全绿，单文件跑也全绿。
+
+规避（已验证，且总耗时基本不变，≈73s）：
+
+```bash
+pnpm vitest run --maxWorkers=8
+```
+
+建议（未擅自实施，会连带改变 CI 行为，需人工定夺）：在 `vitest.config.ts` 固定 `maxWorkers`，
+或给这两个长用例留出显式预算，否则每次全档跑都可能随机红一个。v3.20.3 之前本地也出现过同类
+边界失败。
