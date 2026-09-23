@@ -1654,6 +1654,14 @@ fn codex_catalog_model_entry(
         entry_obj.insert("use_responses_lite".to_string(), json!(false));
     }
 
+    if profile == CodexCatalogToolProfile::ProxyChat {
+        // Codex's `original` image detail (full-resolution) is rejected by
+        // strict Chat gateways with `400 invalid_request_error`, param
+        // `messages.N.content`. Never advertise the capability on the
+        // ProxyChat contract so Codex keeps to auto/high.
+        entry_obj.insert("supports_image_detail_original".to_string(), json!(false));
+    }
+
     // Per-model reasoning levels override the template's conservative
     // none/high default (e.g. a LiteLLM gateway serving a model that accepts
     // low/medium/high/xhigh/max). Applies to every profile.
