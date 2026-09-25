@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | `f2537fdf`（2026-09-22，含 v3.20.4 发版在内共 25 个提交：`5a80e300` #7434 Codex live auth 无凭据时保留已存登录、`56df6513` #5404 Copilot Chat 剥离 `stop`、`a35e5000` #7454 `additional_tools` 载体抬升、`83a24dfb` #7476 `detail:original` 图片归一化、`c8e76bbc` #7378 工具描述缺失省略、`d6e05152` #7531 GPT-5.6/Astra 保留 `max`、`8e478b2b` #7369 grok-4.x 家族白名单、`f2537fdf` #7595 models 形状容错、`701c079b` #7348 WSL 探测忽略 shell 启动输出、`6f6087cd` #6348 skip_taskbar 重置、`c715ee2b` #7053 会话 URL 归因、`4837fe2c` #5211 切换 app 重置滚动、`09c5d39d` #7578 mcode 刷新、`06c03621` #6826 Pi logo、`4b1ec8b5` CI 前端稳定化、`f8821c03` About star 提示、`bbee784d` Soshow 预设、`54640b95` SudoCode 备用端点、`bccfaf37`/`de970c13` i18n、定价 `85caa69e`/`85894582`/`42200b42`） |
-| 本地领先 | 414 提交（`git rev-list --count upstream/main..main`）= fork 全特性 + 历次上游 merge 同步 |
-| 本次 merge | 2026-09-23 `476d3723` 合入上游 `f2537fdf`（25 提交，50 文件 +2906/-93，**5 处冲突**均已手工解：`ci.yml`/`vitest.config.ts` 取 fork 既有版本、`claude.rs` Copilot `stop` 剥离与 DeepSeek `tool_choice` 降级并存、`AboutSection.tsx` 取上游新布局配 fork 内联 SVG、`codexProviderPresets.ts` 保留 fork 的 `requires_openai_auth` 清理并采纳上游新端点）；上一次 2026-09-22 见第 5 节 |
+| 上游基线 | `a06a41ec`（2026-09-24，共 4 个提交：`da193d4f` #7621 预设供应商模型与标准定价刷新 + 已下线模型条目清理、`f8788719` #6632 Sub2API 品牌图标、`3ed58925` 应用切换器非激活彩色图标去色、`a06a41ec` FluxA 付费 API 计数改 13,000+）；上一个基线 `f2537fdf`（2026-09-22，含 v3.20.4 发版在内共 25 个提交：`5a80e300` #7434 Codex live auth 无凭据时保留已存登录、`56df6513` #5404 Copilot Chat 剥离 `stop`、`a35e5000` #7454 `additional_tools` 载体抬升、`83a24dfb` #7476 `detail:original` 图片归一化、`c8e76bbc` #7378 工具描述缺失省略、`d6e05152` #7531 GPT-5.6/Astra 保留 `max`、`8e478b2b` #7369 grok-4.x 家族白名单、`f2537fdf` #7595 models 形状容错、`701c079b` #7348 WSL 探测忽略 shell 启动输出、`6f6087cd` #6348 skip_taskbar 重置、`c715ee2b` #7053 会话 URL 归因、`4837fe2c` #5211 切换 app 重置滚动、`09c5d39d` #7578 mcode 刷新、`06c03621` #6826 Pi logo、`4b1ec8b5` CI 前端稳定化、`f8821c03` About star 提示、`bbee784d` Soshow 预设、`54640b95` SudoCode 备用端点、`bccfaf37`/`de970c13` i18n、定价 `85caa69e`/`85894582`/`42200b42`） |
+| 本地领先 | 417 提交（`git rev-list --count upstream/main..main`）= fork 全特性 + 历次上游 merge 同步 |
+| 本次 merge | 2026-09-25 `447750a7` 合入上游 `a06a41ec`（4 提交，28 文件 +1735/-199，**零冲突**全自动合并，未手工介入）；上一次 2026-09-23 `476d3723`（25 提交，5 处冲突手工解）见第 5 节 |
 | 本地版本 | `v3.20.4`（随 merge 对齐上游版本号；上游已打 tag `v3.20.4`，fork 最新 release 仍为 `v3.20.3`，未发同名版本；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 `Merge upstream/main (…, N commits) into fork`，最近一次 2026-09-23 |
-| 测试规模 | Rust 3050（`--lib` 全绿；Windows 本地需隔离 `HOME`，见 6.3）+ 前端 vitest 1173（141 文件；32 线程默认并发下两个长用例贴在超时边界，见 6.4） |
+| 同步方式 | 定期 `Merge upstream/main (…, N commits) into fork`，最近一次 2026-09-25 |
+| 测试规模 | Rust 3051（`--lib` 全绿；Windows 本地需隔离 `HOME`，见 6.3）+ 前端 vitest 1173（141 文件；32 线程默认并发下两个长用例贴在超时边界，见 6.4） |
 
 ## 2. 修改总览（按主题）
 
@@ -509,6 +509,34 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 用例贴在超时边界，见 6.4）、`pnpm typecheck` / `pnpm format:check` / `pnpm build:renderer` 全绿。
 > 上游最新 tag 已为 `v3.20.4`，fork 版本号随 merge 对齐 `3.20.4`（未发同名 release）。merge 提交
 > `476d3723` 已推送 `origin/main`（本机克隆未配置 `cnb` 远端，见 6）。
+
+> 2026-09-25 同步（无 release）：合入上游 `f2537fdf` 起的 4 提交（自 2026-09-23 同步之后）——
+> `da193d4f` #7621 预设与定价批次：Pi 目录/预设新增 Step 5 Preview、Step 3.7 Flash、Claude Opus 5.5、
+> Claude Fable 5.1、GPT-6（Sol/Luna/Astra）、Gemini 3.8 Flash、MiMo V2.6（Pro/Flash/Pro UltraSpeed）、
+> DeepSeek V4.1 Flash，`piThinkingProfiles` 新增 `openaiResponsesGpt6Astra` 档位映射（off/minimal → null）
+> 与 Opus 5.5 / Fable 5.1 的 `forceAdaptiveThinking` 绑定；小米 MiMo 的 Codex 目录改官方四档
+> （none/low/medium/high，默认 low，此前 none/high 两档）并补回官方系统提示词
+> `MIMO_CODEX_BASE_INSTRUCTIONS`；Codex / Hermes / OpenClaw / OpenCode / Claude Desktop 预设同步刷新；
+> `schema.rs` 定价新增 `step-5-preview`，修正 `o3-mini`（0.55/2.20 → 1.10/4.40）与 `mimo-v2.5`
+> （输出 0.29 → 0.28），新增 MiMo 2.6 三档，并加只在「仍匹配旧内置值」时才覆盖的 `UPDATE` 白名单
+> （自定义价不动；`database/tests.rs` 补幂等 + 保自定义价用例）。其余三个：`f8788719` #6632 Sub2API
+> 品牌图标入库（大 SVG 走 `?url` 以 `<img>` 渲染）、`3ed58925` 应用切换器非激活态彩色品牌图标改
+> `grayscale + opacity-60`、悬停/选中恢复（单色 Codex / Grok Build / Pi 已随 `currentColor` 变暗，
+> 列入 `CURRENT_COLOR_APPS` 白名单不重复处理）、`a06a41ec` FluxA 付费 API 计数改 13,000+
+> （四语 README + 四语 i18n）。28 文件 +1735/-199，**零冲突**全自动合并（与 2026-09-22 同为全自动，
+> 上一轮 2026-09-23 为 5 处冲突）。
+> 分歧点核对：本次上游改动全部落在预设数据 / 图标资产 / 应用切换器样式 / 定价种子 / i18n，**未触及**
+> 第 4 节任何分歧实现（proxy 转换、分类器、`atomic_write`、wire_api 迁移、deeplink、`session_usage`、
+> 接管判定、NativeResponses 模板、`hermes_config.rs` 排除表、lucide 内联 SVG），第 3 节 fork 专属文件
+> 未被触碰。逐文件复核 fork 侧不变式：`codexProviderPresets.ts` 的 `generateThirdPartyConfig`
+> （含 fork 的 `requiresOpenAiAuth` 选项与 keyless 安全闸注释）未被上游 MiMo 目录/模型名改动覆盖；
+> `piThinkingProfiles.ts` / `piModelCatalog.ts` 本就源自上游 #6064，fork 无自有改动，不存在覆盖风险。
+> 验证全绿：`cargo test --lib` 3051（`HOME` 隔离，见 6.3）、`cargo fmt --check`、
+> `cargo clippy --all-targets -D warnings`；前端 `pnpm vitest run --maxWorkers=8` 141 文件 1173 用例、
+> `pnpm typecheck` / `pnpm format:check` / `pnpm build:renderer`。上游最新 tag 仍为 `v3.20.4`
+> （无新版本），fork 版本号保持 `3.20.4` 未 bump；本地 `v3.20.4` 标签经复核仍指向 fork 提交
+> `004e2dc1`（非上游提交，符合 6.1）。merge 提交 `447750a7` 已推送 `origin/main`
+> （本机克隆未配置 `cnb` 远端，见 6）。
 
 ## 6. 维护约定
 
