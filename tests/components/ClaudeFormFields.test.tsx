@@ -100,6 +100,16 @@ const renderCopilotForm = (overrides: Partial<ClaudeFormFieldsProps> = {}) => {
     onLocalProxyHeadersOverrideChange: vi.fn(),
     localProxyBodyOverride: "",
     onLocalProxyBodyOverrideChange: vi.fn(),
+    sessionAffinityHeader: "",
+    onSessionAffinityHeaderChange: vi.fn(),
+    promptCacheRouting: "auto",
+    onPromptCacheRoutingChange: vi.fn(),
+    preserveCacheControl: false,
+    onPreserveCacheControlChange: vi.fn(),
+    midConversationSystemPolicy: "rewrite_user",
+    onMidConversationSystemPolicyChange: vi.fn(),
+    classifierSeverityBlockValue: "",
+    onClassifierSeverityBlockValueChange: vi.fn(),
     ...overrides,
   };
 
@@ -194,5 +204,35 @@ describe("ClaudeFormFields", () => {
       "CLAUDE_CODE_SUBAGENT_MODEL",
       "shared-model[1M]",
     );
+  });
+
+  // ── fork：缓存链路开关（meta 回填 + 高级配置自动展开）──
+
+  it("配置会话亲和 Header 时自动展开高级配置并回填其值", () => {
+    renderCopilotForm({ sessionAffinityHeader: "x-session-affinity" });
+
+    expect(screen.getByLabelText("会话亲和 Header")).toHaveValue(
+      "x-session-affinity",
+    );
+  });
+
+  it("保留 cache_control 断点开关随 meta 回填勾选状态", () => {
+    renderCopilotForm({ preserveCacheControl: true });
+
+    expect(
+      screen.getByRole("checkbox", { name: "保留 cache_control 断点" }),
+    ).toBeChecked();
+  });
+
+  it("中途 system 策略为 preserve 时回填对应选项", () => {
+    renderCopilotForm({ midConversationSystemPolicy: "preserve" });
+
+    expect(screen.getByText("保留 system 角色")).toBeInTheDocument();
+  });
+
+  it("分类器 severity 拦截值随 meta 回填", () => {
+    renderCopilotForm({ classifierSeverityBlockValue: "100" });
+
+    expect(screen.getByLabelText("分类器 severity 拦截值")).toHaveValue("100");
   });
 });

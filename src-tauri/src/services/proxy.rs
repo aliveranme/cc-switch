@@ -3133,6 +3133,8 @@ impl ProxyService {
                 let profile = crate::proxy::providers::resolve_codex_catalog_tool_profile(
                     &effective_provider,
                 );
+                let responses_template =
+                    crate::proxy::providers::resolve_codex_responses_template(&effective_provider);
 
                 if let (Some(account_id), Some(guard)) = (
                     outgoing_managed_codex_account_id.as_deref(),
@@ -3149,6 +3151,7 @@ impl ProxyService {
                     auth,
                     config_str,
                     profile,
+                    responses_template,
                 )
                 .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
                 if let Some(account_id) = target_managed_codex_account_id.as_deref() {
@@ -3623,6 +3626,8 @@ impl ProxyService {
             .ok_or_else(|| "Codex 配置缺少 auth 字段".to_string())?;
         let config_str = config.get("config").and_then(|v| v.as_str());
         let profile = crate::proxy::providers::resolve_codex_catalog_tool_profile(provider);
+        let responses_template =
+            crate::proxy::providers::resolve_codex_responses_template(provider);
 
         crate::codex_config::write_codex_provider_live_with_catalog(
             config,
@@ -3630,6 +3635,7 @@ impl ProxyService {
             auth,
             config_str,
             profile,
+            responses_template,
         )
         .map_err(|e| format!("写入 Codex 配置失败: {e}"))
     }
@@ -3710,9 +3716,15 @@ impl ProxyService {
             let profile = provider
                 .map(crate::proxy::providers::resolve_codex_catalog_tool_profile)
                 .unwrap_or(crate::codex_config::CodexCatalogToolProfile::ProxyChat);
+            let responses_template = provider
+                .map(crate::proxy::providers::resolve_codex_responses_template)
+                .unwrap_or_default();
             let prepared_config =
                 crate::codex_config::prepare_codex_live_config_text_with_optional_catalog(
-                    config, config_str, profile,
+                    config,
+                    config_str,
+                    profile,
+                    responses_template,
                 )
                 .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
             if managed_official {
@@ -3838,6 +3850,8 @@ impl ProxyService {
                     config,
                     cfg,
                     crate::codex_config::CodexCatalogToolProfile::ProxyChat,
+                    // 无 Provider 在手（逐字恢复备份）：模板偏好不可得，用默认 Full。
+                    crate::codex_config::CodexResponsesTemplate::default(),
                 )
             })
             .transpose()

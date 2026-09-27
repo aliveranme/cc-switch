@@ -227,9 +227,43 @@ pub fn resolve_reasoning_effort(body: &Value) -> Option<&'static str> {
 ///
 /// 转换工具库 API：当前无生产调用方（连通性检查不再发真实请求，曾是其唯一 crate 内
 /// 消费者），但保留其转换逻辑与下方测试套件，供代理转换路径复用 / 未来接线。
+/// mid-conversation `system` 消息的处理策略（Claude → OpenAI Chat）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MidConversationSystemPolicy {
+    /// 默认：重写为 `role=user`。第三方 OpenAI 兼容网关（OpenCode、DeepSeek、
+    /// Kimi 等）常把 system 提升回前缀，保持 system 角色会让每轮新增的
+    /// reminder 重写整段前缀、逐出全部缓存 token。
+    #[default]
+    RewriteUser,
+    /// 原位保留 `role=system`（上游 #6941 语义）。当上游不会提升 system
+    /// （原生网关 / 严格按序拼接的后端）时选此项，保留 system 特权语义。
+    Preserve,
+}
+
+impl MidConversationSystemPolicy {
+    /// 从 provider meta 值解析；未知或缺省 → 默认策略。
+    pub fn from_meta_value(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some("preserve") => Self::Preserve,
+            _ => Self::RewriteUser,
+        }
+    }
+}
+
+/// Claude → OpenAI Chat 转换选项。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OpenAiChatOptions {
+    /// 保留 DeepSeek/MiMo 的 `reasoning_content` 兼容字段。
+    pub preserve_reasoning_content: bool,
+    /// 保留 Anthropic `cache_control` 断点（仅网关层实现缓存的上游）。
+    pub preserve_cache_control: bool,
+    /// mid-conversation system 消息处理策略。
+    pub mid_system_policy: MidConversationSystemPolicy,
+}
+
 #[allow(dead_code)]
 pub fn anthropic_to_openai(body: Value) -> Result<Value, ProxyError> {
-    anthropic_to_openai_with_reasoning_content(body, false, false)
+    anthropic_to_openai_with_options(body, OpenAiChatOptions::default())
 }
 
 /// Anthropic 请求 → OpenAI Chat Completions 请求
@@ -242,11 +276,38 @@ pub fn anthropic_to_openai(body: Value) -> Result<Value, ProxyError> {
 /// （目前只有 opencode zen/go）：保留 Anthropic 请求中的 cache_control 断点
 /// （system/messages/tools），并把 5m TTL 提升到网关认可的上限 1h。
 /// 其它上游保持剥离，避免严格后端 400 拒收未知字段（见 gh#3805）。
+/// 兼容入口：三参数版本，等价于 [`OpenAiChatOptions`] 使用默认
+/// `mid_system_policy`。生产路径走 [`anthropic_to_openai_with_options`]；
+/// 本函数保留供测试与未来接线。
+#[allow(dead_code)]
 pub fn anthropic_to_openai_with_reasoning_content(
     body: Value,
     preserve_reasoning_content: bool,
     preserve_cache_control: bool,
 ) -> Result<Value, ProxyError> {
+    anthropic_to_openai_with_options(
+        body,
+        OpenAiChatOptions {
+            preserve_reasoning_content,
+            preserve_cache_control,
+            mid_system_policy: MidConversationSystemPolicy::default(),
+        },
+    )
+}
+
+/// Anthropic 请求 → OpenAI Chat Completions 请求（完整选项版）。
+///
+/// `anthropic_to_openai_with_reasoning_content` 是它的二参数兼容入口；新增
+/// 选项一律加在 [`OpenAiChatOptions`]，避免每加一项都改动全部调用点。
+pub fn anthropic_to_openai_with_options(
+    body: Value,
+    options: OpenAiChatOptions,
+) -> Result<Value, ProxyError> {
+    let OpenAiChatOptions {
+        preserve_reasoning_content,
+        preserve_cache_control,
+        mid_system_policy,
+    } = options;
     let mut result = json!({});
 
     // NOTE: 模型映射由上游统一处理（proxy::model_mapper），格式转换层只做结构转换。
@@ -304,7 +365,7 @@ pub fn anthropic_to_openai_with_reasoning_content(
         }
     }
 
-    normalize_openai_system_messages(&mut messages);
+    normalize_openai_system_messages(&mut messages, mid_system_policy);
     // 网关层缓存上游：合并后的首条 system 消息挂断点（合并前挂会被
     // normalize_openai_system_messages 丢弃）。
     if preserve_cache_control {
@@ -507,7 +568,10 @@ pub(crate) fn downgrade_forced_tool_choice_to_auto(result: &mut Value) {
 /// mid-conversation reminder would rewrite the entire system prefix and
 /// evict every cached token beyond it. Rewriting them to user keeps the
 /// prefix stable while preserving the reminder content in the conversation tail.
-fn normalize_openai_system_messages(messages: &mut Vec<Value>) {
+fn normalize_openai_system_messages(
+    messages: &mut Vec<Value>,
+    policy: MidConversationSystemPolicy,
+) {
     let leading_system_end = messages
         .iter()
         .take_while(|message| {
@@ -545,6 +609,12 @@ fn normalize_openai_system_messages(messages: &mut Vec<Value>) {
     // system reminder 时（review #4），若 early-return 跳过此处，reminder 会
     // 保持 role=system，upstream 每轮把它提升到前缀导致缓存逐出。旧实现正是
     // 在这里提前返回，构成回归。注意只重写 index>=1，不移动消息顺序。
+    // `Preserve` 策略到此为止：原位保留 `role=system`（上游 #6941 语义）。
+    // 仅前导 system 合并仍执行——那是上游自身的行为，与角色重写无关。
+    if policy == MidConversationSystemPolicy::Preserve {
+        return;
+    }
+
     for msg in messages.iter_mut().skip(1) {
         if msg.get("role").and_then(|value| value.as_str()) == Some("system") {
             msg["role"] = json!("user");

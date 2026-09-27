@@ -120,6 +120,14 @@ pub fn should_send_codex_chat_prompt_cache_key(provider: &Provider) -> bool {
         return false;
     };
 
+    chat_upstream_accepts_prompt_cache_key(&url)
+}
+
+/// 已知接受 `prompt_cache_key` 的 Chat Completions 上游 host 判定。
+///
+/// Codex（Responses→Chat）与 Claude Code（Anthropic→Chat）两条转换路径共用：
+/// 未知 OpenAI 兼容网关默认返回 false，因为其中很多对未支持的请求字段直接 HTTP 400。
+pub(crate) fn chat_upstream_accepts_prompt_cache_key(url: &url::Url) -> bool {
     match url.host_str() {
         Some("api.openai.com") => true,
         Some("api.kimi.com") => {
@@ -443,6 +451,23 @@ pub fn resolve_codex_catalog_tool_profile(
                 .and_then(|v| v.as_str())
         });
     CodexCatalogToolProfile::from_api_format(api_format)
+}
+
+/// Resolve the bundled NativeResponses catalog template for a provider.
+///
+/// `Full`（gpt-5.6-sol，fork 默认）保留 freeform `apply_patch` / `web_search` /
+/// 6 档 reasoning；`Neutral` 换上上游中性模板，供拒绝 `type=="custom"` 工具的
+/// 网关（MiMo / LongCat 等）使用。仅影响 NativeResponses / Anthropic profile
+/// 生成的目录；ProxyChat 走独立模板路径，不受本开关影响。
+pub fn resolve_codex_responses_template(
+    provider: &Provider,
+) -> crate::codex_config::CodexResponsesTemplate {
+    crate::codex_config::CodexResponsesTemplate::from_meta_value(
+        provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.codex_native_responses_template.as_deref()),
+    )
 }
 
 /// Extract the real upstream model configured for a Codex provider.

@@ -24,6 +24,7 @@ import type {
   ClaudeApiKeyField,
   CodexApiFormat,
   CodexChatReasoning,
+  CodexNativeResponsesTemplate,
   PromptCacheRoutingMode,
   ProviderCategory,
   ProviderMeta,
@@ -131,6 +132,13 @@ export function GrokBuildProviderForm({
   const [promptCacheRouting, setPromptCacheRouting] =
     useState<PromptCacheRoutingMode>(
       initialData?.meta?.promptCacheRouting ?? "auto",
+    );
+  const [sessionAffinityHeader, setSessionAffinityHeader] = useState(
+    initialData?.meta?.sessionAffinityHeader ?? "",
+  );
+  const [codexNativeResponsesTemplate, setCodexNativeResponsesTemplate] =
+    useState<CodexNativeResponsesTemplate>(
+      initialData?.meta?.codexNativeResponsesTemplate ?? "full",
     );
   const [isFullUrl, setIsFullUrl] = useState(
     initialData?.meta?.isFullUrl ?? false,
@@ -486,6 +494,12 @@ export function GrokBuildProviderForm({
               onCodexChatReasoningChange={setCodexChatReasoning}
               promptCacheRouting={promptCacheRouting}
               onPromptCacheRoutingChange={setPromptCacheRouting}
+              sessionAffinityHeader={sessionAffinityHeader}
+              onSessionAffinityHeaderChange={setSessionAffinityHeader}
+              codexNativeResponsesTemplate={codexNativeResponsesTemplate}
+              onCodexNativeResponsesTemplateChange={
+                setCodexNativeResponsesTemplate
+              }
               speedTestEndpoints={speedTestEndpoints}
               customUserAgent={customUserAgent}
               onCustomUserAgentChange={setCustomUserAgent}

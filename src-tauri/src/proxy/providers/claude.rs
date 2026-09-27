@@ -446,6 +446,51 @@ pub(crate) fn is_opencode_go_gateway(provider: &Provider) -> bool {
         .any(|url| url.contains("opencode.ai") && url.contains("/zen/"))
 }
 
+/// Claude → OpenAI Chat 路径是否允许注入**会话级** `prompt_cache_key`。
+///
+/// 与 Codex 的 `should_send_codex_chat_prompt_cache_key` 共用
+/// `promptCacheRouting` 三态语义与宿主白名单，差异只在 base_url 的提取
+/// 位置：Claude 供应商把端点放在 `env.ANTHROPIC_BASE_URL`（Codex 走顶层
+/// `base_url` / config.toml）。
+///
+/// - `"enabled"`：无论宿主，一律注入（用户已知上游接受该字段）。
+/// - `"disabled"`：不注入。
+/// - `"auto"`（默认）：仅对已知接受 `prompt_cache_key` 的宿主注入。
+///   未知 OpenAI 兼容网关默认不注入——很多严格后端对未知字段直接 400。
+///
+/// 注入的值必须是**客户端提供的会话 ID**（见调用处），代理自行生成的 UUID
+/// 每请求不同，会把同一会话打散到不同缓存桶。
+pub(crate) fn should_send_claude_chat_prompt_cache_key(provider: &Provider) -> bool {
+    match provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.prompt_cache_routing.as_deref())
+        .unwrap_or("auto")
+    {
+        "enabled" => return true,
+        "disabled" => return false,
+        _ => {}
+    }
+
+    let settings = &provider.settings_config;
+    let Some(base_url) = settings
+        .get("env")
+        .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
+        .and_then(|v| v.as_str())
+        .or_else(|| settings.get("base_url").and_then(|v| v.as_str()))
+        .or_else(|| settings.get("baseURL").and_then(|v| v.as_str()))
+        .or_else(|| settings.get("apiEndpoint").and_then(|v| v.as_str()))
+    else {
+        return false;
+    };
+
+    let Ok(url) = url::Url::parse(base_url) else {
+        return false;
+    };
+
+    super::codex::chat_upstream_accepts_prompt_cache_key(&url)
+}
+
 pub fn transform_claude_request_for_api_format(
     body: serde_json::Value,
     provider: &Provider,
@@ -547,9 +592,26 @@ pub fn transform_claude_request_for_api_format(
             let preserve_reasoning_content =
                 should_preserve_reasoning_content_for_openai_chat(provider, &body);
             // opencode zen/go 网关层缓存特化：保留 Claude Code 的 cache_control
-            // 断点，并注入会话级 prompt_cache_key + 24h retention。仅该网关适用，
-            // 其它 OpenAI 兼容上游继续剥离断点（严格后端会 400 拒收未知字段）。
+            // 断点，并注入会话级 prompt_cache_key + 24h retention。仅该网关适用；
+            // 其它在网关层实现断点缓存的 OpenAI 兼容上游由用户在 provider meta
+            // 显式开启 `preserveCacheControl`。两者之外保持剥离断点（严格后端会
+            // 400 拒收未知字段）。
             let opencode_go = is_opencode_go_gateway(provider);
+            let preserve_cache_control = opencode_go
+                || provider
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.preserve_cache_control)
+                    .unwrap_or(false);
+            // mid-conversation system 消息策略：默认重写为 user（第三方网关会把
+            // system 提升回前缀、逐出缓存）；上游不会提升 system 时可由用户切到
+            // `preserve` 保留 system 特权语义。
+            let mid_system_policy = super::transform::MidConversationSystemPolicy::from_meta_value(
+                provider
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.mid_conversation_system_policy.as_deref()),
+            );
             // DeepSeek reasoner 兼容：V4/reasoner 系列默认常开 thinking，仅接受
             // tool_choice "auto"/"none"；V3.x 显式开启 thinking 时同样受限。
             // Claude Code 的 WebSearch 等内置工具会强制具名 tool_choice，转换后为
@@ -559,28 +621,36 @@ pub fn transform_claude_request_for_api_format(
             // 保留模型自主调用工具的能力（与 LiteLLM 同款策略，BerriAI/litellm#27628）。
             // 检测须在 body move 进转换之前，基于原始 Anthropic 请求体。
             let downgrade_tool_choice = is_deepseek_reasoner_request(provider, &body);
-            let mut result = super::transform::anthropic_to_openai_with_reasoning_content(
+            let mut result = super::transform::anthropic_to_openai_with_options(
                 body,
-                preserve_reasoning_content,
-                opencode_go,
+                super::transform::OpenAiChatOptions {
+                    preserve_reasoning_content,
+                    preserve_cache_control,
+                    mid_system_policy,
+                },
             )?;
-            // Inject prompt_cache_key only if explicitly configured in meta
-            if let Some(key) = provider
+            // prompt_cache_key：meta 显式值优先；否则在路由策略允许时使用客户端
+            // 提供的会话 ID。会话级 key 让同一会话固定命中同一缓存桶，而不同会话
+            // 互不驱逐（修 gh#3193 的另一面：既不能全共享、也不能全不注入）。
+            let explicit_prompt_cache_key = provider
                 .meta
                 .as_ref()
-                .and_then(|m| m.prompt_cache_key.as_deref())
-            {
+                .and_then(|m| m.prompt_cache_key.as_deref());
+            if let Some(key) = explicit_prompt_cache_key {
                 result["prompt_cache_key"] = serde_json::json!(key);
-            }
-            // opencode-go：会话级缓存 key（显式 meta key > 客户端会话 ID，截 64
-            // 字符）+ 缓存保留时长（默认 24h，网关 schema 枚举 in_memory|24h）。
-            if opencode_go {
-                if result.get("prompt_cache_key").is_none() {
-                    if let Some(key) = cache_key {
-                        let key: String = key.chars().take(64).collect();
-                        result["prompt_cache_key"] = serde_json::json!(key);
-                    }
+            } else if opencode_go || should_send_claude_chat_prompt_cache_key(provider) {
+                if let Some(key) = cache_key {
+                    // opencode-go 的网关 schema 限长 64；其它上游原样发。
+                    let key: String = if opencode_go {
+                        key.chars().take(64).collect()
+                    } else {
+                        key.to_string()
+                    };
+                    result["prompt_cache_key"] = serde_json::json!(key);
                 }
+            }
+            // opencode-go：缓存保留时长（默认 24h，网关 schema 枚举 in_memory|24h）。
+            if opencode_go {
                 let retention = provider
                     .meta
                     .as_ref()
@@ -2243,6 +2313,239 @@ mod tests {
         assert!(transformed.get("prompt_cache_key").is_none());
         assert!(transformed.get("prompt_cache_retention").is_none());
         assert!(transformed["messages"][0].get("cache_control").is_none());
+    }
+
+    // ── promptCacheRouting：Claude → Chat 会话级 prompt_cache_key ──
+
+    fn chat_request() -> serde_json::Value {
+        json!({
+            "model": "some-model",
+            "system": "sys",
+            "messages": [{ "role": "user", "content": "hi" }],
+            "max_tokens": 128
+        })
+    }
+
+    /// auto（默认）：白名单宿主（api.openai.com）注入客户端会话 key。
+    #[test]
+    fn test_claude_chat_prompt_cache_routing_auto_injects_on_allowlisted_host() {
+        let provider = create_provider_with_meta(
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://api.openai.com/v1" } }),
+            ProviderMeta::default(),
+        );
+        let transformed = transform_claude_request_for_api_format(
+            chat_request(),
+            &provider,
+            "openai_chat",
+            Some("session-abc"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(transformed["prompt_cache_key"], "session-abc");
+    }
+
+    /// auto（默认）：未知宿主不注入——很多严格网关对未知字段直接 400。
+    #[test]
+    fn test_claude_chat_prompt_cache_routing_auto_skips_unknown_host() {
+        let provider = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://unknown-gateway.example.com/v1" }
+        }));
+        let transformed = transform_claude_request_for_api_format(
+            chat_request(),
+            &provider,
+            "openai_chat",
+            Some("session-abc"),
+            None,
+        )
+        .unwrap();
+        assert!(transformed.get("prompt_cache_key").is_none());
+    }
+
+    /// enabled：覆盖宿主白名单，对任意上游注入会话 key。
+    #[test]
+    fn test_claude_chat_prompt_cache_routing_enabled_overrides_host_allowlist() {
+        let provider = create_provider_with_meta(
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://unknown-gateway.example.com/v1" } }),
+            ProviderMeta {
+                prompt_cache_routing: Some("enabled".to_string()),
+                ..Default::default()
+            },
+        );
+        let transformed = transform_claude_request_for_api_format(
+            chat_request(),
+            &provider,
+            "openai_chat",
+            Some("session-abc"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(transformed["prompt_cache_key"], "session-abc");
+    }
+
+    /// disabled：连白名单宿主也不注入。
+    #[test]
+    fn test_claude_chat_prompt_cache_routing_disabled_skips_allowlisted_host() {
+        let provider = create_provider_with_meta(
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://api.openai.com/v1" } }),
+            ProviderMeta {
+                prompt_cache_routing: Some("disabled".to_string()),
+                ..Default::default()
+            },
+        );
+        let transformed = transform_claude_request_for_api_format(
+            chat_request(),
+            &provider,
+            "openai_chat",
+            Some("session-abc"),
+            None,
+        )
+        .unwrap();
+        assert!(transformed.get("prompt_cache_key").is_none());
+    }
+
+    /// meta 显式 promptCacheKey 优先于会话 key，且不受 routing 策略限制。
+    #[test]
+    fn test_claude_chat_explicit_prompt_cache_key_wins_over_session() {
+        let provider = create_provider_with_meta(
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://unknown-gateway.example.com/v1" } }),
+            ProviderMeta {
+                prompt_cache_key: Some("explicit-key".to_string()),
+                ..Default::default()
+            },
+        );
+        let transformed = transform_claude_request_for_api_format(
+            chat_request(),
+            &provider,
+            "openai_chat",
+            Some("session-abc"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(transformed["prompt_cache_key"], "explicit-key");
+    }
+
+    // ── preserveCacheControl：provider 级断点保留 ──
+
+    /// 显式开启 preserveCacheControl 后，system 断点保留（默认 5m 语义不加 ttl）。
+    #[test]
+    fn test_claude_chat_preserve_cache_control_meta_opt_in() {
+        let provider = create_provider_with_meta(
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://gateway.example.com/v1" } }),
+            ProviderMeta {
+                preserve_cache_control: Some(true),
+                ..Default::default()
+            },
+        );
+        let transformed = transform_claude_request_for_api_format(
+            json!({
+                "model": "some-model",
+                "system": [
+                    {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}
+                ],
+                "messages": [{ "role": "user", "content": "hi" }],
+                "max_tokens": 128
+            }),
+            &provider,
+            "openai_chat",
+            Some("session-abc"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            transformed["messages"][0]["cache_control"],
+            json!({"type": "ephemeral"})
+        );
+    }
+
+    /// preserveCacheControl：断点自带的 5m TTL 升级为网关上限 1h。
+    #[test]
+    fn test_claude_chat_preserve_cache_control_upgrades_5m_ttl() {
+        let provider = create_provider_with_meta(
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://gateway.example.com/v1" } }),
+            ProviderMeta {
+                preserve_cache_control: Some(true),
+                ..Default::default()
+            },
+        );
+        let transformed = transform_claude_request_for_api_format(
+            json!({
+                "model": "some-model",
+                "system": [
+                    {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+                ],
+                "messages": [{ "role": "user", "content": "hi" }],
+                "max_tokens": 128
+            }),
+            &provider,
+            "openai_chat",
+            Some("session-abc"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            transformed["messages"][0]["cache_control"],
+            json!({"type": "ephemeral", "ttl": "1h"})
+        );
+    }
+
+    // ── midConversationSystemPolicy：中途 system 的角色保留 ──
+
+    fn mid_system_request() -> serde_json::Value {
+        json!({
+            "model": "some-model",
+            "system": "top-level sys",
+            "messages": [
+                { "role": "user", "content": "hi" },
+                { "role": "assistant", "content": "ok" },
+                { "role": "system", "content": "mid reminder" },
+                { "role": "user", "content": "next" }
+            ],
+            "max_tokens": 128
+        })
+    }
+
+    /// 默认策略：中途 system 重写为 user（保前缀稳定）。
+    #[test]
+    fn test_claude_chat_mid_system_default_rewrites_to_user() {
+        let provider = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://gateway.example.com/v1" }
+        }));
+        let transformed = transform_claude_request_for_api_format(
+            mid_system_request(),
+            &provider,
+            "openai_chat",
+            Some("session-abc"),
+            None,
+        )
+        .unwrap();
+        let messages = transformed["messages"].as_array().unwrap();
+        assert!(
+            messages.iter().skip(1).all(|m| m["role"] != "system"),
+            "默认策略下中途 system 必须重写为 user: {messages:?}"
+        );
+    }
+
+    /// preserve 策略：中途 system 原位保留 role=system。
+    #[test]
+    fn test_claude_chat_mid_system_policy_preserve_keeps_system_role() {
+        let provider = create_provider_with_meta(
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://gateway.example.com/v1" } }),
+            ProviderMeta {
+                mid_conversation_system_policy: Some("preserve".to_string()),
+                ..Default::default()
+            },
+        );
+        let transformed = transform_claude_request_for_api_format(
+            mid_system_request(),
+            &provider,
+            "openai_chat",
+            Some("session-abc"),
+            None,
+        )
+        .unwrap();
+        let messages = transformed["messages"].as_array().unwrap();
+        assert_eq!(messages[3]["role"], "system");
+        assert_eq!(messages[3]["content"], "mid reminder");
     }
 
     #[test]

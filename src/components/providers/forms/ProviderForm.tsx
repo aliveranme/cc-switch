@@ -27,6 +27,8 @@ import type {
   CodexCatalogModel,
   CodexChatReasoning,
   PromptCacheRoutingMode,
+  MidConversationSystemPolicy,
+  CodexNativeResponsesTemplate,
   ClaudeApiKeyField,
 } from "@/types";
 import {
@@ -424,6 +426,19 @@ function ProviderFormFull({
     setCodexFastMode(initialData?.meta?.codexFastMode ?? false);
     setCodexChatReasoning(initialData?.meta?.codexChatReasoning ?? {});
     setPromptCacheRouting(initialData?.meta?.promptCacheRouting ?? "auto");
+    setSessionAffinityHeader(initialData?.meta?.sessionAffinityHeader ?? "");
+    setPreserveCacheControl(initialData?.meta?.preserveCacheControl ?? false);
+    setMidConversationSystemPolicy(
+      initialData?.meta?.midConversationSystemPolicy ?? "rewrite_user",
+    );
+    setClassifierSeverityBlockValue(
+      initialData?.meta?.classifierSeverityBlockValue !== undefined
+        ? String(initialData.meta.classifierSeverityBlockValue)
+        : "",
+    );
+    setCodexNativeResponsesTemplate(
+      initialData?.meta?.codexNativeResponsesTemplate ?? "full",
+    );
     setCustomUserAgent(initialData?.meta?.customUserAgent ?? "");
     setLocalProxyHeadersOverride(
       formatRequestOverrideObject(
@@ -620,6 +635,27 @@ function ProviderFormFull({
   const [promptCacheRouting, setPromptCacheRouting] =
     useState<PromptCacheRoutingMode>(
       () => initialData?.meta?.promptCacheRouting ?? "auto",
+    );
+  // ── fork：缓存链路开关（Claude → OpenAI Chat / 会话亲和）──
+  const [sessionAffinityHeader, setSessionAffinityHeader] = useState<string>(
+    () => initialData?.meta?.sessionAffinityHeader ?? "",
+  );
+  const [preserveCacheControl, setPreserveCacheControl] = useState<boolean>(
+    () => initialData?.meta?.preserveCacheControl ?? false,
+  );
+  const [midConversationSystemPolicy, setMidConversationSystemPolicy] =
+    useState<MidConversationSystemPolicy>(
+      () => initialData?.meta?.midConversationSystemPolicy ?? "rewrite_user",
+    );
+  const [classifierSeverityBlockValue, setClassifierSeverityBlockValue] =
+    useState<string>(() =>
+      initialData?.meta?.classifierSeverityBlockValue !== undefined
+        ? String(initialData.meta.classifierSeverityBlockValue)
+        : "",
+    );
+  const [codexNativeResponsesTemplate, setCodexNativeResponsesTemplate] =
+    useState<CodexNativeResponsesTemplate>(
+      () => initialData?.meta?.codexNativeResponsesTemplate ?? "full",
     );
   const [customUserAgent, setCustomUserAgent] = useState<string>(
     () => initialData?.meta?.customUserAgent ?? "",
@@ -1784,12 +1820,51 @@ function ProviderFormFull({
         localCodexApiFormat === "openai_chat"
           ? normalizeCodexChatReasoningForSave(codexChatReasoning)
           : undefined,
+      // 会话级 prompt-cache 路由：Codex Responses→Chat 与 Claude Anthropic→Chat
+      // 两条转换路径共用同一字段与判定口径。
       promptCacheRouting:
-        appId === "codex" &&
-        category !== "official" &&
-        localCodexApiFormat === "openai_chat" &&
+        ((appId === "codex" &&
+          category !== "official" &&
+          localCodexApiFormat === "openai_chat") ||
+          (appId === "claude" &&
+            category !== "official" &&
+            localApiFormat === "openai_chat")) &&
         promptCacheRouting !== "auto"
           ? promptCacheRouting
+          : undefined,
+      // ── fork：缓存链路开关 ──
+      sessionAffinityHeader:
+        (appId === "claude" || appId === "codex") &&
+        category !== "official" &&
+        sessionAffinityHeader.trim()
+          ? sessionAffinityHeader.trim()
+          : undefined,
+      preserveCacheControl:
+        appId === "claude" &&
+        category !== "official" &&
+        localApiFormat === "openai_chat" &&
+        preserveCacheControl
+          ? true
+          : undefined,
+      midConversationSystemPolicy:
+        appId === "claude" &&
+        category !== "official" &&
+        localApiFormat === "openai_chat" &&
+        midConversationSystemPolicy !== "rewrite_user"
+          ? midConversationSystemPolicy
+          : undefined,
+      classifierSeverityBlockValue:
+        appId === "claude" &&
+        category !== "official" &&
+        classifierSeverityBlockValue.trim() !== "" &&
+        Number.isFinite(Number(classifierSeverityBlockValue))
+          ? Number(classifierSeverityBlockValue)
+          : undefined,
+      codexNativeResponsesTemplate:
+        appId === "codex" &&
+        category !== "official" &&
+        codexNativeResponsesTemplate !== "full"
+          ? codexNativeResponsesTemplate
           : undefined,
       customUserAgent:
         (appId === "claude" || appId === "codex") && category !== "official"
@@ -2456,6 +2531,20 @@ function ProviderFormFull({
               onLocalProxyHeadersOverrideChange={setLocalProxyHeadersOverride}
               localProxyBodyOverride={localProxyBodyOverride}
               onLocalProxyBodyOverrideChange={setLocalProxyBodyOverride}
+              sessionAffinityHeader={sessionAffinityHeader}
+              onSessionAffinityHeaderChange={setSessionAffinityHeader}
+              promptCacheRouting={promptCacheRouting}
+              onPromptCacheRoutingChange={setPromptCacheRouting}
+              preserveCacheControl={preserveCacheControl}
+              onPreserveCacheControlChange={setPreserveCacheControl}
+              midConversationSystemPolicy={midConversationSystemPolicy}
+              onMidConversationSystemPolicyChange={
+                setMidConversationSystemPolicy
+              }
+              classifierSeverityBlockValue={classifierSeverityBlockValue}
+              onClassifierSeverityBlockValueChange={
+                setClassifierSeverityBlockValue
+              }
             />
           )}
 
@@ -2531,6 +2620,12 @@ function ProviderFormFull({
               onLocalProxyHeadersOverrideChange={setLocalProxyHeadersOverride}
               localProxyBodyOverride={localProxyBodyOverride}
               onLocalProxyBodyOverrideChange={setLocalProxyBodyOverride}
+              sessionAffinityHeader={sessionAffinityHeader}
+              onSessionAffinityHeaderChange={setSessionAffinityHeader}
+              codexNativeResponsesTemplate={codexNativeResponsesTemplate}
+              onCodexNativeResponsesTemplateChange={
+                setCodexNativeResponsesTemplate
+              }
             />
           )}
 

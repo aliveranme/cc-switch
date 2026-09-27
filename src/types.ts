@@ -163,6 +163,16 @@ export interface CodexChatReasoning {
 
 export type PromptCacheRoutingMode = "auto" | "enabled" | "disabled";
 
+// mid-conversation system 消息处理策略（Claude → OpenAI Chat）
+// - "rewrite_user"（默认）：重写为 user，保前缀缓存稳定
+// - "preserve"：原位保留 system 角色（上游语义）
+export type MidConversationSystemPolicy = "rewrite_user" | "preserve";
+
+// Codex NativeResponses 目录模板
+// - "full"（默认）：gpt-5.6-sol 全量模板
+// - "neutral"：中性模板（无 freeform apply_patch / web_search）
+export type CodexNativeResponsesTemplate = "full" | "neutral";
+
 export interface LocalProxyRequestOverrides {
   headers?: Record<string, string>;
   body?: Record<string, unknown>;
@@ -209,7 +219,26 @@ export interface ProviderMeta {
   promptCacheRetention?: "in_memory" | "24h";
   // Session-based prompt-cache routing for Codex Responses -> Chat conversions.
   // auto enables only for known-compatible upstreams; enabled/disabled are user overrides.
+  // Also honored by the Claude → OpenAI Chat path (session-level prompt_cache_key).
   promptCacheRouting?: PromptCacheRoutingMode;
+  // Session-affinity HTTP header name (value = client session ID). Some multi-instance
+  // gateways only hit their prefix cache when a session sticks to one instance
+  // (e.g. Cloudflare Workers AI's "x-session-affinity"). Only injected by the local
+  // proxy, and only when the client actually supplied a session ID.
+  sessionAffinityHeader?: string;
+  // Claude → OpenAI Chat: keep Anthropic cache_control breakpoints. Off by default -
+  // most OpenAI-compatible upstreams reject the unknown field; enable only for
+  // gateways that implement breakpoint caching at the gateway layer.
+  preserveCacheControl?: boolean;
+  // Mid-conversation system message policy for the Claude → OpenAI Chat path.
+  // - "rewrite_user" (default): rewrite to user, keeping the prompt prefix stable
+  // - "preserve": keep the system role in place (upstream semantics)
+  midConversationSystemPolicy?: MidConversationSystemPolicy;
+  // Value expressing BLOCK in the security classifier's severity mode (default 1000).
+  // Use 100 if the client validates the range 0-100.
+  classifierSeverityBlockValue?: number;
+  // Codex NativeResponses catalog template, see CodexNativeResponsesTemplate.
+  codexNativeResponsesTemplate?: CodexNativeResponsesTemplate;
   // Codex OAuth FAST mode: injects service_tier="priority" on ChatGPT Codex requests
   codexFastMode?: boolean;
   // Codex Responses -> Chat Completions reasoning capability metadata

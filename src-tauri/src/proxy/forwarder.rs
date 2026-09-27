@@ -2332,6 +2332,16 @@ impl RequestForwarder {
             is_copilot,
         );
 
+        // 会话亲和 header：按会话固定路由到同一上游实例，提升前缀缓存命中率。
+        // 值必须是客户端提供的会话 ID（代理生成的 UUID 每请求不同）。
+        apply_session_affinity_header(
+            &mut ordered_headers,
+            provider,
+            self.session_id.as_str(),
+            self.session_client_provided,
+            is_copilot,
+        );
+
         // 托管 OAuth 的 workspace 由账号绑定决定，覆盖客户端或本地代理配置的旧值。
         if let Some(ref account_id) = codex_oauth_account_id {
             if let Ok(value) = http::HeaderValue::from_str(account_id) {
@@ -3816,6 +3826,65 @@ fn apply_local_proxy_header_overrides(
 
         headers.insert(name, value);
     }
+}
+
+/// 注入会话亲和 header（值 = 客户端会话 ID）。
+///
+/// 部分多实例网关要求「同一会话固定路由到同一实例」才能命中前缀缓存
+/// （Cloudflare Workers AI 文档明示 `x-session-affinity` 是提升前缀缓存
+/// 命中率的主要手段）。header 名由 provider meta 的 `sessionAffinityHeader`
+/// 指定，值固定为会话 ID。
+///
+/// 仅在**客户端提供了会话 ID** 时注入：代理自行生成的 UUID 每请求不同，
+/// 注入会把同一会话打散到不同实例，反而降低命中率。
+fn apply_session_affinity_header(
+    headers: &mut http::HeaderMap,
+    provider: &Provider,
+    session_id: &str,
+    session_client_provided: bool,
+    is_copilot: bool,
+) {
+    if is_copilot || !session_client_provided {
+        return;
+    }
+
+    let Some(raw_name) = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.session_affinity_header.as_deref())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return;
+    };
+
+    let Ok(name) = http::HeaderName::from_bytes(raw_name.to_ascii_lowercase().as_bytes()) else {
+        log::warn!("[SessionAffinity] Ignoring invalid header name: {raw_name}");
+        return;
+    };
+
+    if is_protected_local_proxy_override_header(&name) {
+        log::warn!(
+            "[SessionAffinity] Refusing protected header name: {}",
+            name.as_str()
+        );
+        return;
+    }
+
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return;
+    }
+
+    let Ok(value) = http::HeaderValue::from_str(session_id) else {
+        log::warn!(
+            "[SessionAffinity] Ignoring invalid session id for {}",
+            name.as_str()
+        );
+        return;
+    };
+
+    headers.insert(name, value);
 }
 
 /// Extract extension header names declared as hop-by-hop by an incoming
@@ -5844,5 +5913,80 @@ mod tests {
         });
         let body = body_with_image("any-model");
         assert!(fwd.media_retry_should_trigger("Claude", false, &body, &image_unsupported_error()));
+    }
+
+    // ── sessionAffinityHeader：会话亲和（Cloudflare Workers AI 等）──
+
+    fn provider_with_session_affinity(header: Option<&str>) -> Provider {
+        Provider {
+            id: "provider-affinity".to_string(),
+            name: "Affinity".to_string(),
+            settings_config: json!({ "env": { "ANTHROPIC_BASE_URL": "https://gw.example.com" } }),
+            website_url: None,
+            category: Some("claude".to_string()),
+            created_at: None,
+            sort_index: None,
+            notes: None,
+            meta: Some(crate::provider::ProviderMeta {
+                session_affinity_header: header.map(ToString::to_string),
+                ..Default::default()
+            }),
+            icon: None,
+            icon_color: None,
+            in_failover_queue: false,
+        }
+    }
+
+    /// 客户端提供了会话 ID → 注入；代理自行生成的 ID → 不注入（会打散路由）。
+    #[test]
+    fn session_affinity_injected_only_for_client_provided_session() {
+        let provider = provider_with_session_affinity(Some("x-session-affinity"));
+
+        let mut headers = HeaderMap::new();
+        apply_session_affinity_header(&mut headers, &provider, "sid-1", true, false);
+        assert_eq!(
+            headers
+                .get("x-session-affinity")
+                .map(|v| v.to_str().unwrap()),
+            Some("sid-1")
+        );
+
+        let mut headers = HeaderMap::new();
+        apply_session_affinity_header(&mut headers, &provider, "generated-uuid", false, false);
+        assert!(
+            headers.get("x-session-affinity").is_none(),
+            "代理生成的 UUID 每请求不同，注入只会打散缓存路由"
+        );
+    }
+
+    /// 未配置 header 名 → 不注入。
+    #[test]
+    fn session_affinity_noop_without_meta_header() {
+        let provider = provider_with_session_affinity(None);
+        let mut headers = HeaderMap::new();
+        apply_session_affinity_header(&mut headers, &provider, "sid-1", true, false);
+        assert!(headers.get("x-session-affinity").is_none());
+    }
+
+    /// 受保护 header 名（authorization 等）被拒绝，不能让 provider meta 篡改鉴权头。
+    #[test]
+    fn session_affinity_refuses_protected_header_names() {
+        let provider = provider_with_session_affinity(Some("authorization"));
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bearer original"));
+        apply_session_affinity_header(&mut headers, &provider, "sid-1", true, false);
+        assert_eq!(
+            headers.get("authorization").unwrap().to_str().unwrap(),
+            "Bearer original"
+        );
+    }
+
+    /// Copilot 路径跳过（其 header 由 auth_headers 专项管理）。
+    #[test]
+    fn session_affinity_skipped_for_copilot() {
+        let provider = provider_with_session_affinity(Some("x-session-affinity"));
+        let mut headers = HeaderMap::new();
+        apply_session_affinity_header(&mut headers, &provider, "sid-1", true, true);
+        assert!(headers.get("x-session-affinity").is_none());
     }
 }

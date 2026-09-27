@@ -323,10 +323,13 @@ async fn handle_messages_for_app(
 
         // 4. 转回分类器兼容格式
         let classifier_body = match serde_json::from_slice::<Value>(&body_bytes) {
-            Ok(json) => super::classifier::transform_classifier_response(
+            Ok(json) => super::classifier::transform_classifier_response_with(
                 &json,
                 &ctx.request_model,
                 classifier_mode,
+                super::classifier::ClassifierOptions::from_provider_meta(
+                    ctx.provider.meta.as_ref(),
+                ),
             ),
             Err(_) => {
                 log::warn!(

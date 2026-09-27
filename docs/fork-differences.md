@@ -13,7 +13,7 @@
 | 本次 merge | 2026-09-28 bb7b5f11 合入上游 1ee2fdc3（13 个提交，116 文件 +5848/-4055，5 处内容冲突手工解，见第 5 节）；上一次 2026-09-25 447750a7（4 个提交，零冲突） |
 | 本地版本 | `v3.20.4`（随 merge 对齐上游版本号；上游已打 tag `v3.20.4`，fork 最新 release 仍为 `v3.20.3`，未发同名版本；fork 发布序列见第 5 节） |
 | 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-09-28 |
-| 测试规模 | 最近验证于 2026-09-25：Rust 3051 + 前端 vitest 1173（141 文件）；本次同步未运行测试 |
+| 测试规模 | 最近验证于 2026-09-28：Rust **3094** + 前端 vitest **1183**（143 文件） |
 
 ## 2. 修改总览（按主题）
 
@@ -24,6 +24,7 @@
 | **安全分类器协议**（新增 `classifier.rs` ~1 300 行，上游无此文件） | Claude Code security classifier 完整支持：`<block>`/`</severity>` 双模式、fast 单阶段与 both/thinking 双阶段检测、severity 响应转换、裁决提取与 usage 解析。协议特征逐条对照官方 cli.js（2.1.193/2.1.219）逆向确认 |
 | **四向格式转换**（transform.rs / transform_codex_chat.rs / transform_codex_anthropic.rs / transform_gemini.rs / transform_responses.rs） | reasoning 全形状提取（含 DeepSeek 内联 think 块）；Anthropic document → Chat/Responses/Gemini；`json_object` 响应格式保留；`disable_parallel_tool_use` ↔ `parallel_tool_calls` 对称传递；非图片工具媒体降级为文本而非丢弃；usage 三线守恒（fresh-input 语义 + saturating_sub） |
 | **prefix-cache 稳定性**（transform 系 + forwarder） | 剥离 `x-anthropic-billing-header` 的 rotating `cch=` nonce（`strip_volatile_cch`，逐行字节级确定）；mid-conversation system 重写为 user（见 4.1）；CacheTrace 调试链路（TRACE 级门控） |
+| **缓存链路可配置**（claude.rs / forwarder.rs / classifier.rs / codex_config.rs，见 4.17–4.19） | 会话级 `prompt_cache_key` 路由从 Codex 扩展到 Claude→Chat（复用 `promptCacheRouting` 三态）；`sessionAffinityHeader`（值 = 客户端会话 ID，多实例网关缓存亲和）；`preserveCacheControl`（网关层实现断点的上游）；`midConversationSystemPolicy`（4.1 策略可选）；`classifierSeverityBlockValue`（4.7 数值可配）；`codexNativeResponsesTemplate`（4.13 模板可选） |
 | **SSE 流式协议**（streaming.rs / streaming_codex_chat.rs / streaming_gemini.rs / streaming_responses.rs） | 终态必达（EOF sentinel、[DONE] 去重、截断流补 end_turn）；**伪成功防护**（空 delta chunk 后断流/DONE 发 error 而非伪造成功）；错误状态码与 retry-after 透传；`output_text.done`/`refusal.done` 跳 delta 恢复完整文本；whole-JSON 非流式回退（Responses 方向）；转换器 1MB 缓冲上限防 OOM；[DONE] 后残留数据守卫 |
 | **路由/嗅探**（handlers.rs / forwarder.rs / content_encoding.rs） | 响应体嗅探（`<=`→`<` 边界修复保流式、未标记 JSON 识别）；content_encoding 双向全支持（gzip/br/zstd/deflate，堆叠编码，200MB 上限）；`cache_injection` 域收敛（见 4.4）；嗅探超时与故障转移联动 |
 | **响应体字节上限实现**（v3.19.2 同步） | 方法统一为上游 `bytes_with_limit`（Buffered 变体事后比较 + 流式逐块超限截停 + `ResponseBodyTooLarge` 错误），上限保留 fork 的 `MAX_BUFFERED_PROXY_BODY_BYTES = 200MB`（上游 128MB）；content_encoding 采用上游 `decompress_body_with_limit`（解码器读取侧预算、压缩炸弹在预算处截停、TooLarge 与数据损坏区分） |
@@ -138,7 +139,9 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 
 - **上游**（`d8065cc6`，#6941 起）：mid-conversation system **原位保留**，不再
   hoist 到头部合并；顶层 system 数组合并为一条 system（跨轮字节稳定）。
-- **fork**：上游行为之上**额外把 mid-conversation system 重写为 role=user**。
+- **fork**：上游行为之上**额外把 mid-conversation system 重写为 role=user**；
+  该行为**可由 provider meta `midConversationSystemPolicy` 切换**（`"rewrite_user"`
+  默认 / `"preserve"` 保留 system 角色，见 4.17）。
 - **原因**：上游修复只保证 Anthropic→OpenAI 转换自身不再上提；但 fork 的主要
   用户场景是第三方网关（DeepSeek/OpenRouter/Kimi/OpenCode Go 网关等），这些
   OpenAI 兼容上游会**自行把所有 system 消息提升回前缀**——保持 system 角色
@@ -158,7 +161,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 
 - **官方**（cli.js `uSo`）：无 `<block>` 标签即 BLOCK（fail-closed），不可解析即拦截。
 - **fork**：有标签但不可识别 → BLOCK（对齐官方）；**完全无标签 → 启发式解读后默认放行**；
-  上游超时/4xx/5xx/JSON 解析失败 → ALLOW。
+  上游超时/4xx/5xx/JSON 解析失败 → ALLOW。severity 模式的 BLOCK 数值可由 provider meta `classifierSeverityBlockValue` 覆盖（默认 1000，见 4.18）。
 - **原因**：官方的 fail-closed 假设分类器请求**总能成功**（官方 Anthropic API
   稳定且协议固定）。fork 面向第三方网关：DeepSeek/Kimi/GLM 等对分类器协议
   （`<transcript>` 包裹、`<block>`/`</severity>` 标签、fast 单阶段）的兼容性不可控，
@@ -323,11 +326,14 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 - **原因**：fork 的核心特性是第三方模型 reasoning 滑块（low…ultra，gpt-5.6-sol
   兼容）与 `use_responses_lite=false` 强制；上游中性模板只声明两档会削弱该功能。
   fork 主要面向 DeepSeek/OpenRouter 等支持 freeform apply_patch 的网关，保留
-  完整能力收益大于 MiMo 等少数网关的兼容风险（此类网关走 ProxyChat 路径规避）。
+  完整能力收益大于 MiMo 等少数网关的兼容风险（此类网关**可经 provider meta
+  `codexNativeResponsesTemplate = "neutral"` 切回上游中性模板**，见 4.19；另可走
+  ProxyChat 路径规避）。
 - ⚠️ 后果：NativeResponses 直连 MiMo/LongCat 等拒绝 freeform apply_patch 的网关
-  可能 400（fork 用户经 ProxyChat 规避）。fork 的 `load_codex_native_responses_template`
-  引用 `gpt5_6_sol_template.json`，上游的中性模板文件被 fork 删除；上游若调整模板
-  策略需复核此分歧。
+  默认会 400，需显式切中性模板（或走 ProxyChat）。fork 的
+  `load_codex_native_responses_template(template)` 按开关二选一，两个模板文件均在库
+  （`gpt5_6_sol_template.json` / `codex_native_responses_template.json`）；上游若调整
+  模板策略需复核此分歧。
 
 ### 4.14 map_reasoning_effort passthrough 下 ultra 钳制到 max
 
@@ -374,6 +380,58 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 - **fork**：`lucide-react ^1.31`（#54 升级）移除了 `Github` 品牌导出，改回**内联 SVG**。
 - **原因**：fork 依赖版本较新（lucide 1.x 移除品牌图标）。
 - ⚠️ 上游若新增 lucide 品牌图标（Github/GitLab 等），fork 需同步改内联 SVG。
+
+### 4.17 缓存链路开关（会话级 prompt_cache_key / 会话亲和 / 断点保留）
+
+三项均为「上游不存在的能力」，默认值选取原则是**不改变现有行为**。
+
+**（a）会话级 `prompt_cache_key` 路由扩展到 Claude→Chat**（meta `promptCacheRouting`）
+
+- **上游**：`prompt_cache_key` 只在 Codex Responses→Chat 路径注入（`should_send_codex_chat_prompt_cache_key` 的宿主白名单：`api.openai.com`、`api.kimi.com/coding`）。
+  Claude→Chat 路径仅当 meta 显式配 `promptCacheKey` 时才注入——即**默认完全无会话级缓存路由**。
+- **fork**：Claude→Chat 复用同一 `promptCacheRouting` 三态与同一宿主白名单，注入值取**客户端提供的会话 ID**（`explicit meta key > session id`）。
+- **原因**：上游 issue #3193 的修复方向是“不要让多个会话共享同一个 key”（默认回退到 `provider.id` 会让所有会话互相驱逐），但 Claude 路径的结果是**连会话级 key 也一并关掉**。修正做法是“每会话一个 key”：`promptCacheRouting = enabled` 显式开启，`auto` 仍按宿主白名单保守判定（很多严格网关对未知字段返 400）。
+- **实现**：`claude.rs::should_send_claude_chat_prompt_cache_key`（复用 `codex.rs::chat_upstream_accepts_prompt_cache_key`），opencode-go 网关仍无条件注入会话 key（内置特例）。
+- **对应测试**：`test_claude_chat_prompt_cache_routing_{auto_injects_on_allowlisted_host,auto_skips_unknown_host,enabled_overrides_host_allowlist,disabled_skips_allowlisted_host}`、`test_claude_chat_explicit_prompt_cache_key_wins_over_session`。
+
+**（b）会话亲和 header**（meta `sessionAffinityHeader`，值 = 客户端会话 ID）
+
+- **上游**：无此概念。
+- **fork**：按配置的 header 名注入会话 ID（如 Cloudflare Workers AI 的 `x-session-affinity`）。**仅在客户端提供了会话 ID 时注入**——代理生成的 UUID 每请求不同，注入只会把同一会话打散到不同实例。受保护 header 名（`authorization` 等）复用 `is_protected_local_proxy_override_header` 拒绝。
+- **原因**：多实例网关上“前缀相同”不足以保证命中，还需路由到持有该前缀张量的**同一实例**（CF 文档将 `x-session-affinity` 列为提升前缀缓存命中率的主要手段）。
+- **对应测试**：`session_affinity_injected_only_for_client_provided_session`、`session_affinity_noop_without_meta_header`、`session_affinity_refuses_protected_header_names`、`session_affinity_skipped_for_copilot`。
+
+**（c）保留 cache_control 断点**（meta `preserveCacheControl`）
+
+- **上游 / fork 现状**：仅 `opencode.ai/zen/*` 网关内置保留断点，其余 OpenAI 兼容上游一律剥离（避免严格后端 400）。
+- **fork 新增**：其他**在网关层实现了断点缓存**的上游可由用户显式开启；断点自带 `ttl: 5m` 仍升级为网关上限 `1h`。
+- **对应测试**：`test_claude_chat_preserve_cache_control_meta_opt_in`、`test_claude_chat_preserve_cache_control_upgrades_5m_ttl`。
+- **UI**：Claude 表单高级配置区（`ClaudeFormFields`），Codex 侧只暴露 `promptCacheRouting` 与会话亲和（Codex→Chat 已有自己的注入逻辑）。
+
+### 4.18 行为开关（mid-conversation system / severity 拦截值）
+
+**（a）`midConversationSystemPolicy`**：4.1 的 user 重写由硬编码改为 provider 级开关。
+
+- `"rewrite_user"`（默认，与 4.1 原行为逐字节一致）/ `"preserve"`（上游 #6941 语义，原位保留 `role=system`；仅前导 system 合并仍执行）。
+- **原因**：4.1 的 user 重写对“会自行提升 system 的第三方网关”有缓存收益，但对原生网关 / 严格按序拼接的后端是**纯语义损失**（丢失 system 特权）。此前用户无法关闭。
+- **实现**：`transform::MidConversationSystemPolicy` + `normalize_openai_system_messages(messages, policy)`；新增入口 `anthropic_to_openai_with_options(body, OpenAiChatOptions{..})`，旧三参数函数保留为默认值包装（避免动 13 处调用点）。
+- **对应测试**：`test_claude_chat_mid_system_default_rewrites_to_user`、`test_claude_chat_mid_system_policy_preserve_keeps_system_role`。
+
+**（b）`classifierSeverityBlockValue`**：4.7 的 severity 拦截值（默认 `1000`）可由 provider 覆盖为 `100`。
+
+- **原因**：`1000` 基于 2.1.219 实测推断（仓库内 cli.js 副本为 2.1.193，无 severity 模式），无法确证客户端是否对数值做 0-100 范围校验；给出开关让用户实测冲突时就地调整，无需等 fork 发版。ALLOW 恒为 `0`，不受该项影响。
+- **实现**：`classifier::ClassifierOptions` + `transform_classifier_response_with(..)`；`transform_classifier_response` 保留为默认值入口。
+- **对应测试**：`test_severity_block_value_defaults_to_1000`、`test_severity_block_value_honors_override`、`test_severity_allow_stays_zero_under_override`、`test_classifier_options_from_provider_meta`。
+- ⚠️ 分类器的 **fail-open 兼容策略（4.2）本次未改动**，仍是“上游异常 → 放行”。
+
+### 4.19 NativeResponses 目录模板可配（meta `codexNativeResponsesTemplate`）
+
+- **默认**：`full`（gpt-5.6-sol 全量模板，即 4.13 的 fork 行为）。
+- **`neutral`**：上游中性模板——该文件（`codex_native_responses_template.json`）本次**恢复入库**；无 freeform `apply_patch` / `web_search`，仅 none/high 两档 reasoning。
+- **原因**：4.13 把 MiMo/LongCat 等“拒绝 `type=="custom"` 工具”的网关推给 ProxyChat 路径规避；给出开关后这类网关可继续走原生 Responses，代价是能力降级（用户自选）。
+- **实现**：`codex_config::CodexResponsesTemplate::{Full,Neutral}` + `load_codex_native_responses_template(template)`；`resolve_codex_responses_template(provider)`（在 `proxy/providers/codex.rs`，与 `resolve_codex_catalog_tool_profile` 并列）经 `prepare_codex_live_config_text_with_optional_catalog` / `write_codex_provider_live_with_catalog` 的**显式参数**下传（4 个 live 写入点传 provider 选定值；无 Provider 在手的逐字恢复路径用默认 `Full`）。ProxyChat profile 不受影响（走独立模板路径）。
+- **对应测试**：`codex_responses_template_from_meta_value_maps_neutral_only`、`neutral_template_drops_freeform_tools_and_reasoning_tiers`、`native_catalog_uses_selected_responses_template`。
+- ⚠️ 同步注意：上游若给 `prepare_codex_config_text_with_model_catalog` 加新调用点，必须一并传 template 参数，否则静默回退 `Full`（3 参数包装已标 `#[allow(dead_code)]`，不再供生产使用）。
 
 ## 5. 本地发布序列
 
@@ -555,6 +613,35 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 逻辑并入现有 lifecycle 管理，UpdateCommand::Unmanaged 防止未知原生安装被 npm 旁路安装。
 > 冲突检查与 git diff --check 通过；本轮未运行测试。上游没有新版本 tag，fork 仍为 3.20.4，
 > 未 bump 版本。merge 提交 bb7b5f11 尚未推送 origin/main。
+
+> 2026-09-28 **功能增量（无同步 / 无 release）**：落地缓存链路与行为开关（第 4.17–4.19 节）。
+>
+> **缺口补足**（上一轮协议审查发现的 4 项）：
+> - Claude→Chat 会话级 `prompt_cache_key` 路由（此前只有 Codex 路径有；上游 #3193 的修复把 Claude 路径的会话 key 一并关掉了）
+> - `sessionAffinityHeader`（值 = 客户端会话 ID；CF 等多实例网关的前缀缓存亲和）
+> - `preserveCacheControl`（网关层实现断点缓存的上游，从 opencode-go 特例推广为可配）
+> - `CodexResponsesTemplate::Neutral`（恢复上游中性模板文件；拒绝自定义工具的网关不再被迫走 ProxyChat）
+>
+> **开关化**（此前硬编码的 fork 行为）：`midConversationSystemPolicy`（4.1）、
+> `classifierSeverityBlockValue`（4.7）、`codexNativeResponsesTemplate`（4.13）。
+> 三者默认值均与改动前一致（`rewrite_user` / `1000` / `full`）。
+>
+> 改动文件：`provider.rs`（+5 meta 字段）、`transform.rs`（选项结构 + 策略枚举）、
+> `claude.rs`（路由 / 断点 / 策略接线）、`forwarder.rs`（会话亲和注入）、
+> `classifier.rs`（选项结构）、`codex_config.rs`（模板枚举 + 参数下传）、
+> `proxy/providers/codex.rs`（resolve）、`proxy/providers/mod.rs`（导出）、
+> `services/{config,proxy}.rs` 与 `services/provider/live.rs`（调用点传参）。
+> 前端：`types.ts`、`ProviderForm.tsx`、`ClaudeFormFields.tsx`、`CodexFormFields.tsx`、
+> `GrokBuildProviderForm.tsx`、四语 i18n。
+>
+> 验证：`cargo test --lib` **3094 passed / 0 failed**（`HOME` 隔离，见 6.3）、
+> `cargo fmt --check` / `cargo clippy --all-targets -D warnings` 全绿；
+> 前端 `pnpm vitest run --maxWorkers=8` **143 文件 / 1183 用例**、
+> `pnpm typecheck` 全绿。新增钉桩测试：Rust 16 个、前端 4 个。
+>
+> ⚠️ 本地验证过程中一次未隔离 `HOME` 的全量 `cargo test --lib` 污染了真实
+> `~/.cc-switch/model-pricing.json`（6.3 记录的已知问题），已按 6.3 的清理说明恢复为
+> 默认值（`includeCommonModels: true`、空 `models` / `deletedModelIds`）。
 
 ## 6. 维护约定
 

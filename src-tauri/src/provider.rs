@@ -556,6 +556,64 @@ pub struct ProviderMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub local_proxy_request_overrides: Option<LocalProxyRequestOverrides>,
+    /// 会话亲和 HTTP header 名（值由代理填入客户端会话 ID）。
+    ///
+    /// 部分多实例网关按「同一会话固定路由到同一实例」才能命中前缀缓存，
+    /// 由客户端显式声明（Cloudflare Workers AI 的 `x-session-affinity`）。
+    /// 仅当请求携带了**客户端提供**的会话 ID 时注入；代理自行生成的 UUID
+    /// 每次不同，注入只会打散路由，反而降低命中率。
+    ///
+    /// 例：`"x-session-affinity"`。留空 = 不注入。
+    #[serde(
+        rename = "sessionAffinityHeader",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_affinity_header: Option<String>,
+    /// Claude → OpenAI Chat：是否保留 Anthropic 的 `cache_control` 断点。
+    ///
+    /// 默认剥离（严格 OpenAI 兼容后端收到未知字段会 400）。仅当上游在**网关层**
+    /// 实现了断点缓存（接受 OpenAI 请求体里的 `cache_control`）时才应开启。
+    /// opencode zen/go 网关由代码内置识别，无需配置此项。
+    #[serde(
+        rename = "preserveCacheControl",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub preserve_cache_control: Option<bool>,
+    /// mid-conversation system 消息策略。
+    ///
+    /// - `"rewrite_user"`（默认）：把对话中途的 system 消息重写为 `user`。
+    ///   第三方 OpenAI 兼容网关会自行把 system 提升回前缀，保持 system 角色
+    ///   会让每轮新增的 reminder 重写整段前缀、逐出全部缓存。
+    /// - `"preserve"`：原位保留 `system` 角色（上游语义）。当上游**不会**
+    ///   提升 system（如原生网关、严格按序拼接的后端）时选此项，保留 system
+    ///   特权语义。
+    #[serde(
+        rename = "midConversationSystemPolicy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub mid_conversation_system_policy: Option<String>,
+    /// 安全分类器 severity 模式下表达 BLOCK 的数值（默认 1000）。
+    ///
+    /// Claude Code 的 severity 分类器按数值与阈值比较；`1000` 大于任意合法
+    /// 阈值（0-100）因而恒为拦截。若客户端对数值做 0-100 范围校验，改为 `100`
+    /// （语义等价）。
+    #[serde(
+        rename = "classifierSeverityBlockValue",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub classifier_severity_block_value: Option<u32>,
+    /// Codex NativeResponses 目录模板。
+    ///
+    /// - `"full"`（默认）：gpt-5.6-sol 全量模板（freeform apply_patch、
+    ///   web_search、model_messages、6 档 reasoning）。
+    /// - `"neutral"`：上游中性模板（无 apply_patch / web_search，仅
+    ///   none/high 两档 reasoning）。拒绝 freeform apply_patch 的网关
+    ///   （MiMo / LongCat 等）需要此项。
+    #[serde(
+        rename = "codexNativeResponsesTemplate",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub codex_native_responses_template: Option<String>,
     /// 累加模式应用中，该 provider 是否已写入 live config。
     /// `None` 表示旧数据/未知状态，`Some(false)` 表示明确仅存在于数据库中。
     #[serde(rename = "liveConfigManaged", skip_serializing_if = "Option::is_none")]

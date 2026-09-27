@@ -525,10 +525,61 @@ fn has_block_this_negation(lower: &str) -> bool {
 /// 响应中必须包含 `<block>no</block>` 或 `<block>yes</block>` 标签，
 /// 这是 Claude Code auto-mode 分类器投票系统解析的唯一识别格式。
 /// 同时保留上游原始文本作为分析依据。
+/// 兼容入口：无 provider 选项时使用默认 severity 阈值
+/// （[`DEFAULT_SEVERITY_BLOCK_VALUE`]）。生产路径走
+/// [`transform_classifier_response_with`]。
+#[allow(dead_code)]
 pub fn transform_classifier_response(
     upstream_body: &Value,
     request_model: &str,
     mode: ClassifierMode,
+) -> Value {
+    transform_classifier_response_with(
+        upstream_body,
+        request_model,
+        mode,
+        ClassifierOptions::default(),
+    )
+}
+
+/// 默认 severity BLOCK 值。`1000` 大于任意合法阈值（0-100），因此恒为拦截。
+///
+/// 若客户端对数值做 0-100 范围校验，经 provider meta 的
+/// `classifierSeverityBlockValue` 可改为 `100`（语义等价）。
+pub const DEFAULT_SEVERITY_BLOCK_VALUE: u32 = 1000;
+
+/// 分类器协议选项（provider 级）。
+#[derive(Debug, Clone, Copy)]
+pub struct ClassifierOptions {
+    /// severity 模式表达 BLOCK 的数值。
+    pub severity_block_value: u32,
+}
+
+impl Default for ClassifierOptions {
+    fn default() -> Self {
+        Self {
+            severity_block_value: DEFAULT_SEVERITY_BLOCK_VALUE,
+        }
+    }
+}
+
+impl ClassifierOptions {
+    /// 从 provider meta 解析选项；缺省回退到默认值。
+    pub fn from_provider_meta(meta: Option<&crate::provider::ProviderMeta>) -> Self {
+        Self {
+            severity_block_value: meta
+                .and_then(|meta| meta.classifier_severity_block_value)
+                .unwrap_or(DEFAULT_SEVERITY_BLOCK_VALUE),
+        }
+    }
+}
+
+/// 带选项的分类器响应转换（`transform_classifier_response` 的完整入口）。
+pub fn transform_classifier_response_with(
+    upstream_body: &Value,
+    request_model: &str,
+    mode: ClassifierMode,
+    options: ClassifierOptions,
 ) -> Value {
     let upstream_text = extract_response_text(upstream_body).unwrap_or_default();
 
@@ -556,11 +607,11 @@ pub fn transform_classifier_response(
         let verdict_line = match mode {
             // severity 模式：CC 的 Piy 解析恰好一个 `<severity>` 数值并与配置阈值
             // t1/t2（[0,100]）比较。proxy 不知阈值，用极值传达语义：
-            // 0 ≤ 任意合法阈值 → allow；1000 > 任意合法阈值 → block。
+            // 0 ≤ 任意合法阈值 → allow；默认 1000 > 任意合法阈值 → block。
             // reason/upstream 文本不得含第二个 `<severity>` 标签（Piy 要求恰好一个）。
             ClassifierMode::Severity => {
                 if block == "yes" {
-                    "<severity>1000</severity>".to_string()
+                    format!("<severity>{}</severity>", options.severity_block_value)
                 } else {
                     "<severity>0</severity>".to_string()
                 }
@@ -1462,5 +1513,74 @@ mod tests {
             "severity 兜底应输出 <severity>0</severity>"
         );
         assert_eq!(text.matches("<severity>").count(), 1);
+    }
+
+    // ── classifierSeverityBlockValue：severity BLOCK 数值可配置 ──
+
+    fn severity_verdict_text(blocking: bool, options: ClassifierOptions) -> String {
+        let verdict = if blocking {
+            "<block>yes</block>\n<reason>unsafe</reason>"
+        } else {
+            "<block>no</block>\n<reason>safe</reason>"
+        };
+        let body = json!({
+            "content": [{ "type": "text", "text": verdict }],
+            "usage": { "input_tokens": 3, "output_tokens": 5 }
+        });
+        transform_classifier_response_with(&body, "test-model", ClassifierMode::Severity, options)
+            ["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// 默认 BLOCK 值为 1000（大于任意合法阈值 0-100），且始终恰好一个 severity 标签。
+    #[test]
+    fn test_severity_block_value_defaults_to_1000() {
+        let text = severity_verdict_text(true, ClassifierOptions::default());
+        assert!(text.contains("<severity>1000</severity>"), "{text}");
+        assert_eq!(text.matches("<severity>").count(), 1, "{text}");
+    }
+
+    /// provider 级覆盖：改为 100（客户端做 0-100 范围校验时的安全取值）。
+    #[test]
+    fn test_severity_block_value_honors_override() {
+        let text = severity_verdict_text(
+            true,
+            ClassifierOptions {
+                severity_block_value: 100,
+            },
+        );
+        assert!(text.contains("<severity>100</severity>"), "{text}");
+        assert_eq!(text.matches("<severity>").count(), 1, "{text}");
+    }
+
+    /// ALLOW 恒为 0，不受 BLOCK 值影响（0 ≤ 任意合法阈值）。
+    #[test]
+    fn test_severity_allow_stays_zero_under_override() {
+        let text = severity_verdict_text(
+            false,
+            ClassifierOptions {
+                severity_block_value: 100,
+            },
+        );
+        assert!(text.contains("<severity>0</severity>"), "{text}");
+    }
+
+    /// meta 解析：缺省回退默认，显式值生效。
+    #[test]
+    fn test_classifier_options_from_provider_meta() {
+        assert_eq!(
+            ClassifierOptions::from_provider_meta(None).severity_block_value,
+            DEFAULT_SEVERITY_BLOCK_VALUE
+        );
+        let meta = crate::provider::ProviderMeta {
+            classifier_severity_block_value: Some(100),
+            ..Default::default()
+        };
+        assert_eq!(
+            ClassifierOptions::from_provider_meta(Some(&meta)).severity_block_value,
+            100
+        );
     }
 }

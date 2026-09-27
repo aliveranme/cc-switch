@@ -58,6 +58,7 @@ import type {
   CodexApiFormat,
   CodexCatalogModel,
   CodexChatReasoning,
+  CodexNativeResponsesTemplate,
   PromptCacheRoutingMode,
   ProviderCategory,
 } from "@/types";
@@ -131,6 +132,14 @@ interface CodexFormFieldsProps {
   onCodexChatReasoningChange?: (value: CodexChatReasoning) => void;
   promptCacheRouting: PromptCacheRoutingMode;
   onPromptCacheRoutingChange: (value: PromptCacheRoutingMode) => void;
+  // 会话亲和 header（值 = 客户端会话 ID）；空 = 关闭
+  sessionAffinityHeader: string;
+  onSessionAffinityHeaderChange: (value: string) => void;
+  // NativeResponses 目录模板：full（默认）/ neutral（拒绝自定义工具的网关）
+  codexNativeResponsesTemplate: CodexNativeResponsesTemplate;
+  onCodexNativeResponsesTemplateChange: (
+    value: CodexNativeResponsesTemplate,
+  ) => void;
 
   // Model Catalog
   catalogModels?: CodexCatalogModel[];
@@ -415,6 +424,10 @@ export function CodexFormFields({
   onCodexChatReasoningChange,
   promptCacheRouting,
   onPromptCacheRoutingChange,
+  sessionAffinityHeader,
+  onSessionAffinityHeaderChange,
+  codexNativeResponsesTemplate,
+  onCodexNativeResponsesTemplateChange,
   catalogModels = [],
   onCatalogModelsChange,
   speedTestEndpoints,
@@ -1107,6 +1120,66 @@ export function CodexFormFields({
                     {t("codexConfig.promptCacheRoutingHint", {
                       defaultValue:
                         "自动模式仅对已确认兼容的上游发送 prompt_cache_key；开启可用于其他兼容网关，关闭可避免严格网关因未知字段返回 400。只使用客户端提供的稳定会话 ID。",
+                    })}
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <FormLabel htmlFor="codex-session-affinity-header">
+                    {t("providerForm.sessionAffinityHeaderLabel", {
+                      defaultValue: "会话亲和 Header",
+                    })}
+                  </FormLabel>
+                  <Input
+                    id="codex-session-affinity-header"
+                    value={sessionAffinityHeader}
+                    onChange={(event) =>
+                      onSessionAffinityHeaderChange(event.target.value)
+                    }
+                    placeholder="x-session-affinity"
+                  />
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {t("providerForm.sessionAffinityHeaderHint", {
+                      defaultValue:
+                        "多实例网关需按会话固定路由到同一实例才能命中前缀缓存（Cloudflare Workers AI 为 x-session-affinity）。仅在客户端提供了会话 ID 时注入；留空关闭。",
+                    })}
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <FormLabel>
+                    {t("codexConfig.nativeResponsesTemplateLabel", {
+                      defaultValue: "NativeResponses 目录模板",
+                    })}
+                  </FormLabel>
+                  <Select
+                    value={codexNativeResponsesTemplate}
+                    onValueChange={(value) =>
+                      onCodexNativeResponsesTemplateChange(
+                        value as CodexNativeResponsesTemplate,
+                      )
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="full">
+                        {t("codexConfig.nativeResponsesTemplateFull", {
+                          defaultValue: "完整（推荐）",
+                        })}
+                      </SelectItem>
+                      <SelectItem value="neutral">
+                        {t("codexConfig.nativeResponsesTemplateNeutral", {
+                          defaultValue: "中性（兼容优先）",
+                        })}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {t("codexConfig.nativeResponsesTemplateHint", {
+                      defaultValue:
+                        "原生 Responses 网关的模型目录模板。完整模板带 freeform apply_patch、web_search 与 low…ultra 六档思考等级；拒绝自定义工具的网关（MiMo、LongCat 等）收到会 400，请改用中性模板。仅影响直连原生 Responses 的供应商。",
                     })}
                   </p>
                 </div>
