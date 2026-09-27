@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | `a06a41ec`（2026-09-24，共 4 个提交：`da193d4f` #7621 预设供应商模型与标准定价刷新 + 已下线模型条目清理、`f8788719` #6632 Sub2API 品牌图标、`3ed58925` 应用切换器非激活彩色图标去色、`a06a41ec` FluxA 付费 API 计数改 13,000+）；上一个基线 `f2537fdf`（2026-09-22，含 v3.20.4 发版在内共 25 个提交：`5a80e300` #7434 Codex live auth 无凭据时保留已存登录、`56df6513` #5404 Copilot Chat 剥离 `stop`、`a35e5000` #7454 `additional_tools` 载体抬升、`83a24dfb` #7476 `detail:original` 图片归一化、`c8e76bbc` #7378 工具描述缺失省略、`d6e05152` #7531 GPT-5.6/Astra 保留 `max`、`8e478b2b` #7369 grok-4.x 家族白名单、`f2537fdf` #7595 models 形状容错、`701c079b` #7348 WSL 探测忽略 shell 启动输出、`6f6087cd` #6348 skip_taskbar 重置、`c715ee2b` #7053 会话 URL 归因、`4837fe2c` #5211 切换 app 重置滚动、`09c5d39d` #7578 mcode 刷新、`06c03621` #6826 Pi logo、`4b1ec8b5` CI 前端稳定化、`f8821c03` About star 提示、`bbee784d` Soshow 预设、`54640b95` SudoCode 备用端点、`bccfaf37`/`de970c13` i18n、定价 `85caa69e`/`85894582`/`42200b42`） |
-| 本地领先 | 417 提交（`git rev-list --count upstream/main..main`）= fork 全特性 + 历次上游 merge 同步 |
-| 本次 merge | 2026-09-25 `447750a7` 合入上游 `a06a41ec`（4 提交，28 文件 +1735/-199，**零冲突**全自动合并，未手工介入）；上一次 2026-09-23 `476d3723`（25 提交，5 处冲突手工解）见第 5 节 |
+| 上游基线 | 1ee2fdc3（2026-09-26，13 个提交；明细见第 5 节；上一基线 a06a41ec，2026-09-24） |
+| 本地领先 | 420 个提交（git rev-list --count upstream/main..main，含本次同步记录） |
+| 本次 merge | 2026-09-28 bb7b5f11 合入上游 1ee2fdc3（13 个提交，116 文件 +5848/-4055，5 处内容冲突手工解，见第 5 节）；上一次 2026-09-25 447750a7（4 个提交，零冲突） |
 | 本地版本 | `v3.20.4`（随 merge 对齐上游版本号；上游已打 tag `v3.20.4`，fork 最新 release 仍为 `v3.20.3`，未发同名版本；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 `Merge upstream/main (…, N commits) into fork`，最近一次 2026-09-25 |
-| 测试规模 | Rust 3051（`--lib` 全绿；Windows 本地需隔离 `HOME`，见 6.3）+ 前端 vitest 1173（141 文件；32 线程默认并发下两个长用例贴在超时边界，见 6.4） |
+| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-09-28 |
+| 测试规模 | 最近验证于 2026-09-25：Rust 3051 + 前端 vitest 1173（141 文件）；本次同步未运行测试 |
 
 ## 2. 修改总览（按主题）
 
@@ -537,6 +537,24 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > （无新版本），fork 版本号保持 `3.20.4` 未 bump；本地 `v3.20.4` 标签经复核仍指向 fork 提交
 > `004e2dc1`（非上游提交，符合 6.1）。merge 提交 `447750a7` 已推送 `origin/main`
 > （本机克隆未配置 `cnb` 远端，见 6）。
+
+> 2026-09-28 同步（无 release）：合入上游 a06a41ec 之后的 13 个提交至 1ee2fdc3——
+> GPT-6 Sol/Luna 的 Codex OAuth 身份要求升至 0.155.0，并在代理中保留 max 推理档；
+> Homebrew Cask 改用 brew upgrade --cask，Codex 独立安装版原地重跑官方安装器升级；
+> About 增加 MiniMax Code 安装/升级检测，MiniMax Code 预设透传 MCode 可表达的 Pi compat
+> 并跳过不支持的 compat，另修正空状态文案；Zhipu 增加支持图片输入的 GLM-5.3-Flash
+> Codex 预设。四语 README 重组和事实刷新、开发文档迁入 CONTRIBUTING、赞助联系邮箱更新；
+> Codex 路由指南及 v3.20.4 中/英/日用户手册同步刷新。116 文件 +5848/-4055。
+> 冲突 5 处：四语 README 与本地改版相交，保留英文 hero 与四语架构说明，正文采用上游刷新内容；
+> mcodeProviderPresets.ts 采用上游可表达 compat 的筛选与映射实现。
+> 分歧点核对：第 4 节逐条复核，分歧实现均保留。transform.rs 只扩展允许 max 的 GPT-6
+> 模型列表；4.14 的 Codex ultra→max 钳制实现仍在 transform_codex_chat.rs，
+> 不受本次 Claude→OpenAI 档位变更影响。claude.rs 的改动仅更新 OAuth 身份版本断言；
+> 4.5 atomic_write、4.9 会话用量 upsert、4.10 takeover 策略、4.13 NativeResponses 模板、
+> 4.16 内联品牌 SVG 以及其余 fork 专属实现未被本次上游改动覆盖。Codex/MiniMax 安装升级
+> 逻辑并入现有 lifecycle 管理，UpdateCommand::Unmanaged 防止未知原生安装被 npm 旁路安装。
+> 冲突检查与 git diff --check 通过；本轮未运行测试。上游没有新版本 tag，fork 仍为 3.20.4，
+> 未 bump 版本。merge 提交 bb7b5f11 尚未推送 origin/main。
 
 ## 6. 维护约定
 
