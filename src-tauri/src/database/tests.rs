@@ -1414,3 +1414,30 @@ fn init_hardens_world_readable_database_file() {
         "Database::init 应把已存在的 0644 库文件收紧到 0600"
     );
 }
+
+#[test]
+fn incremental_vacuum_reclaims_entire_freelist() {
+    let temp = NamedTempFile::new().expect("create temp db file");
+    let conn = Connection::open(temp.path()).expect("open temp db");
+    conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
+        .expect("set incremental auto_vacuum");
+    conn.execute_batch(
+        "CREATE TABLE bulk (payload BLOB);
+         WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200)
+         INSERT INTO bulk SELECT zeroblob(4096) FROM n;
+         DELETE FROM bulk;",
+    )
+    .expect("fill and clear table");
+
+    let freelist = |conn: &Connection| -> i64 {
+        conn.query_row("PRAGMA freelist_count;", [], |row| row.get(0))
+            .expect("read freelist_count")
+    };
+    assert!(
+        freelist(&conn) > 100,
+        "deleting rows should leave free pages"
+    );
+
+    Database::incremental_vacuum_on_conn(&conn).expect("incremental vacuum");
+    assert_eq!(freelist(&conn), 0, "all free pages should be reclaimed");
+}

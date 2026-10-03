@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | 1ee2fdc3（2026-09-26，13 个提交；明细见第 5 节；上一基线 a06a41ec，2026-09-24） |
-| 本地领先 | 420 个提交（git rev-list --count upstream/main..main，含本次同步记录） |
-| 本次 merge | 2026-09-28 bb7b5f11 合入上游 1ee2fdc3（13 个提交，116 文件 +5848/-4055，5 处内容冲突手工解，见第 5 节）；上一次 2026-09-25 447750a7（4 个提交，零冲突） |
-| 本地版本 | `v3.20.4`（随 merge 对齐上游版本号；上游已打 tag `v3.20.4`，fork 最新 release 仍为 `v3.20.3`，未发同名版本；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-09-28 |
-| 测试规模 | 最近验证于 2026-09-28：Rust **3094** + 前端 vitest **1183**（143 文件） |
+| 上游基线 | bfaaba16（2026-10-02，**64 个提交**；明细见第 5 节；上一基线 1ee2fdc3，2026-09-26） |
+| 本地领先 | 423 个提交（git rev-list --count upstream/main..main，含本次同步记录） |
+| 本次 merge | 2026-10-03 合入上游 bfaaba16（64 个提交，**306 文件 +49 253 / −30 217**，28 处冲突手工解，见第 5 节）；上一次 2026-09-28 bb7b5f11（13 个提交，5 处冲突） |
+| 本地版本 | `v3.20.4`（上游未发新 tag，fork 版本号保持未 bump；fork 发布序列见第 5 节） |
+| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-03 |
+| 测试规模 | 最近验证于 2026-10-03：Rust **3276** + 前端 vitest **1795**（158 文件） |
 
 ## 2. 修改总览（按主题）
 
@@ -30,6 +30,12 @@
 | **响应体字节上限实现**（v3.19.2 同步） | 方法统一为上游 `bytes_with_limit`（Buffered 变体事后比较 + 流式逐块超限截停 + `ResponseBodyTooLarge` 错误），上限保留 fork 的 `MAX_BUFFERED_PROXY_BODY_BYTES = 200MB`（上游 128MB）；content_encoding 采用上游 `decompress_body_with_limit`（解码器读取侧预算、压缩炸弹在预算处截停、TooLarge 与数据损坏区分） |
 | **工具历史恢复**（新增 `codex_chat_history.rs`） | Codex Responses→Chat 桥下按会话恢复 function_call 与 reasoning_content；StoreKey 复合键会话隔离（防串话）+ 512 响应/4096 call 规模上限 |
 | **OpenCode Go 网关特化**（claude.rs `is_opencode_go_gateway`） | `opencode.ai/zen/*` 上游**保留** OpenAI 请求体的 cache_control 断点/prompt_cache_key（Go 网关认可），其他 OpenAI 兼容上游维持剥离 |
+
+> 2026-10-03 同步：Claude→Chat 转换路径的流首 inline ` thinking`/`<thinking>` 剥离改用上游
+> `InlineThinkSplitter`（#7741）实现；fork 的终态必达（截断流补 `end_turn`）、转换器缓冲上限
+> （1MB）、`delta.refusal` 映射、多 `[DONE]` 防护叠加在其上（差异与测试改写在 4.20）。
+> `services/proxy.rs` 的 live 写入整体改由上游 `mode`/`live` 引擎接管，fork 在此文件的旧特化
+> （接管回滚、stale backup）随之移除（见 4.10 与第 5 节记录）。
 
 ### 2.2 安全强化
 
@@ -102,9 +108,9 @@
 |---|---|
 | Claude 会话用量冻结行上推 | 上游 `INSERT OR IGNORE` 短路 → fork `ON CONFLICT` upsert（`data_source='session_log'` 守卫 + `output_tokens` 单调推进），见 4.9 |
 | 小时桶累计 | `get_daily_trends` 小时桶越界从"覆盖"改为"累加"（`9d793c51`），修复最后 1 小时用量少算 |
-| 接管判定 | 统一收敛到 `AppType::takeover_active` 策略矩阵，见 4.10 |
-| 热切换回滚 | live 写失败时回滚 DB 中 current-provider 指针（`7cebd071`，上游只回滚 backup/live） |
-| stale backup | 接管/热切换中 stale live backup 不阻塞 Codex/Gemini 供应商写入（`06b57082`/`7efdc361`） |
+| 接管判定 | 统一收敛到 `AppType::takeover_active` 策略矩阵，见 4.10。**2026-10-03 同步后：上游新 `mode` 引擎接管该决策，该矩阵已无生产调用点（仅剩单测）** |
+| 热切换回滚 | live 写失败时回滚 DB 中 current-provider 指针（`7cebd071`，上游只回滚 backup/live）。**2026-10-03 同步后：由上游 `mode::controller` 的 settled/staged 写入与指针提交取代** |
+| stale backup | 接管/热切换中 stale live backup 不阻塞 Codex/Gemini 供应商写入（`06b57082`/`7efdc361`）。**2026-10-03 同步后：旧接管判定一并移除** |
 | v3.20.1 会话扫描重构 | 合入上游增量 byte-cursor 扫描、auto/manual 会话扫描模式、non-append rewrite 检测与 Sync Now 门控；fork 的 Claude upsert 分歧保留（见 4.9），`should_skip_session_insert` 封装继续供 gemini/codex/opencode 使用 |
 
 ### 2.7 个人工具链（非上游内容，同步时忽略）
@@ -113,8 +119,8 @@
 
 ### 2.8 测试
 
-- 单测从上游基线约 2000 增至 **2867**（proxy 协议层每个改动点都有行为钉桩测试）
-- 前端 vitest **1022**（新增 codex 预设默认值、universal 预设、TOML 边界等套件）
+- 单测从上游基线约 2000 增至 **3276**（proxy 协议层每个改动点都有行为钉桩测试）
+- 前端 vitest **1795**（158 文件；含 codex 预设默认值、universal 预设、TOML 边界等套件）
 
 ## 3. 本地新增文件（上游不存在）
 
@@ -227,6 +233,9 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 ### 4.6 wire_api 迁移（chat→responses）
 
 - 上游全库只写 `"responses"`，遇存量 `"chat"` 直接报错；fork 在写盘前自动迁移。
+- **状态（2026-10-03）**：已由上游新引擎取代——`live/project/codex.rs` 在 route 投影时统一写
+  `wire_api = "responses"`，上游自有测试 `legacy_shapes_become_the_custom_route` 覆盖该保证；
+  fork 的 `migrate_codex_wire_api_in_toml` / `normalize_codex_wire_api` 随旧写入路径删除。
 - **原因**：上游 Codex 已**移除** Chat wire API——配置里残留 `"chat"` 反序列化
   直接报错、Codex 启动即失败。CC Switch 旧模板、用户手写配置、第三方预设都可能
   残留该值；fork 写盘前自动迁移是唯一出路。迁移保持幂等（无 chat 值逐字节原样
@@ -277,6 +286,11 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 
 ### 4.10 接管（takeover）判定策略（app_config.rs / services/proxy.rs / live.rs）
 
+> **状态（2026-10-03）**：已由上游新架构取代——`mode::controller` 用显式 mode 状态
+> （`mode/state`/`mode/current`）与 `reject_unsupported_official` 决定写入路径，不再依赖
+> “backup 存在即接管” 的启发式；`AppType::takeover_active` 已无生产调用点（仅剩
+> `app_config.rs` 的单测与 `takeover_active_policy_matrix`），待后续清理。原文保留供参考。
+
 - **上游**：`get_takeover_status` 简单布尔，无 per-app 语义。
 - **fork**：统一收敛到 `AppType::takeover_active(has_backup, live_taken_over)`：
   - Claude / ClaudeDesktop：**存在 backup 即视为接管**（switch 语义）；
@@ -315,6 +329,10 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 - ⚠️ 上游合并时若去掉排除表，UI 删除操作会再次失效（本地提交 `63632ade`）。
 
 ### 4.13 NativeResponses 模板保留完整能力（gpt-5.6-sol vs 上游中性模板）
+
+> **状态（2026-10-03）**：随 4.19 一并转出——`CodexResponsesTemplate` 与模板选择参数链已随旧
+> live 写入路径删除；`gpt5_6_sol_template.json` 仍入库但当前无生产引用
+> （上游新引擎默认使用 `codex_native_responses_template.json`）。原文保留供回植参考。
 
 - **上游**（40cac1a6）：NativeResponses 用中性模板 `codex_native_responses_template.json`
   （无 apply_patch、web_search，仅 none/high 两档 reasoning），因 MiMo 等网关拒绝
@@ -366,6 +384,10 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   （正向断言顶层写入）。
 
 ### 4.15a custom 表缺失时自动补建并写入 bearer token（fork 保留）
+
+> **状态（2026-10-03）**：已由上游新引擎取代——`live/project/codex.rs` 在 route 投影时自行补建
+> `[model_providers.<id>]` 表并写表内 `experimental_bearer_token`，fork 的
+> `set_codex_experimental_bearer_token` / `plan_codex_live_write` 已删除。原文保留供参考。
 
 - **上游**：custom `model_provider` 引用存在但 `[model_providers.<id>]` 表缺失时，
   `set_codex_experimental_bearer_token` 写顶层 `experimental_bearer_token`。
@@ -426,12 +448,58 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 
 ### 4.19 NativeResponses 目录模板可配（meta `codexNativeResponsesTemplate`）
 
+> **状态（2026-10-03）**：**转出**——`CodexResponsesTemplate::{Full,Neutral}`、
+> `load_codex_native_responses_template(template)`、`resolve_codex_responses_template` 与
+> `prepare_codex_live_config_text_with_optional_catalog` 随旧路径删除；provider meta
+> 字段 `codexNativeResponsesTemplate` 保留在 `provider.rs`（未读，兼容旧数据）。
+> 如需在 `mode`/`live` 新引擎上恢复该开关，应在目录构建处挂钩（见第 5 节待办）。原文保留供回植参考。
+
 - **默认**：`full`（gpt-5.6-sol 全量模板，即 4.13 的 fork 行为）。
 - **`neutral`**：上游中性模板——该文件（`codex_native_responses_template.json`）本次**恢复入库**；无 freeform `apply_patch` / `web_search`，仅 none/high 两档 reasoning。
 - **原因**：4.13 把 MiMo/LongCat 等“拒绝 `type=="custom"` 工具”的网关推给 ProxyChat 路径规避；给出开关后这类网关可继续走原生 Responses，代价是能力降级（用户自选）。
 - **实现**：`codex_config::CodexResponsesTemplate::{Full,Neutral}` + `load_codex_native_responses_template(template)`；`resolve_codex_responses_template(provider)`（在 `proxy/providers/codex.rs`，与 `resolve_codex_catalog_tool_profile` 并列）经 `prepare_codex_live_config_text_with_optional_catalog` / `write_codex_provider_live_with_catalog` 的**显式参数**下传（4 个 live 写入点传 provider 选定值；无 Provider 在手的逐字恢复路径用默认 `Full`）。ProxyChat profile 不受影响（走独立模板路径）。
 - **对应测试**：`codex_responses_template_from_meta_value_maps_neutral_only`、`neutral_template_drops_freeform_tools_and_reasoning_tiers`、`native_catalog_uses_selected_responses_template`。
 - ⚠️ 同步注意：上游若给 `prepare_codex_config_text_with_model_catalog` 加新调用点，必须一并传 template 参数，否则静默回退 `Full`（3 参数包装已标 `#[allow(dead_code)]`，不再供生产使用）。
+
+### 4.20 截断流终态：fork 补 `end_turn` vs 上游「不发任何终止事件」
+
+- **上游**：转换流（Claude→Chat）在上游 EOF 且无 `finish_reason`/`[DONE]` 时不发任何终止事件（也不会补 `message_delta`/`message_stop`）。
+- **fork**：保留 fork 的「终态必达」——有实质输出（`has_substantive_output`）时补 `end_turn` + `message_stop`；完全无输出时才发 `error`（伪成功防护）。合并后同时保留了上游的 inline-think 剥离（`InlineThinkSplitter`）与 fork 的缓冲上限/`refusal`/多 `[DONE]` 防护。
+- **原因**：Claude Code 在只有 `message_start` 时不会自行结束回合，没有终止事件就永久挂起；上游的取舍是“宁可挂起也不伪造成功”。fork 面向不稳定的第三方网关（断流常见），选择诚实补终态（`end_turn` 不是伪造成功，而是“上游未给原因”的最小合法收尾）。
+- **对应测试**：上游的 `review_eof_keeps_received_partial_payload` / `review_progress_during_continuous_reasoning` 在本 fork 已改写为断言 fork 语义（载荷必达 + 补 `end_turn` + 有 `message_stop`、无 `error`），并在注释里写明与上游的差异。
+
+### 4.21 请求上下文创建期的错误 → 协议错误响应体（fork）
+
+- **上游**：`RequestContext::new` 失败（如未配置任何供应商 → `NoProvidersConfigured`）时用 `?` 直接返回 `Err(ProxyError)`，由 axum 的 `IntoResponse` 收尾。
+- **fork**：Claude / Codex / Gemini 三条入口在 ctx 创建失败时返回该客户端协议的格式化错误体（`build_anthropic_request_error_response` / `build_codex_request_error_response` / `build_gemini_request_error_response`），状态码仍走 `map_proxy_error_to_status`（未配置供应商 = 503）。
+- **例外**：`handle_responses_for_app`（Codex / Grok Build 共用的 `/responses`）保持上游的 `?` 传播。
+- **原因**：客户端只认真实协议错误体；裸 `Err` 在部分客户端表现为“无结构失败/连接错误”，用户无法得知真实原因（例如“没有配置供应商”）。
+- **对应测试**：上游的 `unresolvable_stacked_ids_are_rejected_in_the_clients_protocol` 末段在本 fork 已改写为断言 503 + `{"type":"error","error":{"type":"api_error"}}`。
+
+### 4.22 MCP 扩展字段白名单需含传输专属字段
+
+- **上游**：`json_server_to_toml_table` 用 `skipped_fields`（按传输方式排除另一侧专属字段）+ 无条件写其余键；`extended_fields` 只用于日志措辞。
+- **fork**：同一函数只写 `extended_fields` 白名单内的键（防“写了被 Codex serde 静默忽略”的键），但上游新增的传输清单要求把 `env_vars`（stdio）、`env_http_headers` / `http_headers_helper`（url）也列入白名单。
+- **原因**：两套名单职责不同——`skipped_fields` 决定“本传输不该写的”，`extended_fields` 决定“Codex 认得、值得写盘的”；差集会导致导入的 MCP 字段在切换时静默丢失（上游 `codex_only_fields_follow_their_transport` 测试会失败）。
+
+### 4.23 DeepSeek V4 Pro 多模态（数据层）
+
+- **上游**：`codex_deepseek_catalog_template.json` 声明 `deepseek-v4-pro` 为 text-only；上游测试 `vendor_catalog_matched_model_keeps_vendor_modalities` 断言 `["text"]`。
+- **fork**：该模板声明 `["text","image"]`（2026-09-14 起官方把 V4 Pro 路由到识图的 V4.1 Flash；见 v3.19.2-a 发布说明），因此本 fork 的同一测试断言 `["text","image"]`。
+
+### 4.24 预设数据：不含 `personality`、不含 `disable_response_storage`/`requires_openai_auth`
+
+- **上游**：Codex 预设保留 `disable_response_storage = true`；本轮又给 E-FlowCode 加了 `modelCatalog` 并删掉 `personality`；新增测试 `tests/config/presetPreferenceKeys.test.ts` 规定预设顶层只能是“上游/协议键”。
+- **fork**：`generateThirdPartyConfig` 不写 `disable_response_storage`、不写 `requires_openai_auth`（keyless 安全闸）；本 fork 接受上游“预设不携带个人偏好”的规则，删掉 E-FlowCode 的 `personality`，保留 `model_context_window` / `model_auto_compact_token_limit` 与 `modelCatalog`。
+- **对应测试**：上游新增的金标快照 `tests/components/__snapshots__/ProviderForm.presetRows.golden.test.tsx.snap` 中 xAI/Nvidia/E-FlowCode 三个 codex 用例已按 fork 预设重新生成（差异仅为上述两项移除 + E-FlowCode 字段），原因即本节。
+
+### 4.25 依赖：`toml` 1.0 / `toml_edit` 0.25（fork 的 dependabot 升级）
+
+- **上游**：`toml = "0.8"`、`toml_edit = "0.22"`（本轮新代码按 0.22 API 写）。
+- **fork**：dependabot 已升到 `toml = "1.0"` / `toml_edit = "0.25"`（`494ad6f6`）。合并时需两处适配：
+  - `toml_edit::Table::set_position` 在 0.25 接收 `Option<isize>`（0.22 是 `isize`）：`live/patch/toml.rs`、`live/project/codex.rs`、`live/project/grok.rs` 各加一层 `Some(..)`；
+  - `toml::Value` 在 1.0 只解析**单个值**（`ValueDeserializer`），解析整份文档必须用 `toml::from_str::<toml::Value>()` / `toml::Table`：`codex_config.rs` 三处 `config_text.parse::<toml::Value>()` 已改为 `toml::from_str::<toml::Value>(config_text)`（否则 `extract_codex_base_url` 等函数静默返回 `None`）。
+- ⚠️ 上游新代码里若再出现 `.parse::<toml::Value>()`，同样必须改写。
 
 ## 5. 本地发布序列
 
@@ -643,6 +711,57 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > `~/.cc-switch/model-pricing.json`（6.3 记录的已知问题），已按 6.3 的清理说明恢复为
 > 默认值（`includeCommonModels: true`、空 `models` / `deletedModelIds`）。
 
+> 2026-10-03 同步（无 release）：合入上游 `1ee2fdc3` 之后的 **64 个提交**至 `bfaaba16`
+> （306 文件 +49 253 / −30 217）。本轮是**上游的架构级重写**：新增 `src-tauri/src/live/`
+> （`engine.rs` 320 / `patch/{json,toml,dotenv}.rs` / `floor.rs` / `project/{claude,codex,gemini,grok}.rs`）
+> 与 `src-tauri/src/mode/`（`controller.rs` 6 242 行：`lock_settled`、`enter/exit`、`switch_route`、
+> `stack` 成员集、`reject_unsupported_official`……）取代旧 live 写入路径；
+> 同时新增 `services/provider/{claude,codex,gemini,grok}_direct.rs` / `*_editor.rs`、
+> `live/project/codex.rs` 的 route 投影与 `codex_stack_*` 目录、`toml` 补丁引擎、
+> 「Stack 模式」（原 attached models 改名）。净删除：`services/proxy.rs −10 497`、
+> `provider/mod.rs −2 051`、`provider/live.rs −2 112`、`codex_config.rs −4 361`、`services/config.rs −190`。
+>
+> **冲突 28 处，全部手工解**：README.md（保留 fork 本地 banner 资源 + 取上游 track_id 链接）、
+> `assets/partners/logos/etok.png`（随上游赞助位下线删除）、`claude_desktop_config.rs`（改用上游
+> patch 引擎，回植 fork 的 3P profile 字段/`supports_1m=false`/测试）、`config.rs`（fork 的
+> `retry_transient_io` fallback 与上游 `write_text_file_private` 并存）、`database/{tests.rs,dao/proxy.rs}`、
+> `mcp/codex.rs`（采用上游 0.160 传输字段名单 + 保留 fork 白名单，见 4.22）、`services/config.rs`、
+> `import_export_sync.rs`、`provider_service.rs`（采用上游；fork 的旧 sync-path 测试随 `ConfigService::
+> sync_current_providers_to_live` 下线一并移除）、`streaming.rs`（上游 inline-think 剥离 + fork 的
+> 伪成功防护/截断流防护/缓冲上限/`refusal` 全部并存，两处上游测试按 4.20 改写）、
+> `transform_codex_chat.rs`（fork 的 `response_format` 注入 + 上游 compaction 语义并存）、
+> `response_processor.rs`、`handler_context.rs`（fork 的 `is_classifier_request`/`classifier_mode`
+> 与上游 `is_stack` 并存）、`proxy/providers/mod.rs`、`handlers.rs`（fork 的错误响应/分类器分支 +
+> 上游 Stack：`resolve_stack_target` 与 `stack` 参数）、`forwarder.rs`（fork 媒体整流注释 + 上游
+> `mut e`）、McodeProviderForm.tsx（采用上游 providerKey 校验）、codexProviderPresets.ts（见 4.24）、
+> ClaudeFormFields/CodexFormFields/ProviderForm（fork 缓存开关 UI 与上游 Stack 布局/`reasoningFields`
+> 并存）、`providerConfigUtils{,.test}.ts`（保留 fork 的 `isMatchingDomain`，随上游删除
+> common-config snippet 机制）。
+>
+> **行为分歧变更**（逐条核对结果）：
+> - **由上游新引擎取代、fork 实现随之移除**（转出 4.x，待后续清理残余物）：
+>   4.6（`wire_api = "chat"` 存量迁移）——新引擎在 route 投影时统一写 `wire_api = "responses"`
+>   （上游 `live/project/codex.rs::legacy_shapes_become_the_custom_route` 已覆盖该保证）；
+>   4.10（接管判定策略矩阵）——`AppType::takeover_active` 已无生产调用点，仅剩 `app_config.rs` 单测；
+>   4.13/4.19（NativeResponses 模板可配）——`CodexResponsesTemplate`、`resolve_codex_responses_template`、
+>   `prepare_codex_live_config_text_with_optional_catalog` 随旧路径删除；provider meta
+>   `codexNativeResponsesTemplate` 字段保留（未读）；
+>   4.15a（custom 表缺失时补建 bearer token）——上游 `live/project/codex.rs` 自行建表并写表内 token。
+> - **保留**：4.1（mid-conversation system → user，开关 `midConversationSystemPolicy`）、4.2（分类器
+>   fail-open）、4.3、4.4、4.5（`atomic_write` unix 权限语义 + create-new 即 0600）、4.7（severity）、
+>   4.8、4.9（Claude 会话用量 upsert）、4.11（deeplink `claude-desktop`）、4.12（`HERMES_UI_OWNED_KEYS`）、
+>   4.14（`ultra` → `max` 钳制）、4.16（品牌图标内联 SVG）、4.17（a/b/c 缓存链路开关）、4.18（a/b 行为开关）。
+> - **本轮新增分歧**：4.20（截断流终态）、4.21（ctx 创建期错误 → 协议错误体）、4.22（MCP 白名单）、
+>   4.23（DeepSeek V4 Pro 多模态）、4.24（预设数据取舍）、4.25（`toml` 1.0 / `toml_edit` 0.25 适配）。
+>
+> 验证（2026-10-03）：Rust `cargo test --lib` **3276 passed / 0 failed**（`HOME` 隔离，见 6.3）、
+> `cargo fmt --check` / `cargo clippy --all-targets -- -D warnings` 全绿；
+> 前端 `pnpm vitest run --maxWorkers=8` **158 文件 / 1795 用例**全绿、`pnpm typecheck` /
+> `pnpm format:check` / `pnpm build:renderer` 全绿。金标快照按 4.24 重新生成（3 个 codex 用例）。
+> ⚠️ 本机 `cargo test --tests`（集成测试二进制）因 rlib/staticlib 解析问题无法链接（既有环境问题，
+> 非本次回归；`cargo check --all-targets` 与 `cargo test --lib` 均通过），详见 6.5。
+> merge 提交尚未推送 `origin/main`（本机克隆未配置 `cnb` 远端，见 6）。
+
 ## 6. 维护约定
 
 - **上游同步**：`git fetch upstream --no-tags && git merge upstream/main`，merge 后跑
@@ -772,3 +891,24 @@ pnpm vitest run --maxWorkers=8
 建议（未擅自实施，会连带改变 CI 行为，需人工定夺）：在 `vitest.config.ts` 固定 `maxWorkers`，
 或给这两个长用例留出显式预算，否则每次全档跑都可能随机红一个。v3.20.3 之前本地也出现过同类
 边界失败。
+
+### 6.5 本机 `cargo test --tests` 无法链接（集成测试二进制，既有环境问题）
+
+2026-10-03 同步时发现：本机跑 `cargo test --tests`（或裸 `cargo test`）会在**集成测试二进制**的
+链接阶段失败，报错形如：
+
+```
+error[E0462]: found staticlib `displaydoc` instead of rlib or dylib which `cc_switch_lib` depends on
+error: crate `walkdir` required to be available in rlib format, but was not found in this form
+error: only metadata stub found for `rlib` dependency `alloc` ... / cannot resolve a prelude import
+```
+
+与代码无关：`cargo check --all-targets`（全部 test target 类型检查）、`cargo clippy --all-targets`、
+`cargo test --lib`（3276 用例）都正常。推测本机 target 目录中依赖的 rlib/staticlib 形态被
+`[lib] crate-type = ["staticlib","cdylib","rlib"]` + 集成测试的链接需求混用所致；一次
+`cargo clean -p cc-switch` 也不能修复。
+
+规避：日常按本文档的口径验证 —— `cargo test --lib` + `cargo clippy --all-targets -- -D warnings`
++ `cargo fmt --check`；如需完整集成测试（`src-tauri/tests/*`）建议在 CI 或 WSL 中跑。
+根治方向（未擅自实施）：给集成测试目标单独跑 `CARGO_TARGET_DIR`，或把 `crate-type` 中的
+`staticlib`/`cdylib` 移到仅在打包时启用。

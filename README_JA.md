@@ -29,11 +29,11 @@
 <details open>
 <summary>クリックで折りたたむ</summary>
 
-[![Kimi K2.7 Code](https://gcdn.moonshot.cn/growth-cdn/sponsor/kimi-en.png)](https://platform.kimi.ai?track_id=track-20d65732f0aa45dcb1df9691a15610af&aff=cc-switch)
+[![Kimi K2.7 Code](https://gcdn.moonshot.cn/growth-cdn/sponsor/kimi-en.png)](https://platform.kimi.ai?track_id=track-674ed6e2af924a5682a87421f7cf753a&aff=cc-switch)
 
 Kimi K3 は Moonshot AI がこれまでに開発した中で最も高性能なモデルであり、世界初のオープンソース 3T クラスモデルです。2.8 兆パラメータ、ネイティブな視覚能力、100 万トークンのコンテキストウィンドウを備え、長期にわたるコーディング、ナレッジワーク、推論タスクにおいてフロンティア級の性能を発揮します。CC Switch を使えば、さまざまなエージェントツールで Kimi を手軽に設定・切り替えできます。
 
-コーディング作業がメインですか？**Kimi Code プラン**（[中文站](https://www.kimi.com/code?aff=cc-switch) | [Global](https://www.kimi.ai/code?aff=cc-switch)）を試すか、Kimi オープンプラットフォームの **API**（[中文站](https://platform.kimi.com?track_id=track-6840233b42274ab4bcfd283e2bdd2aee&aff=cc-switch) | [Global](https://platform.kimi.ai?track_id=track-20d65732f0aa45dcb1df9691a15610af&aff=cc-switch)）をご利用ください。
+コーディング作業がメインですか？**Kimi Code プラン**（[中文站](https://www.kimi.com/code?aff=cc-switch) | [Global](https://www.kimi.ai/code?aff=cc-switch)）を試すか、Kimi オープンプラットフォームの **API**（[中文站](https://platform.kimi.com?track_id=track-7cf2b91dcde043eda6ef9a95951a042c&aff=cc-switch) | [Global](https://platform.kimi.ai?track_id=track-674ed6e2af924a5682a87421f7cf753a&aff=cc-switch)）をご利用ください。
 
 **新規ユーザー初回チャージ特典**：上記の API リンクから登録し、初回チャージを完了すると、チャージ金額の 10%（最大 CNY ¥1,000）が API クレジットとして進呈されます。
 
@@ -191,11 +191,6 @@ TeamoRouter は、集中請求、チーム管理、BYOK、スマートルーテ�
 </tr>
 
 <tr>
-<td width="180"><a href="https://etok.ai"><img src="assets/partners/logos/etok.png" alt="ETok" width="150"></a></td>
-<td>ETok.ai のご支援に感謝します！ETok.ai はワンストップ AI プログラミングツールサービスプラットフォームの構築に取り組んでいます。Claude Code のプロフェッショナルプランと技術コミュニティサービスを提供し、Google Gemini や OpenAI Codex にも対応しています。丁寧に設計されたプランと専門的な技術コミュニティを通じて、開発者に安定したサービス保証と継続的な技術サポートを提供し、AI アシストプログラミングを真の生産性ツールにします。<a href="https://etok.ai">こちら</a>から登録してください！</td>
-</tr>
-
-<tr>
 <td width="180"><a href="https://cubence.com/signup?code=CCSWITCH&source=ccs"><img src="assets/partners/logos/cubence.png" alt="Cubence" width="150"></a></td>
 <td>Cubence のご支援に感謝します！Cubence は Claude Code、Codex、Gemini などのリレーサービスを提供する信頼性の高い API 中継プラットフォームで、従量課金や月額プランなど柔軟な料金体系を提供しています。CC Switch ユーザー向けの特別割引：<a href="https://cubence.com/signup?code=CCSWITCH&source=ccs">このリンク</a>で登録し、チャージ時に「CCSWITCH」クーポンを入力すると、毎回 10% オフになります！</td>
 </tr>
@@ -345,6 +340,7 @@ paru -S cc-switch-bin
 ### プロバイダ管理
 
 - **90 以上のプロバイダプリセット** — プリセットを選んでキーを入力するだけで追加。カスタム設定の作成も可能
+- **主要フィールドだけを変更** — 切り替え時に置き換えるのはリクエスト先アドレス、キー、モデルなどの接続情報だけ。プラグイン、フック、MCP、自分で追加した設定やコメントはそのまま残ります
 - **プロジェクト** — Claude Code または Codex の現在のプロバイダ、MCP、Skills、プロンプトファイルを 1 つのプロジェクトとして保存（Claude Desktop はプロバイダのみ保存）。以降はメインページ上部のプロジェクトスイッチャーやトレイから設定一式をワンクリックで切り替え。別のプロジェクトに切り替えると、現在の状態は自動的に元のプロジェクトへ保存
 - **OAuth 認証センター（Beta）** — 「設定 → 認証」で GitHub Copilot、ChatGPT、xAI（Grok）の複数アカウントにログインし、サブスクリプションをプロバイダとして Claude Code、Claude Desktop、Codex で利用（Codex の OpenAI Official 以外はすべてローカルルーティングの有効化が必要）。公式クライアント以外でサブスクリプションを使用すると、ベンダーの利用規約に違反する可能性があります。リスクはご自身で判断してください
 - **Claude Desktop でサードパーティを利用** — Anthropic 互換エンドポイントに直接接続可能。Claude 以外のモデルは「モデルマッピング」を選び、ローカルルーティング経由で Sonnet、Opus、Haiku などのティアをプロバイダの実際のモデルにマッピング
@@ -354,7 +350,7 @@ paru -S cc-switch-bin
 ### ローカルルーティング & フェイルオーバー
 
 - **API 形式の変換** — ローカルルーティングが Anthropic Messages、OpenAI Chat Completions、OpenAI Responses、Gemini Native の間でリクエスト形式を変換。Claude Code と Claude Desktop は OpenAI 形式や Gemini 形式のプロバイダを、Codex と Grok Build は Chat Completions 形式や Anthropic Messages 形式のプロバイダを利用可能
-- **ツールごとに有効化** — Claude Code、Codex、Gemini CLI、Grok Build でそれぞれ個別にローカルルーティングを有効化可能。有効化すると、プロバイダの切り替えが以降のリクエストに即座に反映（切り替えでモデルが変わる場合、Codex と Grok Build は再起動が必要になることがあります）
+- **ツールごとに有効化** — Claude Code、Codex、Gemini CLI、Grok Build でそれぞれ個別にローカルルーティングを有効化可能。有効化すると、プロバイダの切り替えが以降のリクエストに即座に反映（切り替えでモデルが変わる場合、Codex、Gemini CLI、Grok Build は再起動が必要になることがあります）
 - **自動フェイルオーバー** — ツールごとにフェイルオーバーキューを設定し、リクエストが失敗するとキューの順に次のプロバイダへ自動で切り替え。サーキットブレーカーとプロバイダのヘルスモニタリングと連携
 - **整流器** — 一部の上流と互換性のないリクエストを自動で修正（Thinking 署名、画像非対応時のフォールバックなど）
 - 公式プロバイダ（Claude Official など）はローカルルーティングを経由できません（Codex の OpenAI Official を除く）
@@ -402,16 +398,29 @@ CC Switch は **Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**�
 ツールによって異なります：
 
 - **Claude Code**：プロバイダデータのホットスイッチに対応しており、再起動は不要です。
-- **Codex、Gemini CLI、Grok Build**：変更を反映するにはターミナルまたは CLI ツールを再起動してください（Codex と Grok Build は切り替え後に通知が表示されます）。ローカルルーティングを有効にしている場合、リクエストは即座に新しいプロバイダへ転送されますが、切り替えでモデルが変わる場合は Codex と Grok Build の再起動が必要になることがあります。
+- **Codex、Gemini CLI、Grok Build**：変更を反映するにはターミナルまたは CLI ツールを再起動してください（切り替え後に通知が表示されます）。ローカルルーティングを有効にしている場合、リクエストは即座に新しいプロバイダへ転送されますが、切り替えでモデルが変わる場合は、この 3 つのツールは再起動が必要になることがあります。
 - **Claude Desktop**：Claude Desktop を完全に終了してから再度開いてください。「モデルマッピング」を使用する場合は、CC Switch を起動したままにしておく必要もあります。
 - **OpenCode、OpenClaw、Hermes、Pi、MiniMax Code**：これらは共存型のツールです。「追加」（Pi では「有効化」）をクリックするとプロバイダがツール自身の設定に書き込まれ、他のプロバイダと共存します。その後、ツール内で使用するモデルを選んでください。
 
 </details>
 
 <details>
-<summary><strong>プロバイダを切り替えた後、プラグイン設定が消えてしまいました。どうすればよいですか？</strong></summary>
+<summary><strong>プロバイダを切り替えると、プラグインやフックなどの設定も変わってしまいますか？</strong></summary>
 
-CC Switch には「共通設定スニペット」機能（Claude Code、Codex、Gemini CLI に対応）があり、API キー・エンドポイント・モデル以外の設定（プラグイン、フック、環境変数など）をプロバイダ間で共有できます。プロバイダを編集し、「共通設定を編集」→「編集内容から抽出」をクリックすると、これらの共通部分がスニペットに保存されます。新しいプロバイダを作成する際は「共通設定を適用」にチェックを入れたまま（デフォルトで有効）にしておけば、スニペットが新しいプロバイダの設定にマージされます。「共通設定を適用」が有効な Claude Code と Codex のプロバイダでは、別のプロバイダへ切り替える際に CC Switch が現在の設定から共通部分を自動で再抽出するため、ツール内で新たにインストールしたプラグインも次のプロバイダに引き継がれます。元の設定は、アプリ初回起動時にインポートされたデフォルトプロバイダに保存されており、失われることはありません。
+変わりません。Claude Code、Codex、Gemini CLI、Grok Build でプロバイダを切り替えるとき、CC Switch が置き換えるのは設定ファイルの**主要フィールド**だけです。対象はリクエスト先アドレス、キー、モデル名、API プロトコル（Codex は推論レベル、Gemini CLI は認証方式も含む）と、プロバイダに合わせて切り替わる一部の互換オプション（Claude Code の「Artifact ツールを無効化」やコンテキストウィンドウなど）です。プラグイン、フック、権限、MCP、自分で追加した環境変数、コメント、書式はそのまま残り、すべてのプロバイダに適用されます。
+
+これらの共有設定は、ツール内で変更しても、設定ファイルを直接編集しても構いません。CC Switch で任意のプロバイダを編集して変更することもできます。エディタには「このプロバイダに切り替えた後の設定ファイルの内容」が表示され、保存すると主要フィールドはそのプロバイダに保存され、それ以外の変更は設定ファイルに書き込まれてすべてのプロバイダに適用されます。
+
+そのため、以前の「共通設定スニペット」は不要になり、関連するボタンは削除されました。アップグレード前にスニペットに入れていた設定は、切り替えの際にすでに設定ファイルへ書き込まれているので、そのまま残ります。また CC Switch は、各設定ファイルを初めて書き換える前に、元のファイルを `~/.cc-switch/backups/live-first-write/` にバックアップします。
+
+</details>
+
+<details>
+<summary><strong>ツール内でモデルを変えたのに、別のプロバイダに切り替えて戻すと元に戻ってしまうのはなぜですか？</strong></summary>
+
+モデルは主要フィールドで、プロバイダに属します。ツール内で変えたモデル（Claude Code の `/model` など）は次に切り替えるまで有効です。切り替えると、設定ファイルのモデルは切り替え先のプロバイダに保存されたものに置き換わり、ツール内で変えたモデルが元のプロバイダに保存し直されることはありません。特定のモデルを継続して使いたい場合は、CC Switch でそのプロバイダを編集してください。
+
+以前のバージョンは、別のプロバイダへ切り替えるときに設定ファイル全体をプロバイダに保存し直していましたが、現在はそうしていません。その方式では、プラグインなどの共有設定が 1 つのプロバイダに固定されてしまい、別のプロバイダに切り替えると失われていたためです。
 
 </details>
 
@@ -440,7 +449,9 @@ Codex では、CC Switch 内の「ChatGPT でログイン」から複数の Chat
 
 ローカルルーティングを有効にすると、ツールのリクエストはまず CC Switch のローカルルーティング（デフォルトは `http://127.0.0.1:15721`）に送られ、そこから CC Switch が選択中のプロバイダへ転送します。そのため、ツールの設定ファイルにはローカルアドレスとプレースホルダーのキー `PROXY_MANAGED` だけが書き込まれます。Claude Code のモデル名も `claude-sonnet-5` のような固定のエイリアスになります（`/model` メニューには実際のモデル名が表示されます）。実際のプロバイダのアドレス、キー、モデルはすべて CC Switch に保存されています。
 
-「設定 → 利用統計 → リクエストログ」では、各リクエストの「リクエストモデル → 実際のモデル」を確認できます。ローカルルーティングを無効にすると、設定ファイルは現在のプロバイダの実際の設定に戻ります。
+「設定 → 利用統計 → リクエストログ」では、各リクエストの「リクエストモデル → 実際のモデル」を確認できます。
+
+ローカルルーティングを有効にしている間に切り替わるのは、ローカルルーティングが使うプロバイダです。有効にする前に使っていたプロバイダは変わらず、カードに「直接接続」と表示されます。ローカルルーティングを無効にすると、設定ファイルはこの直接接続のプロバイダの設定に書き戻されます。CC Switch を終了するときも先に直接接続のプロバイダを書き戻し、次回起動時にローカルルーティングへ接続し直します。
 
 </details>
 
@@ -472,8 +483,10 @@ Codex では、CC Switch 内の「ChatGPT でログイン」から複数の Chat
 - **Skill バックアップ**: `skill-backups/`（スキルのアンインストールまたは更新の前に自動作成、最新 20 件を保持）
 - **OAuth ログイン認証情報**: `copilot_auth.json`、`codex_oauth_auth.json`、`xai_oauth_auth.json`
 - **ログ**: `logs/cc-switch.log` と `crash.log`（問題を報告する際は添付してください）
+- **この端末の状態**: `live-state.json`（各ツールが直接接続かローカルルーティング経由か、前回何を書き込んだか）、`codex-login-stash.json`（サードパーティのプロバイダに切り替えたときに退避した Codex の公式ログイン。公式プロバイダに戻すと復元されます）
+- **設定ファイルの原本**: `backups/live-first-write/`（CC Switch が各ツールの設定ファイルを初めて書き換える前の元のファイル）
 
-「設定 → 詳細 → 設定ディレクトリ」で「CC Switch 設定ディレクトリ」を変更すると、`settings.json` 以外の上記ファイルはすべて新しいディレクトリに保存されるようになります。CC Switch は既存のファイルを自動では移動しないため、先に手動でコピーしておいてください。
+「設定 → 詳細 → 設定ディレクトリ」で「CC Switch 設定ディレクトリ」を変更すると、`settings.json`、この端末の状態、設定ファイルの原本以外の上記ファイルはすべて新しいディレクトリに保存されるようになります。CC Switch は既存のファイルを自動では移動しないため、先に手動でコピーしておいてください。`settings.json`、この端末の状態、設定ファイルの原本はこのコンピュータ専用のもので、常にデフォルトのディレクトリに置かれ、クラウド同期の対象にもなりません。
 
 </details>
 

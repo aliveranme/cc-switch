@@ -91,7 +91,8 @@ export const providerPresets: ProviderPreset[] = [
   {
     name: "Kimi",
     primePartner: true,
-    websiteUrl: "https://platform.kimi.com?aff=cc-switch",
+    websiteUrl:
+      "https://platform.kimi.com?track_id=track-7cf2b91dcde043eda6ef9a95951a042c&aff=cc-switch",
     settingsConfig: {
       env: {
         ANTHROPIC_BASE_URL: "https://api.moonshot.cn/anthropic",
@@ -110,7 +111,8 @@ export const providerPresets: ProviderPreset[] = [
   // API 开放平台海外/Global 变体：platform.kimi.ai + api.moonshot.ai 端点
   {
     name: "Kimi Global",
-    websiteUrl: "https://platform.kimi.ai?aff=cc-switch",
+    websiteUrl:
+      "https://platform.kimi.ai?track_id=track-674ed6e2af924a5682a87421f7cf753a&aff=cc-switch",
     settingsConfig: {
       env: {
         ANTHROPIC_BASE_URL: "https://api.moonshot.ai/anthropic",
@@ -214,7 +216,6 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://apinebula.ai",
         ANTHROPIC_AUTH_TOKEN: "",
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       },
     },
     endpointCandidates: ["https://apinebula.ai"],
@@ -413,7 +414,6 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://api.apikey.fan",
         ANTHROPIC_AUTH_TOKEN: "",
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       },
     },
     endpointCandidates: [
@@ -611,7 +611,6 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://ark.cn-beijing.volces.com/api/compatible",
         ANTHROPIC_AUTH_TOKEN: "",
-        API_TIMEOUT_MS: "3000000",
         ANTHROPIC_MODEL: "doubao-seed-2-1-pro-260628",
         ANTHROPIC_DEFAULT_SONNET_MODEL: "doubao-seed-2-1-pro-260628",
         ANTHROPIC_DEFAULT_OPUS_MODEL: "doubao-seed-2-1-pro-260628",
@@ -803,22 +802,6 @@ export const providerPresets: ProviderPreset[] = [
     iconColor: "#E96B2C",
   },
   {
-    name: "ETok.ai",
-    websiteUrl: "https://etok.ai",
-    apiKeyUrl: "https://etok.ai",
-    settingsConfig: {
-      env: {
-        ANTHROPIC_BASE_URL: "https://api.etok.ai",
-        ANTHROPIC_AUTH_TOKEN: "",
-      },
-    },
-    category: "third_party",
-    isPartner: true, // 合作伙伴
-    partnerPromotionKey: "etok", // 促销信息 i18n key
-    icon: "etok",
-    iconColor: "#000000",
-  },
-  {
     name: "Cubence",
     websiteUrl: "https://cubence.com",
     apiKeyUrl: "https://cubence.com/signup?code=CCSWITCH&source=ccs",
@@ -882,7 +865,6 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://api.sudocode.chat",
         ANTHROPIC_AUTH_TOKEN: "",
-        API_TIMEOUT_MS: "300000",
       },
     },
     endpointCandidates: [
@@ -902,7 +884,6 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://sudocode.us",
         ANTHROPIC_AUTH_TOKEN: "",
-        API_TIMEOUT_MS: "300000",
       },
     },
     endpointCandidates: ["https://sudocode.us", "https://sudocode.run"],
@@ -1510,7 +1491,6 @@ export const providerPresets: ProviderPreset[] = [
         ANTHROPIC_DEFAULT_SONNET_MODEL: "LongCat-2.0",
         ANTHROPIC_DEFAULT_OPUS_MODEL: "LongCat-2.0",
         CLAUDE_CODE_MAX_OUTPUT_TOKENS: "131072",
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: 1,
       },
     },
     category: "cn_official",
@@ -1525,8 +1505,6 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://api.minimax.cn/anthropic",
         ANTHROPIC_AUTH_TOKEN: "",
-        API_TIMEOUT_MS: "3000000",
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: 1,
         CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000",
         ANTHROPIC_MODEL: "MiniMax-M3[1M]",
         ANTHROPIC_DEFAULT_SONNET_MODEL: "MiniMax-M3[1M]",
@@ -1550,8 +1528,6 @@ export const providerPresets: ProviderPreset[] = [
       env: {
         ANTHROPIC_BASE_URL: "https://api.minimax.io/anthropic",
         ANTHROPIC_AUTH_TOKEN: "",
-        API_TIMEOUT_MS: "3000000",
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: 1,
         CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000",
         ANTHROPIC_MODEL: "MiniMax-M3[1M]",
         ANTHROPIC_DEFAULT_SONNET_MODEL: "MiniMax-M3[1M]",
@@ -1637,17 +1613,11 @@ export const providerPresets: ProviderPreset[] = [
     websiteUrl: "https://e-flowcode.cc",
     apiKeyUrl: "https://e-flowcode.cc",
     settingsConfig: {
-      effortLevel: "high",
       env: {
         ANTHROPIC_AUTH_TOKEN: "",
         ANTHROPIC_BASE_URL: "https://e-flowcode.cc",
+        ENABLE_TOOL_SEARCH: "true",
       },
-      enabledPlugins: {
-        "superpowers@superpowers-marketplace": true,
-      },
-      includeCoAuthoredBy: false,
-      ENABLE_TOOL_SEARCH: true,
-      skipWebFetchPreflight: true,
     },
     category: "third_party",
     endpointCandidates: ["https://e-flowcode.cc"],
@@ -1813,7 +1783,6 @@ export const providerPresets: ProviderPreset[] = [
         ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5",
         ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5",
       },
-      includeCoAuthoredBy: false,
     },
     category: "aggregator",
     icon: "pipellm",
@@ -1897,10 +1866,11 @@ export const providerPresets: ProviderPreset[] = [
     name: "AWS Bedrock (API Key)",
     websiteUrl: "https://aws.amazon.com/bedrock/",
     settingsConfig: {
-      apiKey: "",
       env: {
         ANTHROPIC_BASE_URL:
           "https://bedrock-runtime.${AWS_REGION}.amazonaws.com",
+        // Claude Code 只从这个变量读 Bedrock API Key，顶层 apiKey 它不认
+        AWS_BEARER_TOKEN_BEDROCK: "",
         AWS_REGION: "${AWS_REGION}",
         ANTHROPIC_MODEL: "global.anthropic.claude-opus-5",
         ANTHROPIC_DEFAULT_HAIKU_MODEL:

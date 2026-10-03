@@ -149,7 +149,8 @@ export const codexProviderPresets: CodexProviderPreset[] = [
   {
     name: "Kimi",
     primePartner: true,
-    websiteUrl: "https://platform.kimi.com?aff=cc-switch",
+    websiteUrl:
+      "https://platform.kimi.com?track_id=track-7cf2b91dcde043eda6ef9a95951a042c&aff=cc-switch",
     apiKeyUrl: "https://platform.kimi.com/console/api-keys?aff=cc-switch",
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig(
@@ -211,7 +212,8 @@ export const codexProviderPresets: CodexProviderPreset[] = [
   // 接入形态与国内版一致（原生 Responses 直连），依据见上方国内版注释
   {
     name: "Kimi Global",
-    websiteUrl: "https://platform.kimi.ai?aff=cc-switch",
+    websiteUrl:
+      "https://platform.kimi.ai?track_id=track-674ed6e2af924a5682a87421f7cf753a&aff=cc-switch",
     apiKeyUrl: "https://platform.kimi.ai/console/api-keys?aff=cc-switch",
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig(
@@ -1133,23 +1135,6 @@ wire_api = "responses"
     partnerPromotionKey: "rightcode",
     icon: "rc",
     iconColor: "#E96B2C",
-  },
-  {
-    name: "ETok.ai",
-    websiteUrl: "https://etok.ai",
-    apiKeyUrl: "https://etok.ai",
-    auth: generateThirdPartyAuth(""),
-    config: generateThirdPartyConfig(
-      "etok",
-      "https://api.etok.ai/v1",
-      "gpt-5.6-sol",
-    ),
-    endpointCandidates: ["https://api.etok.ai/v1"],
-    category: "third_party",
-    isPartner: true, // 合作伙伴
-    partnerPromotionKey: "etok", // 促销信息 i18n key
-    icon: "etok",
-    iconColor: "#000000",
   },
   {
     name: "Cubence",
@@ -3265,7 +3250,6 @@ wire_api = "responses"
     config: `model_provider = "custom"
 model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-personality = "pragmatic"
 model_context_window = 1000000
 model_auto_compact_token_limit = 900000
 
