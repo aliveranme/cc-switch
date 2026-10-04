@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | bfaaba16（2026-10-02，**64 个提交**；明细见第 5 节；上一基线 1ee2fdc3，2026-09-26） |
-| 本地领先 | 423 个提交（git rev-list --count upstream/main..main，含本次同步记录） |
-| 本次 merge | 2026-10-03 合入上游 bfaaba16（64 个提交，**306 文件 +49 253 / −30 217**，28 处冲突手工解，见第 5 节）；上一次 2026-09-28 bb7b5f11（13 个提交，5 处冲突） |
+| 上游基线 | 372b1698（2026-10-03，**98 个提交**；明细见第 5 节；上一基线 bfaaba16，2026-10-02） |
+| 本地领先 | **424** 个提交（`git rev-list --count upstream/main..main`，统计于 merge 提交；本次补记提交再加 1） |
+| 本次 merge | 2026-10-04 合入上游 372b1698（98 个提交，**483 文件 +86 924 / −28 753**，17 处冲突手工解，见第 5 节）；上一次 2026-10-03 bfaaba16（64 个提交，28 处冲突） |
 | 本地版本 | `v3.20.4`（上游未发新 tag，fork 版本号保持未 bump；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-03 |
-| 测试规模 | 最近验证于 2026-10-03：Rust **3276** + 前端 vitest **1795**（158 文件） |
+| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-04 |
+| 测试规模 | 最近验证于 2026-10-04：Rust **3440** 单元 + **179** 集成（15 个集成测试二进制，其中金标 39）+ main 0；前端 vitest **2117**（183 文件） |
 
 ## 2. 修改总览（按主题）
 
@@ -78,6 +78,21 @@
   `tests/vitest-jest-dom.d.ts` 按新签名补齐；同时 `vitest.config.ts` 的
   `__dirname` 改为 `import.meta.dirname`（vitest 5 起 Vite config loader 不再
   注入 `__dirname`）。⚠️ jest-dom 上游适配 vitest 5 后应删除该声明文件
+- **Tailwind v3(上游) → v4(fork) 的配置桥接**（2026-10-04）：fork 已删
+  `tailwind.config.cjs` 改跑 Tailwind v4（`@tailwindcss/postcss`），而上游仍用
+  v3 + `tailwind.config.cjs`。**每次同步必须把上游新增的 config 主题项搬进
+  `src/index.css` 的 `@theme`**，否则上游新写的 `bg-surface` / `text-fg-2` /
+  `rounded-panel` 这类工具类会静默失效（不报错、只是没样式）。本轮搬迁：v7
+  设计令牌（色板 / radius `control|panel|dialog` / `shadow-v7-*` / `text` 角色 /
+  中日字体栈）、v3 `borderColor.DEFAULT` → base 层 `* { border-color:
+  hsl(var(--border)) }`、`tailwindcss-animate` → `tw-animate-css`（官方 v4 版，
+  `@utility` 实现才能生成 `data-[state=*]:animate-in` 变体）。详见 4.26
+- **React 19 类型适配**（2026-10-04）：上游按 React 18 写，fork 跑 React 19 +
+  `@types/react` 19。同步后 typecheck 常报 `RefObject<T>` vs
+  `RefObject<T | null>`、`JSX` 全局命名空间消失、lucide 导出改名。本轮修正：
+  `SwitchModePanel.scrollRef` / `SessionReaderHeader.{findInputRef,findButtonRef}`
+  放宽为 `RefObject<T | null>`、`ProviderCardActions` 的 children 改用
+  `DisabledReasonProps["children"]`、`AppsPage.test` 改用 `React.JSX.Element`
 
 ### 2.5 发布 / CI
 
@@ -119,8 +134,8 @@
 
 ### 2.8 测试
 
-- 单测从上游基线约 2000 增至 **3276**（proxy 协议层每个改动点都有行为钉桩测试）
-- 前端 vitest **1795**（158 文件；含 codex 预设默认值、universal 预设、TOML 边界等套件）
+- 单测从上游基线约 2000 增至 **3440** 单元 + **179** 集成（proxy 协议层每个改动点都有行为钉桩测试）
+- 前端 vitest **2117**（183 文件；含 codex 预设默认值、universal 预设、TOML 边界等套件）
 
 ## 3. 本地新增文件（上游不存在）
 
@@ -501,6 +516,45 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   - `toml::Value` 在 1.0 只解析**单个值**（`ValueDeserializer`），解析整份文档必须用 `toml::from_str::<toml::Value>()` / `toml::Table`：`codex_config.rs` 三处 `config_text.parse::<toml::Value>()` 已改为 `toml::from_str::<toml::Value>(config_text)`（否则 `extract_codex_base_url` 等函数静默返回 `None`）。
 - ⚠️ 上游新代码里若再出现 `.parse::<toml::Value>()`，同样必须改写。
 
+### 4.26 Tailwind 主题令牌：上游写在 v3 config，fork 写在 v4 `@theme`
+
+- **上游**：`tailwind.config.cjs` 的 `theme.extend`（色板 / `borderRadius` / `boxShadow` /
+  `fontSize` / `fontFamily` / `borderColor.DEFAULT`）+ `plugins: [require("tailwindcss-animate")]`。
+- **fork**：已删 `tailwind.config.cjs`（见 2.5），改在 `src/index.css` 里用 v4 语法表达：
+  - `@theme { --color-<名>: … }`：v7 设计令牌（`app` / `sidebar` / `subtle` / `selected` /
+    `surface` / `border-strong` / `fg-1..3` / `action*` / `inverse*` / `overlay` /
+    `control-off` / `direct*` / `route*` / `stack*` / `success|warning|danger*` /
+    `agent-*` / `diff-*` / `chart-*`）与既有 Apple 色板；
+  - `--radius-control|panel|dialog`、`--shadow-v7-sm|md|lg`、`--text-<角色>`（配合
+    `--text-<角色>--line-height` / `--text-<角色>--font-weight` 承载 v3 元组第二项）、
+    `--font-sans|mono`（含中日字体回退）；
+  - v3 的 `borderColor.DEFAULT` → base 层 `*, ::before, ::after, ::backdrop,
+    ::file-selector-button { border-color: hsl(var(--border)) }`。v4 默认是 `currentColor`，
+    不补这条的话上游 v7 代码里大量只写 `border`（不带颜色）的边框会跟着文字色跑；
+  - `tailwindcss-animate` → **`tw-animate-css`**（官方 v4 移植版，devDependency）。
+    `animate-in` / `animate-out` / `fade-*-0` / `zoom-*-95` / `slide-in-from-*` /
+    `slide-out-to-*` 必须由 `@utility` 定义（普通 CSS class 不会生成
+    `data-[state=open]:` / `data-[side=bottom]:` 变体），所以不能只把 CSS 抄进文件；
+    手写 `@utility slide-in-from-top-\[48\%\]` 也不行——v4 拒绝带转义字符的 utility 名。
+- **合并核对清单**：每次同步后比对上游 `tailwind.config.cjs` 的 `theme.extend` 与
+  `plugins`，新增项逐条搬进 `src/index.css`，并跑 `pnpm build:renderer` 后 grep 产物 CSS
+  确认新用到的工具类真的生成了（v4 对未定义名字是静默无效）。本轮已验证 53 个 v7 令牌
+  工具类全部出现在产物 CSS 中。
+
+### 4.27 Gemini MCP 超时：fork 未配置时不写 `timeout`（金标快照分歧）
+
+- **上游**（`src-tauri/src/gemini_mcp.rs`）：未配置任何超时时仍写默认值
+  `DEFAULT_STARTUP_MS = 10_000` / `DEFAULT_TOOL_MS = 60_000`，即 `"timeout": 60000`。
+- **fork**（`2196e8c1`）：**两者都未配置时省略 `timeout` 字段**，交给 Gemini CLI 官方默认
+  （600 000 ms / 10 分钟）——强制写 60 s 会把首次 `npx` 冷启动、大文件操作这类长耗时工具
+  调用提前掉。
+- **后果**：上游的 golden 快照
+  `src-tauri/tests/golden/snapshots/mcp/gemini-settings.json` 是以上游行为生成的（前一次同步
+  随上游 golden 测试一并带入），fork 这边会持续报快照不一致。
+- **处理**：用官方开关按 fork 行为重新生成
+  （`CC_SWITCH_UPDATE_GOLDEN=1 cargo test --test golden mcp_bytes::gemini_settings_mcp_projection_bytes`）。
+  ⚠️ 下次同步若上游改了这个快照，**不能直接取上游版**，必须用 fork 行为重生成。
+
 ## 5. 本地发布序列
 
 下表按 GitHub Releases 实际发布时间排序补全（2026-09-17 核对：共 11 个 release，与 `aliveranme/cc-switch` 实况一致）。
@@ -762,6 +816,56 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 非本次回归；`cargo check --all-targets` 与 `cargo test --lib` 均通过），详见 6.5。
 > merge 提交尚未推送 `origin/main`（本机克隆未配置 `cnb` 远端，见 6）。
 
+> 2026-10-04 同步（无 release）：合入上游 `bfaaba16` 之后的 **98 个提交**至 `372b1698`
+> （483 文件 +86 924 / −28 753；144 新增 / 34 删除 / 304 修改 / 1 重命名）。本轮主线是
+> **上游 v7/v8 界面重构 + 会话阅读器重写**：新增 sidebar shell（侧栏外壳 + 全局页面 +
+> 分组设置）、v7 设计令牌与共享原语、结构化会话阅读器
+> （`src-tauri/src/session_manager/{cache,content,model}.rs` + `providers/{blocks,codex_items,
+> opencode_blocks,pi_blocks}.rs`）、usage 全时段热力图与日瓦片、MCP `AppMatrix` 矩阵、
+> 设置页 accounts center（新 `src/components/apps/` 页 + 工具链管理）。同批修复：Claude/Codex
+> 路径的 inline `<think>` 剥离（#7741）、Codex late-argument function_call 补全、
+> `late-arguments` 整流、Codex 历史重试、Grok token 刷新状态、MCP 字段拆分（#7735/#7845）。
+>
+> **冲突 17 处，全部手工解**（总冲突量比上轮小，但多为“上游重写 vs fork 拆包”型）：
+> `package.json` / `pnpm-lock.yaml`（保留 fork 的新工具链版本，**不引入** `tailwindcss-animate`，
+> 改用 `tw-animate-css` 并同步锁文件）、`tailwind.config.cjs`（保持删除）、
+> `session_usage.rs`（采用上游 `SessionRowOutcome` 重构）、
+> `JsonEditor.tsx` / `MarkdownEditor.tsx`（取 fork 的 lazy 拆分，上游改动移植进 Impl）、
+> `UsageDashboard.tsx`（取上游版 + 重放 fork 的 chart lazy 拆分）、
+> `AboutSection.tsx` / `CopilotAuthSection.tsx`（取上游 v7 版 + 重放 lucide `Github` 内联 SVG）、
+> `AuthCenterPanel.tsx`、`src/types/subscription.ts`（取上游，新增 `refresh_pending`）、
+> `zh-TW.json`（合并工具链键与上游 `sections/appConfig/routing/data`）、
+> `McodeProviderForm.test.tsx`（取上游 `name: "MiniMax"`，`PresetRow` 已带 `aria-label`）；
+> 另 4 处 modify/delete（`ProviderActions` / `ProviderStatusBadge` /
+> `ClaudeDesktopRouteToggle` / `ProviderActions.test`）经引用核查后**接受上游删除**
+> （`ProviderActions` 的功能由上游新的 `ProviderCardActions` 接管）。
+>
+> **本轮最大的结构性差异是 Tailwind**：上游仍在 v3（`tailwind.config.cjs` +
+> `tailwindcss-animate`），fork 已迁 v4。上游 v7 引入的全部设计令牌都写在 v3 config 里，
+> 不搬进 `src/index.css` 的 `@theme` 就会**静默失效**。已逐条搬迁并验证（53 个 v7 令牌
+> 工具类均出现在 `pnpm build:renderer` 产物 CSS 中），另补上 v3 的 `borderColor.DEFAULT`
+> 语义与 `tw-animate-css`。详见 4.26。
+>
+> **测试隔离根因修复**：`get_app_config_dir()` 的 Windows v3.10.3 遗留回退忽略了
+> `CC_SWITCH_TEST_HOME`，导致整套测试读写真实 `~/.cc-switch`。现在检测到该变量已设置
+> 即跳过回退（6.3 记录的根治方向）。此一条解掉 `services::model_pricing`（3 个）与
+> `services::skill`（1 个）的确定性失败。历史残留已征得同意后备份并清理（见 6.3）。
+>
+> **过期断言/快照修正**（合并前就是红的，非本轮回归）：
+> `tests/golden/snapshots/mcp/gemini-settings.json` 按 fork 分歧重生成（4.27）；
+> `tests/provider_commands.rs` 改为断言第三方 Key 写成路由表 `experimental_bearer_token`
+> （4.15a 已交由上游 live 引擎实现）；`AppMatrix` 键盘焦点判定改用 `isKeyboardModality()`；
+> `usage_stats` 的 12 元组表用例加 `#[allow(clippy::type_complexity)]`（Rust 1.95 阈值收紧）；
+> `src/**` 下 15 个上游新文件按 fork 的 prettier 3.9 重排版。
+>
+> 验证（2026-10-04）：Rust `cargo test` 全套（lib **3440** + 集成 **179** + 金标 39）
+> 0 failed、`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 全绿；
+> 前端 `pnpm vitest run` **183 文件 / 2117 用例**全绿（连跑 2 次）、`pnpm typecheck` /
+> `pnpm format:check` / `pnpm build:renderer` 全绿。集成测试二进制本机可跑通（见 6.5 新写的绕法）。
+>
+> 待办（未触碰）：6.1 的发布 tag 未打（上游未发新 tag，fork 版本号仍 `v3.20.4`）；
+> 6.2 的更新链缺陷仍在。
+
 ## 6. 维护约定
 
 - **上游同步**：`git fetch upstream --no-tags && git merge upstream/main`，merge 后跑
@@ -830,7 +934,13 @@ endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 for
 ⚠️ 注意 `release.yml` 的构建步骤对签名失败是"吞掉继续"（`|| echo "⚠️ 已忽略"`），
 所以配好密钥后仍需复核产物里确实带 `.sig`，否则会再次静默产出空 `platforms`。
 
-### 6.3 Windows 本地跑 Rust 测试必须隔离 `HOME`（2026-09-15 同步时发现）
+### 6.3 Windows 本地跑 Rust 测试必须隔离 `HOME`（2026-09-15 发现，2026-10-04 已根治）
+
+> **状态：根因已修复（2026-10-04）**。`get_app_config_dir()` 现在检测到
+> `CC_SWITCH_TEST_HOME` 已设置（非空）即跳过那层遗留回退，隔离真正生效——不再需要
+> 手工把 `HOME` 指向临时目录，也不再会把夹具写进真实 `~/.cc-switch`。
+> 修复后 `cargo test` 全套（含集成测试）绿；已知历史残留的清理见本节末。
+> 下面保留原始记录以说明根因与判断依据。
 
 **直接跑 `cargo test --lib` 会改写真实的 `~/.cc-switch`，并留下夹具状态导致 5 个用例
 确定性失败**（现象是 `assertion left: 0, right: 1` + `assert!(state.config.include_common_models)`，
@@ -858,16 +968,24 @@ endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 for
   cd src-tauri && HOME="$TEMP/ccswitch-iso-probe" cargo test --lib
   ```
 
-- **根治方向**（未擅自实施，涉及 Windows 兼容语义与用户数据路径，需人工定夺）：
-  测试构建下检测到 `CC_SWITCH_TEST_HOME` 已设置即跳过该回退；或把回退条件从
-  `$HOME/.cc-switch` 收紧为"仅在默认目录确实无 db 且 `$HOME` 与真实用户目录不同"。
-- **残留清理**：受污染的真实 `~/.cc-switch/model-pricing.json` 内容是纯测试夹具数据
-  （`custom-model` 两条 + `deletedModelIds: ["claude-sonnet-5"]`），删除后应用会按默认值
-  （`includeCommonModels: true`）重建。`cc-switch.db` 未被测试改写，但 `settings.json`
-  已被覆盖且**无备份可还原**（见上），需在应用设置页人工核对托盘／代理／会话自动同步／
-  skill 存储位置等开关。
+- **根治方向**（2026-10-04 已实施）：检测到 `CC_SWITCH_TEST_HOME` 已设置即跳过该回退
+  （`src-tauri/src/config.rs`，`test_home_isolated` 守卫）。未采用「收紧为 `$HOME` 与真实
+  用户目录不同」那条——那会改变生产环境下的遗留库兼容语义，风险更大。
+- **历史残留清理**（2026-10-04，已征得同意后执行）：受污染内容整体移动到
+  `~/.cc-switch/test-pollution-backup-20261004/`，真实目录只留用户自己的内容：
+  - `model-pricing.json`（夹具：假模型 `custom-model`、`deletedModelIds:
+    ["claude-sonnet-5"]`、`includeCommonModels: false`、`lastSyncError: "offline"`）→
+    已备份后重置为干净值（空 `models` / 空 `deletedModelIds` / `includeCommonModels: true`），
+    并**显式保留 `autoSyncEnabled: false`**——上游同步（`d76a1cda`）把该默认值改成了 `true`，
+    写 false 是为了不静默改变你当前的生效行为；想要新的上游默认就在设置页打开。
+  - `skills/{conflict,fresh,good-skill,native-skill,shared-name,valid}`（全是
+    "Test skill" 夹具）与 `skill-backups/` 下 16 个 `*test-skill*`、
+    1 个 `20260727_120000_evil`（路径穿越安全用例）一并移出；`skills/pebrel-runtime`
+    与 3 个真实 `nature-*`/`pebrel-runtime` 备份保留。
+  - `settings.json` 已被覆盖且**无备份可还原**（见上），需在应用设置页人工核对托盘／代理／
+    会话自动同步／skill 存储位置等开关。
 
-### 6.4 前端全量测试在 32 线程机器上的超时边界（2026-09-23 同步时发现）
+### 6.4 前端全量测试在 32 线程机器上的超时边界（2026-09-23 发现，2026-10-04 已修掉本轮发现的三处）
 
 本机（i9-13900HX，32 逻辑核）跑 `pnpm vitest run` 默认并发（`maxWorkers = cpus-1 = 31`）时，
 全档会稳定产出 1 个失败，且每次失败的长用例不同：
@@ -892,7 +1010,20 @@ pnpm vitest run --maxWorkers=8
 或给这两个长用例留出显式预算，否则每次全档跑都可能随机红一个。v3.20.3 之前本地也出现过同类
 边界失败。
 
-### 6.5 本机 `cargo test --tests` 无法链接（集成测试二进制，既有环境问题）
+**2026-10-04 补充：本轮又修掉三处并发下的偶发红**（都不改 `maxWorkers`）：
+
+1. `JsonEditor.test.tsx`、`UsageDashboard.smoke.test.tsx`——两处都在等**懒加载 chunk**
+   （CodeMirror / recharts）到货，并行时超过 `waitFor` 默认的 1s。已显式给 5s 超时。
+   ⚠️ 后续再写「等 Impl / 图表出现」的用例，一律带 `{ timeout: 5000 }`。
+2. `PromptPanel.test.tsx` 的 `waitForPanelReady()`——只等行按钮 `toBeEnabled()`，而按钮灰显
+   走 `useDelayedFlag`（延迟 300 ms 才变灰），点开的守卫却是立即生效的 `interactionBlocked`，
+   于是挂载时那次重读没结束时点下去会被吞掉。已在 helper 里拍一拍事件循环（`setTimeout(0)`）。
+3. `AddProviderDialog.test.tsx` 的两个 claude 用例——v8 改成「先选预设 → 再填表」两步后，
+   mock 的 ProviderForm 不注册预设选择器，需要等自动进第二步（改 `findByRole`）。
+
+验证方式：连跑 2 次全量（183 文件 / 2117 用例）均全绿。
+
+### 6.5 本机 `cargo test --tests` 无法链接（环境问题，已有可用绕法）
 
 2026-10-03 同步时发现：本机跑 `cargo test --tests`（或裸 `cargo test`）会在**集成测试二进制**的
 链接阶段失败，报错形如：
@@ -912,3 +1043,20 @@ error: only metadata stub found for `rlib` dependency `alloc` ... / cannot resol
 + `cargo fmt --check`；如需完整集成测试（`src-tauri/tests/*`）建议在 CI 或 WSL 中跑。
 根治方向（未擅自实施）：给集成测试目标单独跑 `CARGO_TARGET_DIR`，或把 `crate-type` 中的
 `staticlib`/`cdylib` 移到仅在打包时启用。
+
+**2026-10-04 补充：实际根因是页面文件耗尽，不是 rlib 形态。** 当天的报错首行是
+`memory allocation of 146170702 bytes failed` + `failed to mmap file
+'target/debug/deps/libcc_switch_lib.rlib'（页面文件太小，无法完成操作。os error 1455）`
+——即链接巨型的 lib 测试 rlib（~1.3 GB）时虚拟内存不够，**mmap 失败后留下一个损坏的 rlib**，
+后续所有 target 才报 E0463/E0786/“cannot find crate”这类迷惑错误（看起来像形态问题）。
+可用绕法（已实测跑通，含 17 个集成测试二进制）：
+
+```bash
+# 1) 删掉损坏的 rlib/rmeta（cargo 不会自己发现它坏了）
+rm -f src-tauri/target/debug/deps/libcc_switch_lib*.rlib \
+      src-tauri/target/debug/deps/libcc_switch_lib*.rmeta
+# 2) 降并发重编（默认全程并发会在链接阶段再次把页面文件顶穿）
+cd src-tauri && cargo test -j 4
+```
+
+前置条件：跑之前确认物理内存/页面文件有余量（同时跑 vitest 全量会吃掉十几 GB）。
