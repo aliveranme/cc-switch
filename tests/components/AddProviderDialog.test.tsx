@@ -122,10 +122,11 @@ describe("AddProviderDialog", () => {
       />,
     );
 
-    // Claude 的表单要等 live 底读回来才渲染。
+    // Claude 的表单要等 live 底读回来才渲染；读回来之后才自动进第 2 步
+    // （mock 的 ProviderForm 不会注册预设选择器），所以要等「添加」按钮出现。
     await screen.findByRole("button", { name: "manage-auth" });
     fireEvent.click(
-      screen.getByRole("button", {
+      await screen.findByRole("button", {
         name: "common.add",
       }),
     );
@@ -164,7 +165,7 @@ describe("AddProviderDialog", () => {
 
     await screen.findByRole("button", { name: "manage-auth" });
     fireEvent.click(
-      screen.getByRole("button", {
+      await screen.findByRole("button", {
         name: "common.add",
       }),
     );
@@ -185,7 +186,7 @@ describe("AddProviderDialog", () => {
     "%s 新增时带上表单投影出的底，和编辑器同一套保存规则",
     async (appId) => {
       const handleSubmit = vi.fn().mockResolvedValue(undefined);
-      const projected = { config: "[ui]\ntheme = \"dark\"\n" };
+      const projected = { config: '[ui]\ntheme = "dark"\n' };
       const draft = { config: "" };
       mockProjectedBase = projected;
       mockProjectedDraft = draft;

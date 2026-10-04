@@ -477,15 +477,18 @@ command = "say"
     );
 
     let config_text = std::fs::read_to_string(get_codex_config_path()).expect("read config.toml");
-    // 只替换关键字段：live 里用户的 MCP 原样留着，行里的 MCP 不投影；这张卡没有路由，
-    // Key 没有第三方地址可发，不写进 live。
+    // 只替换关键字段：live 里用户的 MCP 原样留着，行里的 MCP 不投影。
     assert!(
         config_text.contains("[mcp_servers.legacy]"),
         "{config_text}"
     );
     assert!(!config_text.contains("mcp_servers.latest"), "{config_text}");
+    // 第三方 Key 由上游 live 引擎写成路由表 `[model_providers.custom]` 的
+    // experimental_bearer_token（Codex 0.149 起自定义 provider 不再读 auth.json，
+    // 见 live/project/codex.rs 模块注释）。fork 旧的「Key 不写进 live」分歧已随
+    // 4.15a 交由上游引擎实现（docs/fork-differences.md）。
     assert!(
-        !config_text.contains("experimental_bearer_token"),
+        config_text.contains(r#"experimental_bearer_token = "fresh-key""#),
         "{config_text}"
     );
 

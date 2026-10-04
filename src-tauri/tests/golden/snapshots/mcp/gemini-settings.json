@@ -13,19 +13,16 @@
   },
   "mcpServers": {
     "external-only": {
-      "command": "external",
-      "timeout": 60000
+      "command": "external"
     },
     "http-server": {
-      "timeout": 60000,
       "headers": {
         "Authorization": "Bearer mcp-header"
       },
       "httpUrl": "https://mcp.example.com/mcp"
     },
     "sse-server": {
-      "url": "https://mcp.example.com/sse",
-      "timeout": 60000
+      "url": "https://mcp.example.com/sse"
     },
     "stdio-server": {
       "env": {
@@ -34,8 +31,7 @@
       "command": "example-mcp-server",
       "args": [
         "--stdio"
-      ],
-      "timeout": 60000
+      ]
     }
   }
 }

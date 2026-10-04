@@ -1,5 +1,10 @@
 export type CredentialStatus =
-  "valid" | "expired" | "not_found" | "parse_error";
+  | "valid"
+  | "expired"
+  // 访问令牌过期、刷新令牌还在：客户端下次运行时自己会换新的
+  | "refresh_pending"
+  | "not_found"
+  | "parse_error";
 
 export interface QuotaTier {
   name: string;

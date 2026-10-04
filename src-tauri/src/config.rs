@@ -303,7 +303,13 @@ pub fn get_app_config_dir() -> PathBuf {
     #[cfg(windows)]
     {
         let default_db = default_dir.join("cc-switch.db");
-        if !default_db.exists() {
+        // CC_SWITCH_TEST_HOME 已经显式指定了隔离的 home，default_dir 就是它；
+        // 再往真实 HOME 回退会让测试（以及任何想隔离数据的调试）读写用户真实目录，
+        // 各测试之间还会互相污染。
+        let test_home_isolated = std::env::var("CC_SWITCH_TEST_HOME")
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        if !default_db.exists() && !test_home_isolated {
             if let Ok(home_env) = std::env::var("HOME") {
                 let trimmed = home_env.trim();
                 if !trimmed.is_empty() {

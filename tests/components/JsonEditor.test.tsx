@@ -10,11 +10,15 @@ import JsonEditor from "@/components/JsonEditor";
 // lazy chunk 到达后才挂载，因此测试必须先等待它出现，再查询编辑器视图。
 async function renderEditor(props: ComponentProps<typeof JsonEditor>) {
   const utils = render(<JsonEditor {...props} />);
-  const content = await waitFor(() => {
-    const el = utils.container.querySelector(".cm-content");
-    expect(el).not.toBeNull();
-    return el as HTMLElement;
-  });
+  const content = await waitFor(
+    () => {
+      const el = utils.container.querySelector(".cm-content");
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    },
+    // 全量并行跑时 lazy chunk（CodeMirror）到货可能超过 waitFor 默认的 1s。
+    { timeout: 5000 },
+  );
   return { ...utils, content };
 }
 
