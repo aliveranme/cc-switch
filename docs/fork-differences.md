@@ -981,7 +981,13 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > （上游 umask 默认），而 fork 的 `atomic_write` 在 unix 上一律创建即 0600
 > （4.5）。这是 **2026-10-04 那轮 CI 就已存在的红**（非本轮回归）。已按 CI 的
 > actual 输出（6 行全 600）重生成快照（`013f4f2f`），与 4.27 的 Gemini 快照同理
-> ——上游若再改它，仍须按 fork 行为重生成。
+> ——上游若再改它，仍须按 fork 行为重生成。修复后手动跑了一次完整 CI
+> （`workflow_dispatch`，run 37270697230）：**五个 job 全部绿**——Frontend 4m29s、
+> WSL2 4m15s、ubuntu 8m35s、windows 12m24s、macos 10m5s（macOS/Linux 的红首次消除）。
+> 注：docs-only 的 push 会被 ci.yml 的路径过滤跳过两端 job，想用一次 push 同时
+> 验证源码与文档不可行；且同 concurrency 组的连续 push 会 `cancel-in-progress`
+> 取消上一次（快照修复的首次验证即因此被 docs push 取消），验证需用
+> `gh workflow run ci.yml` 手动触发。
 
 ## 6. 维护约定
 
