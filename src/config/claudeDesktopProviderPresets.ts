@@ -45,7 +45,7 @@ export interface ClaudeDesktopProviderPreset extends PresetFamilyFields {
   apiKeyUrl?: string;
   category?: ProviderCategory;
   isPartner?: boolean;
-  primePartner?: boolean; // 置顶合作伙伴（顶级）：徽章显示为心形
+  primePartner?: boolean; // 旧版的置顶合作伙伴标记；v7 起界面不再读取，新预设不写
   partnerPromotionKey?: string;
 
   baseUrl: string;
@@ -156,7 +156,7 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
     icon: "anthropic",
     iconColor: "#D4915D",
   },
-  // ===== 赞助商预设：文件顺序 = 应用内展示顺序，与 README 赞助商表对齐 =====
+  // ===== 赞助商预设：文件顺序与 README 赞助商表对齐（仅维护约定；应用内一律按显示名排序，不置顶）=====
   {
     name: "Kimi",
     family: "kimi",
@@ -441,6 +441,24 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
     isPartner: true,
     partnerPromotionKey: "fluxa",
     icon: "fluxa",
+  },
+  {
+    name: "88API",
+    websiteUrl: "https://88api.ai",
+    apiKeyUrl: "https://88api.ai/sign-up?aff=HSGY",
+    category: "aggregator",
+    baseUrl: "https://api.88api.ai",
+    mode: "direct",
+    apiFormat: "anthropic",
+    modelRoutes: mappedRoutes(
+      "claude-sonnet-5-5",
+      "claude-opus-5-5",
+      "claude-haiku-4-5",
+    ),
+    endpointCandidates: ["https://api.88api.ai", "https://88api.ai"],
+    isPartner: true,
+    partnerPromotionKey: "88api",
+    icon: "88api",
   },
   {
     name: "APIKEY.FUN",
@@ -861,6 +879,7 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
     endpointCandidates: ["https://www.dmxapi.cn", "https://api.dmxapi.cn"],
     isPartner: true,
     partnerPromotionKey: "dmxapi",
+    icon: "dmxapi",
   },
   {
     name: "SudoCode.chat",
@@ -910,6 +929,24 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
     icon: "xycai",
   },
   // ===== 非赞助商预设：应用内展示按显示名排序，此处文件顺序不影响展示 =====
+  {
+    name: "Tu-zi",
+    nameKey: "providerForm.presets.tuzi",
+    websiteUrl: "https://api.tu-zi.com",
+    apiKeyUrl: "https://api.tu-zi.com/token",
+    category: "aggregator",
+    baseUrl: "https://api.tu-zi.com",
+    mode: "direct",
+    apiFormat: "anthropic",
+    modelRoutes: passthroughRoutes(),
+    endpointCandidates: [
+      "https://api.tu-zi.com",
+      "https://api.ourzhishi.top",
+      "https://api.sydney-ai.com",
+      "https://apicdn.tu-zi.com",
+    ],
+    icon: "tuzi",
+  },
   {
     name: "Amux",
     websiteUrl: "https://amux.ai",
@@ -1483,6 +1520,7 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
     mode: "proxy",
     apiFormat: "anthropic",
     modelRoutes: brandedRoutes("Ling-2.6-1T", "Ling-2.6-1T", "Ling-2.6-1T"),
+    icon: "bailing",
   },
   {
     name: "AiHubMix",
@@ -1570,6 +1608,7 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
       true,
     ),
     endpointCandidates: ["https://api.therouter.ai"],
+    icon: "therouter",
   },
   {
     name: "Novita AI",

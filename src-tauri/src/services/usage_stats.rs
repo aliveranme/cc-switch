@@ -2824,10 +2824,21 @@ mod tests {
     fn test_range_filter_matches_original_dedup() -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
         create_legacy_nullable_logs_table(&conn)?;
-        // 这一行是 12 元组的表驱动用例；Rust 1.95 的 clippy 把 type_complexity 的
-        // 阈值收紧了，拆类型别名只会让表格更难对照，这里定向豁免。
-        #[allow(clippy::type_complexity)]
-        let rows: &[(&str, &str, &str, i64, i64, i64, i64, i64, i64, Option<&str>)] = &[
+        // request_id, app_type, model, input, output, cache_read, cache_creation,
+        // status_code, created_at, data_source
+        type LogRow = (
+            &'static str,
+            &'static str,
+            &'static str,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            Option<&'static str>,
+        );
+        let rows: &[LogRow] = &[
             // 和 proxy-1 重复（应被去掉）
             (
                 "p1",

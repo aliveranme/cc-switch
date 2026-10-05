@@ -26,7 +26,7 @@ export interface CodexProviderPreset extends PresetFamilyFields {
   config: string; // 将写入 ~/.codex/config.toml（TOML 字符串）
   isOfficial?: boolean; // 标识是否为官方预设
   isPartner?: boolean; // 标识是否为商业合作伙伴
-  primePartner?: boolean; // 置顶合作伙伴（顶级）：徽章显示为心形
+  primePartner?: boolean; // 旧版的置顶合作伙伴标记；v7 起界面不再读取，新预设不写
   partnerPromotionKey?: string; // 合作伙伴促销信息的 i18n key
   category?: ProviderCategory; // 新增：分类
   isCustomTemplate?: boolean; // 标识是否为自定义模板
@@ -146,7 +146,7 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     icon: "openai",
     iconColor: "#00A67E",
   },
-  // ===== 赞助商预设：文件顺序 = 应用内展示顺序，与 README 赞助商表对齐 =====
+  // ===== 赞助商预设：文件顺序与 README 赞助商表对齐（仅维护约定；应用内一律按显示名排序，不置顶）=====
   {
     name: "Kimi",
     family: "kimi",
@@ -665,6 +665,22 @@ wire_api = "responses"
     isPartner: true,
     partnerPromotionKey: "fluxa",
     icon: "fluxa",
+  },
+  {
+    name: "88API",
+    websiteUrl: "https://88api.ai",
+    apiKeyUrl: "https://88api.ai/sign-up?aff=HSGY",
+    category: "aggregator",
+    auth: generateThirdPartyAuth(""),
+    config: generateThirdPartyConfig(
+      "88api",
+      "https://api.88api.ai/v1",
+      "gpt-5.6-sol",
+    ),
+    endpointCandidates: ["https://api.88api.ai/v1", "https://88api.ai/v1"],
+    isPartner: true,
+    partnerPromotionKey: "88api",
+    icon: "88api",
   },
   {
     name: "APIKEY.FUN",
@@ -1214,6 +1230,7 @@ wire_api = "responses"
     endpointCandidates: ["https://www.dmxapi.cn/v1"],
     isPartner: true, // 合作伙伴
     partnerPromotionKey: "dmxapi", // 促销信息 i18n key
+    icon: "dmxapi",
   },
   {
     name: "SudoCode.chat",
@@ -1285,6 +1302,26 @@ wire_api = "responses"
     icon: "xycai",
   },
   // ===== 非赞助商预设：应用内展示按显示名排序，此处文件顺序不影响展示 =====
+  {
+    name: "Tu-zi",
+    nameKey: "providerForm.presets.tuzi",
+    websiteUrl: "https://api.tu-zi.com",
+    apiKeyUrl: "https://api.tu-zi.com/token",
+    category: "aggregator",
+    auth: generateThirdPartyAuth(""),
+    config: generateThirdPartyConfig(
+      "tuzi",
+      "https://api.tu-zi.com/v1",
+      "gpt-5.6-sol",
+    ),
+    endpointCandidates: [
+      "https://api.tu-zi.com/v1",
+      "https://api.ourzhishi.top/v1",
+      "https://api.sydney-ai.com/v1",
+      "https://apicdn.tu-zi.com/v1",
+    ],
+    icon: "tuzi",
+  },
   {
     name: "Amux",
     websiteUrl: "https://amux.ai",
@@ -2907,6 +2944,7 @@ wire_api = "responses"
       },
     ]),
     category: "cn_official",
+    icon: "astron",
   },
   {
     name: "BaiLing",
@@ -2928,6 +2966,7 @@ wire_api = "responses"
       },
     ]),
     category: "cn_official",
+    icon: "bailing",
   },
   {
     name: "Xiaomi MiMo",
@@ -3405,6 +3444,7 @@ base_url = "https://cc-api.pipellm.ai/v1"`,
     ),
     endpointCandidates: ["https://api.therouter.ai/v1"],
     category: "aggregator",
+    icon: "therouter",
   },
   {
     name: "JieKou AI",
