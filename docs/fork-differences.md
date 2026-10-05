@@ -258,6 +258,14 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   （创建即收紧，无 0644 窗口期）+ 后续属主位收紧块原样保留。fork 的
   `retry_transient_io`/`is_transient_reparse_error`（跨卷符号链接 448/183/32 退避重试）因
   生产调用点被 ReplaceFileW 取代，标记 `#[allow(dead_code)]` 保留作 fallback（测试仍在）。
+- **golden 模式快照必须按 fork 行为维护**（2026-10-05）：`atomic_write` 在 unix 上
+  一律 0600（凭据文件语义），因此 `tests/golden/snapshots/modes/*.txt` 中所有条目
+  都是 `600`。上游同一位置的快照按 umask 默认写成 `644`（如
+  `fresh-after-third-party.txt` 里 `.codex/cc-switch-model-catalog.json` 与
+  `.gemini/settings.json`），直接取上游版会让 macOS/Linux 的 CI 在
+  `file_modes::switch_creates_expected_files_and_modes` 上红（Windows 无 unix
+  权限语义，不会发现）。⚠️ 每次同步后若该快照被上游更新，须按 fork 行为重生成
+  （可用 CI 的 `--- actual ---` 输出校对），不能取上游版；与 4.27 的 Gemini 快照同理。
 
 ### 4.6 wire_api 迁移（chat→responses）
 
@@ -616,6 +624,8 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 | `v3.20.1` | 2026-08-29 | 合入上游 v3.20.1：Codex CLI 0.149 改 config-only 切换（第三方 key 不再写 `auth.json`）、Team workspace 账号互相覆盖修复（#6780）、会话扫描增量 byte-cursor（schema v17→v18）（26 提交 / 66 文件，+7474/-1000） |
 | `v3.20.2` | 2026-09-09 | 合入上游 v3.20.2（`2d54e261`，26 提交）；Grok 走 xAI 原生 Responses 路由、一批 catalog/兼容性修复、预设与定价扩充 |
 | `v3.20.3` | 2026-09-13 | 合入上游 v3.20.3（`bd247a4a`）；Kimi 等 Codex 预设改原生 Responses 直连、代理正确性修复、预设与定价维护。**首次发布失败**：标签误指上游提交，Release 跑的是上游工作流（硬校验 `TAURI_SIGNING_PRIVATE_KEY`），5 个平台全部在签名步骤失败、附件为空；把标签改指 fork 提交 `b24deaa9` 后重发成功 |
+| `v3.20.4` | 2026-09-23 | 合入上游 v3.20.4（`f2537fdf`，25 提交）；Copilot 端点剥离 `stop`、`additional_tools` 抬升为工具、Codex `detail:original` 图片归一化、GPT-6/Grok 家族档位与定价批次、WSL shell 启动输出过滤；fork 侧 rquickjs 0.12 锁文件对齐（14 资产） |
+| `v4.0.1` | 2026-10-05 | 合入上游 v4.0.0 **与** v4.0.1（`4804b723`，38 提交）：v4.0 收尾（配额重置倒计时与到期列表、用量表格分页、88API/兔子 API 等预设扩编、官方图标）、代理修复（零用量 `response.incomplete` → `api_error`、Codex 状态库 WSL 路径跳过加锁）、CI 基建（rust-cache + nextest + pinned toolchain）与发布流程改造；fork 侧移除手写的 `wix.version` 覆盖。**发布一次成功**：tag `v4.0.1` 指向 fork 提交 `32e4aa39`，14 资产（Linux x86_64/arm64 各 AppImage+deb+rpm、macOS dmg+zip+tar.gz、Windows x86_64/arm64 各 MSI+Portable.zip、latest.json），正式版（Latest）；随发布一并修掉 macOS/Linux CI 的 golden 模式快照（644→600） |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -955,6 +965,23 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > `pnpm format:check` / `pnpm build:renderer` 全绿。合并提交 `e2b24ae5`。
 > ⚠️ 本机 `node_modules` 在本次开始时有两处包目录为空（typescript@7.0.2、
 > @typescript/typescript-win32-x64），已 `rm -rf node_modules` 后按锁文件重装。
+>
+> **发布（2026-10-05）**：tag `v4.0.1` → fork 提交 `32e4aa39`（推 `origin/main`
+> 后 `git tag -f` 显式重建，符合 6.1），Release run 37268765647 全绿——
+> Resolve Version 6s、五个平台构建 11–22 分钟（macOS universal 22m6s）、
+> Publish 33s、Assemble latest.json 5s、Sync to R2 2s（无 secrets 自动跳过），
+> **14 个资产**、正式版（Latest）。六路（`Ubuntu-22.04` / `ubuntu-22.04-arm` /
+> `windows-2022` / `windows-11-arm` / `macos-14`）构建全部产出，Linux arm64
+> AppImage 未再静默缺失。latest.json 的 `platforms` 仍为空（无签名，见 6.2）。
+>
+> **附带的 CI 修复**：push 后的 CI run 在 macOS-latest 与 ubuntu-22.04 的
+> `backend` 矩阵红于 golden `file_modes::switch_creates_expected_files_and_modes`
+> ——上游快照 `snapshots/modes/fresh-after-third-party.txt` 期望
+> `.codex/cc-switch-model-catalog.json` 与 `.gemini/settings.json` 为 644
+> （上游 umask 默认），而 fork 的 `atomic_write` 在 unix 上一律创建即 0600
+> （4.5）。这是 **2026-10-04 那轮 CI 就已存在的红**（非本轮回归）。已按 CI 的
+> actual 输出（6 行全 600）重生成快照（`013f4f2f`），与 4.27 的 Gemini 快照同理
+> ——上游若再改它，仍须按 fork 行为重生成。
 
 ## 6. 维护约定
 
