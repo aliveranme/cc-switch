@@ -1,6 +1,6 @@
 .claude/settings.json 600
-.codex/cc-switch-model-catalog.json 644
+.codex/cc-switch-model-catalog.json 600
 .codex/config.toml 600
 .gemini/.env 600
-.gemini/settings.json 644
+.gemini/settings.json 600
 .grok/config.toml 600
