@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | 372b1698（2026-10-03，**98 个提交**；明细见第 5 节；上一基线 bfaaba16，2026-10-02） |
-| 本地领先 | **424** 个提交（`git rev-list --count upstream/main..main`，统计于 merge 提交；本次补记提交再加 1） |
-| 本次 merge | 2026-10-04 合入上游 372b1698（98 个提交，**483 文件 +86 924 / −28 753**，17 处冲突手工解，见第 5 节）；上一次 2026-10-03 bfaaba16（64 个提交，28 处冲突） |
-| 本地版本 | `v3.20.4`（上游未发新 tag，fork 版本号保持未 bump；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-04 |
-| 测试规模 | 最近验证于 2026-10-04：Rust **3440** 单元 + **179** 集成（15 个集成测试二进制，其中金标 39）+ main 0；前端 vitest **2117**（183 文件） |
+| 上游基线 | 4804b723（2026-10-05，**38 个提交**；明细见第 5 节；上一基线 372b1698，2026-10-03） |
+| 本地领先 | **426** 个提交（`git rev-list --count upstream/main..main`，统计于 merge 提交；本次补记提交再加 1） |
+| 本次 merge | 2026-10-05 合入上游 4804b723（38 个提交，**116 文件 +5 222 / −763**，4 处冲突手工解，见第 5 节）；上一次 2026-10-04 372b1698（98 个提交，17 处冲突） |
+| 本地版本 | `v4.0.1`（随 merge 对齐上游 v4.0.0/v4.0.1，三处版本号同步 bump；fork 发布序列见第 5 节） |
+| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-05 |
+| 测试规模 | 最近验证于 2026-10-05：Rust **3454** 单元 + **179** 集成（16 个集成测试二进制，其中金标 39）+ main 0；前端 vitest **2161**（186 文件） |
 
 ## 2. 修改总览（按主题）
 
@@ -97,7 +97,17 @@
 ### 2.5 发布 / CI
 
 - fork 发布序列 `v3.19.1-a` / `v3.19.1-b`
-- `wix.version` 覆盖 MSI ProductVersion 绕过 prerelease 限制
+- `wix.version` 覆盖 MSI ProductVersion 绕过 prerelease 限制（**2026-10-05 移除**：
+  该覆盖是 v3.19.2-a 为绕过 prerelease 后缀无法作 MSI ProductVersion 而加的
+  `"version": "3.19.2.1"`，此后一直未随版本递增，MSI ProductVersion 被冻结在
+  3.19.2.1。v4.0.1 起与上游一致去掉该字段，ProductVersion 回到由 `version`
+  推导的 `4.0.1.0`；若将来再发带 `-a` 后缀的 tag，需要临时加回）
+- **CI 基建随上游对齐**（2026-10-05）：`backend` 矩阵改用 `Swatinem/rust-cache`
+  （只缓存依赖、`shared-key: backend` 与 WSL2 job 共享）+ `cargo-nextest`
+  （测试超时见 `src-tauri/.config/nextest.toml`）+ 一律从 `rust-toolchain.toml`
+  读编译器版本；push 到 main 也按路径过滤 + 每周日全量跑（缓存被淘汰后重建）。
+  fork 保留自己的 `--all-targets` clippy、actions 版本（checkout@v7 / cache@v6 /
+  setup-node@v7）与 WSL2 步骤顺序（Setup WSL2 仍在编译前置步骤之后）
 - tag 推送发布正式版而非强制 prerelease
 - updater endpoints 指向本 fork 的 GitHub Releases
 - 删除 `.github/workflows/claude.yml`；迁移 `tailwind.config.cjs` → postcss
@@ -109,13 +119,17 @@
   ——于是 `Linux-arm64.AppImage` 在**每次发布中静默缺失**（同段的 `.deb`/`.rpm` 走
   写死路径所以正常，v3.20.3 上 arm64 的 deb/rpm 存在而 AppImage 不存在即为此故）。
   同时把 AppImage 缺失的提示从 stderr 提升为 `::error::` 注解，使发布时可见。
-- **WSL2 CI job 暂禁用**（2026-08-16）：`backend-windows-wsl2`（Windows+WSL2
-  文件系统契约测试）的 link.exe 在 GitHub windows runner 上写 `lnk{}.tmp` 临时
-  文件到不存在的 `\\wsl.localhost` UNC 路径（LNK1327 c1010070）。已排除编译顺序
-  （编译前置）、进程 TEMP/TMP/GetTempPath（全原生）、manifest 嵌入（`/MANIFEST:NO`
-  无效）、target 缓存（全量编译）、runner 版本（windows-2025/latest）等变量；
-  `backend-windows`（windows-latest，无 Setup WSL2 步骤）同代码编译通过。属
-  GitHub runner 环境异常，`if: false` 暂禁，待修复后恢复（见 ci.yml 注释）。
+- **WSL2 契约测试（`ci.yml` 的 `backend-windows-wsl2`）保持启用，夜间全量（`wsl2-nightly.yml`）仍 `if: false`**
+  （2026-08-16 暂禁，2026-10-05 复核仍保留）：当年夜间全量的 link.exe 在
+  GitHub windows runner 上写 `lnk{}.tmp` 临时文件到不存在的 `\\wsl.localhost`
+  UNC 路径（LNK1327 c1010070）。已排除编译顺序（编译前置）、进程
+  TEMP/TMP/GetTempPath（全原生）、manifest 嵌入（`/MANIFEST:NO` 无效）、target
+  缓存（全量编译）、runner 版本（windows-2025/latest）等变量；`backend-windows`
+  （windows-latest，无 Setup WSL2 步骤）同代码编译通过。属 GitHub runner 环境异常。
+  **2026-10-05**：上游 `e4960bba` 已把该 nightly 重构成 lib suite（跳过 `database::`
+  与集成测试、`cargo nextest` 逐条跑 + 每测试超时）以绕开 9P 限制，现已随合并入库；
+  fork 保留 `if: false`，待删掉该行跑一次 `workflow_dispatch` 复验后再恢复
+  （见 wsl2-nightly.yml 的注释）。`ci.yml` 里每个 PR 的 WSL2 契约测试不受影响。
 
 ### 2.6 服务层（用量统计 / 接管）
 
@@ -555,6 +569,35 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   （`CC_SWITCH_UPDATE_GOLDEN=1 cargo test --test golden mcp_bytes::gemini_settings_mcp_projection_bytes`）。
   ⚠️ 下次同步若上游改了这个快照，**不能直接取上游版**，必须用 fork 行为重生成。
 
+### 4.28 发布工作流（`release.yml`）保持 fork 的个人模式
+
+- **上游**（`ee66be22` / `f9e2ebbb` / `c62eab2b`，2026-10-05）：把 macOS 拆成
+  `macos-binary`（两架构分机并行编译）+ `macos-release`（合并 universal、签名、
+  公证），签名密钥准备抽成 composite action
+  （`.github/actions/prepare-tauri-signing-key`）；把“缺签名”从警告升级为硬失败
+  （macOS `.tar.gz.sig`、Windows MSI 与 MSI 签名、Linux AppImage 与其签名，以及
+  latest.json 的六平台签名齐备性）；`publish-release` 加
+  `if: github.event_name == 'push' && github.ref_type == 'tag'`，手动触发退化为
+  纯干跑（产物只留在 workflow 里，不建 Release）。
+- **fork**：保留 `resolve-version`（版本解析 + 三处版本号一致性校验）+ 单
+  `release` 矩阵（macOS universal 在矩阵内构建，含 hdiutil 无签名 DMG 兜底）+
+  `publish-release`（CHANGELOG + git log 生成正文，手动重跑可用）+ 独立
+  `assemble-latest-json` + `sync-to-r2` 的既有结构；签名准备保持内联且 secrets
+  缺失时全链路降级（不设 `TAURI_SIGNING_PRIVATE_KEY` 让 Tauri 跳过签名，
+  Windows/macOS 构建失败只警告并继续收集已产出安装包）。
+- **原因**：fork 是个人使用模式，仓库不配置任何签名 secrets（见 6.1、6.2）。
+  上游的新校验在没有签名的仓库上会让**每个平台**都失败（v3.20.3 首次发布即为此
+  故障）；上游的 macOS 并行架构依赖 Apple 证书与公证凭据，fork 无法提供。
+  latest.json 的齐备性检查同样与 fork 现状冲突——fork 从不产出 `.sig`，
+  latest.json 的 `platforms` 本为空（6.2 的既有缺陷），硬失败只会让发布完全停止。
+- **代价**：fork 的发布构建仍是单机串行（macOS universal 一次编两个架构），
+  不产出 `.sig`（应用内更新仍为空 platforms，见 6.2），也没有上游的干跑模式。
+- 上游新增的 `.github/actions/prepare-tauri-signing-key/action.yml` 随合并入库但
+  **本 fork 未引用**；`build(release)` 的 `codegen-units = 16`
+  （`src-tauri/Cargo.toml`，发布编译快约 64%、体积 +17%）则已随合并且与 fork 不冲突。
+- ⚠️ 每次同步都要确认 `release.yml` 仍是 fork 版本：上游若继续在其结构上迭代，
+  该文件会持续冲突，按本节策略一律取 fork 侧（仅当 fork 决定配置签名密钥时重估）。
+
 ## 5. 本地发布序列
 
 下表按 GitHub Releases 实际发布时间排序补全（2026-09-17 核对：共 11 个 release，与 `aliveranme/cc-switch` 实况一致）。
@@ -865,6 +908,53 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 >
 > 待办（未触碰）：6.1 的发布 tag 未打（上游未发新 tag，fork 版本号仍 `v3.20.4`）；
 > 6.2 的更新链缺陷仍在。
+
+> 2026-10-05 同步（**v4.0.0/v4.0.1，发布 v4.0.1**）：合入上游 `372b1698` 之后的
+> **38 个提交**至 `4804b723`（116 文件 +5 222 / −763；29 新增 / 4 删除 / 83 修改）。
+> 本轮是 v4.0.0 与 v4.0.1 的发布周期：托管预设扩编（88API 与兔子 API 赞助预设跨
+> 九个 app、DMXAPI/BaiLing/TheRouter/Together AI/Astron 官方图标、Gemini 冗余自定义
+> 预设下线）、订阅与配额增强（ChatGPT 限额重置倒计时与到期列表、卡片配额点击刷新
+> 反馈、余额用尽前统一单色）、用量表格全面分页（请求日志/供应商/模型/定价）、
+> Stack 聚合模型按上游 id 与窗口描述、Gemini CLI JSONL 会话读取、OpenCode 推理模型
+> 标记、Grok Build 预设 API Key 链接修正、Claude Code onboarding 跳过提示。
+>
+> 代理侧：Codex Responses 零用量 `response.incomplete` 不再被报成 `max_tokens`
+> （改为 `api_error`，`streaming_responses.rs` 新增 `is_unprocessed_max_output_rejection`，
+> #7868）、Codex 状态库在 WSL 路径上跳过加锁（Windows 无法锁 9P）、父级 Codex 同步
+> 不再被毒化缓存死锁，`config.rs` 新增 `is_wsl_path` 判定。
+>
+> **冲突 4 处，全部手工解**：
+> - `usage_stats.rs`——采用上游 `type LogRow` 类型别名（取代 fork 的
+>   `#[allow(clippy::type_complexity)]`，两者同为解决 Rust 1.95 阈值收紧，上游写法更根治）；
+> - `ci.yml` / `wsl2-nightly.yml`——采纳上游 rust-cache + nextest + 从
+>   `rust-toolchain.toml` 读编译器（新增 `src-tauri/.config/nextest.toml`），保留 fork 的
+>   actions 版本（checkout@v7 / cache@v6 / setup-node@v7）、`clippy --all-targets`、
+>   WSL2 步骤顺序（Setup WSL2 在编译前置步骤之后）与 nightly 的 `if: false`；
+> - `release.yml`——**整文件取 fork 侧**（见新增的 4.28）：上游的 macOS 双 job 并行 +
+>   fail-fast 签名校验与 fork 不配 secrets 的个人模式直接冲突。
+>
+> 版本号随 merge 对齐上游 `4.0.1`（`package.json` / `Cargo.toml` / `tauri.conf.json`
+> 三处），并移除 fork 自 v3.19.2-a 起手写的 `wix.version = "3.19.2.1"`（见 2.5）。
+>
+> 分歧点核对：4.1–4.27 逐条复核全部保留——本轮上游改动集中在预设数据/配额与用量 UI/
+> 会话读取/CI/发布，未触及 proxy 转换、分类器 fail-open、`atomic_write` 权限语义、
+> deeplink `claude-desktop`、`session_usage.rs`（**本轮上游未动**，fork 的 upsert
+> 守卫与单调推进逐行未变）、`hermes_config.rs` 排除表、NativeResponses 模板、
+> lucide 内联 SVG、`transform_codex_chat.rs` 的 ultra→max 钐制（上游本轮对该文件只有
+> 一处 clippy 修复，与 fork 版本一致）。上游新增的 4.28 已写入。
+>
+> Tailwind 核对（4.26）：上游本轮**未改** `tailwind.config.cjs`，`src/index.css`
+> 也未被上游触碰，@theme 无需搬迁；已抽查 v4.0.1 新增组件
+> （`QuotaBreakdown` / `TablePagination`）用到的令牌类（`bg-surface` / `text-fg-2` /
+> `rounded-panel` / `shadow-v7-md` / `border-border-strong` / `text-caption` 等）均出现在
+> `pnpm build:renderer` 产物 CSS 中。
+>
+> 验证（2026-10-05）：Rust `cargo test -j 4` 全套绿（lib **3454** + 集成 **179**，
+> 含金标 39）、`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 全绿；
+> 前端 `pnpm vitest run --maxWorkers=8` **186 文件 / 2161 用例**全绿、`pnpm typecheck` /
+> `pnpm format:check` / `pnpm build:renderer` 全绿。合并提交 `e2b24ae5`。
+> ⚠️ 本机 `node_modules` 在本次开始时有两处包目录为空（typescript@7.0.2、
+> @typescript/typescript-win32-x64），已 `rm -rf node_modules` 后按锁文件重装。
 
 ## 6. 维护约定
 
