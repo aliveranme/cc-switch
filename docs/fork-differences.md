@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | 4804b723（2026-10-05，**38 个提交**；明细见第 5 节；上一基线 372b1698，2026-10-03） |
-| 本地领先 | **426** 个提交（`git rev-list --count upstream/main..main`，统计于 merge 提交；本次补记提交再加 1） |
-| 本次 merge | 2026-10-05 合入上游 4804b723（38 个提交，**116 文件 +5 222 / −763**，4 处冲突手工解，见第 5 节）；上一次 2026-10-04 372b1698（98 个提交，17 处冲突） |
-| 本地版本 | `v4.0.1`（随 merge 对齐上游 v4.0.0/v4.0.1，三处版本号同步 bump；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-05 |
-| 测试规模 | 最近验证于 2026-10-05：Rust **3454** 单元 + **179** 集成（16 个集成测试二进制，其中金标 39）+ main 0；前端 vitest **2161**（186 文件） |
+| 上游基线 | 1f786dad（2026-10-10，**123 个提交**；明细见第 5 节；上一基线 4804b723，2026-10-05） |
+| 本地领先 | **431** 个提交（`git rev-list --count upstream/main..main`，统计于 merge 提交 = 430 既有 + 本次 merge 提交；本次补记提交再加 1） |
+| 本次 merge | 2026-10-10 合入上游 1f786dad（123 个提交，**452 文件 +29 428 / −7 143**，47 处冲突（8 处源码）手工解，见第 5 节）；上一次 2026-10-05 4804b723（38 个提交，4 处冲突） |
+| 本地版本 | `v4.0.7`（随 merge 对齐上游 v4.0.2–v4.0.7 六个版本；fork 发布序列见第 5 节） |
+| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-10 |
+| 测试规模 | 最近验证于 2026-10-10：Rust **3638** 单元 + **182** 集成（17 个集成测试二进制，其中金标 39）+ main 0；前端 vitest **2436**（202 文件） |
 
 ## 2. 修改总览（按主题）
 
@@ -439,6 +439,9 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 - **fork**：`lucide-react ^1.31`（#54 升级）移除了 `Github` 品牌导出，改回**内联 SVG**。
 - **原因**：fork 依赖版本较新（lucide 1.x 移除品牌图标）。
 - ⚠️ 上游若新增 lucide 品牌图标（Github/GitLab 等），fork 需同步改内联 SVG。
+- **2026-10-10 更新**：上游 AboutSection 改版（邀 Star 条独立成行、关闭后链接行补回
+  GitHub 按钮）后同文件出现第二处 `Github` 图标；fork 改为文件内 `GithubGlyph`
+  局部组件承载内联 SVG，两处引用（`AboutSection.tsx`）。
 
 ### 4.17 缓存链路开关（会话级 prompt_cache_key / 会话亲和 / 断点保留）
 
@@ -504,6 +507,13 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 - **fork**：保留 fork 的「终态必达」——有实质输出（`has_substantive_output`）时补 `end_turn` + `message_stop`；完全无输出时才发 `error`（伪成功防护）。合并后同时保留了上游的 inline-think 剥离（`InlineThinkSplitter`）与 fork 的缓冲上限/`refusal`/多 `[DONE]` 防护。
 - **原因**：Claude Code 在只有 `message_start` 时不会自行结束回合，没有终止事件就永久挂起；上游的取舍是“宁可挂起也不伪造成功”。fork 面向不稳定的第三方网关（断流常见），选择诚实补终态（`end_turn` 不是伪造成功，而是“上游未给原因”的最小合法收尾）。
 - **对应测试**：上游的 `review_eof_keeps_received_partial_payload` / `review_progress_during_continuous_reasoning` 在本 fork 已改写为断言 fork 语义（载荷必达 + 补 `end_turn` + 有 `message_stop`、无 `error`），并在注释里写明与上游的差异。
+- **2026-10-10 更新**：上游 v4.0.6（#7986）独立修复了同源问题但只补一半——`[DONE]`/
+  自然结束前补关仍开着的块（重构出 `open_block_stop_events`，fork 已采纳该实现），
+  **无 `finish_reason` 的纯截断仍不发任何终止事件、也不补关**。fork 的四分支语义
+  （pending → `message_delta`；无 finish 有实质输出 → 补 `end_turn` + `message_stop`；
+  有 `message_start` 无输出 → `error` 伪成功防护；否则 `message_stop`）全部保留，
+  补关统一提到四分支之前（对全部路径生效；上游分支内的补关在 fork 语义下是自动
+  空操作，已删）。
 
 ### 4.21 请求上下文创建期的错误 → 协议错误响应体（fork）
 
@@ -603,8 +613,27 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 - 上游新增的 `.github/actions/prepare-tauri-signing-key/action.yml` 随合并入库但
   **本 fork 未引用**；`build(release)` 的 `codegen-units = 16`
   （`src-tauri/Cargo.toml`，发布编译快约 64%、体积 +17%）则已随合并且与 fork 不冲突。
+- **2026-10-10 采纳上游 `whats-new-check`**：上游 v4.0.2 在 `release.yml` 新增
+  `whats-new-check` job——tag 触发时检查 `src/whats-new/<tag>.json` 摘要随包存在，
+  并跑 `tests/config/whatsNewEntries.test.ts` 校验全部摘要结构（漏写则升级用户看不到
+  更新摘要，写坏则弹窗渲染出错落进错误页）。该检查与签名无关，fork 予以采纳
+  （置于 job 图最前避免白跑编译；actions 一律用 fork 版本），`release` 的 `needs`
+  为 `[whats-new-check, resolve-version]`。其余上游新增（macOS 拆分、`.sig` 硬校验、
+  `publish-release` 干跑化）仍不采纳，见上。
 - ⚠️ 每次同步都要确认 `release.yml` 仍是 fork 版本：上游若继续在其结构上迭代，
   该文件会持续冲突，按本节策略一律取 fork 侧（仅当 fork 决定配置签名密钥时重估）。
+
+### 4.29 依赖：`sha2` 0.11（fork）vs 0.10（上游）—— `format!("{:x}")` 需改 `hex::encode`
+
+- **上游**：`sha2 = "0.10"`，`hasher.finalize()` 返回实现了 `LowerHex` 的数组类型，
+  可直接 `format!("{:x}", hasher.finalize())`。
+- **fork**：dependabot 已升到 `sha2 = "0.11"`（`hex = "0.4"` 同为直依赖），
+  `finalize()` 返回 hybrid-array 的 `Array`，**不再实现 `LowerHex`**，同一写法编译
+  报 E0277。
+- **合并适配（2026-10-10）**：`proxy/forwarder.rs` 的 `conversation_fingerprint`
+  （上游新代码，Claude Desktop 会话指纹）改为 `hex::encode(hasher.finalize())`——
+  输出同样是小写十六进制（64 字符），`&digest[..32]` 切片与 `ccsw-` 前缀不变。
+- ⚠️ 上游新代码里若再出现 `format!("{:x}", …hash…)`（或 `{:X}`），必须一并改写。
 
 ## 5. 本地发布序列
 
@@ -988,6 +1017,75 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 验证源码与文档不可行；且同 concurrency 组的连续 push 会 `cancel-in-progress`
 > 取消上一次（快照修复的首次验证即因此被 docs push 取消），验证需用
 > `gh workflow run ci.yml` 手动触发。
+
+> 2026-10-10 同步（**v4.0.2–v4.0.7，未发布 fork tag**）：合入上游 `4804b723` 之后的
+> **123 个提交**至 `1f786dad`（452 文件 +29 428 / −7 143；343 修改 / 66 新增 / 43 删除）。
+> 本轮覆盖上游 v4.0.2–v4.0.7 六个版本：v4.0.2 引入 **what's-new 应用内更新摘要**
+> （`src/whats-new/<版本>.json` + `release.yml` 的 whats-new-check 作业）、v4.0.3
+> （29 提交）、v4.0.4（首个 stable）、v4.0.5（GitHub Copilot **托管账号**）、v4.0.6
+> （provider 搜索、Skills 批量更新、配额着色、classic sub-agent tools、**#7986** 流式
+> 收尾修复）、v4.0.7（quotaDisplay、会话压缩 rollout、stale-client、workspace 切换
+> 修复 **#8054**、计费修复）。
+>
+> **冲突 47 处**：
+> - 32 处 UD：`docs/user-manual/assets/*.png`——上游整批删除的 Claude Desktop 手册
+>   配图；fork 侧修改来自 `16ed764c`（[ImgBot]），核查全仓库无引用后**接受删除**；
+> - 5 处 UU：`src/icons/extracted/{ClaudeApi,a6-icon,byteplus,etok,sudocode-us}.png`
+>   ——取上游 **tile 风格版**并逐张校验字节数；
+> - 2 处 lock 重新生成：`pnpm-lock.yaml`、`src-tauri/Cargo.lock`（版本对齐 4.0.7，
+>   新增 gtk 依赖行）；
+> - 8 处源码手工解：
+>   - `release.yml`——**整文件取 fork 侧**后重放上游新增的 whats-new-check 作业
+>     （置于 job 列表最前、`release` 的 needs 改为 `[whats-new-check, resolve-version]`，
+>     见 4.28）；
+>   - `wsl2-nightly.yml`——取上游 nextest archive 结构，保留 fork 的 actions 版本与
+>     nightly 的 `if: false`；
+>   - `config.rs`——收敛到上游 `test_home_override()`：与 fork 独立实现的
+>     `CC_SWITCH_TEST_HOME` 短路同源（上游 **#7812** 独立实现，语义与 6.3 的根治
+>     方向一致）；
+>   - `handlers.rs`——采纳上游 `CodexUpstreamFormat` 枚举判定（取代
+>     `should_convert_codex_responses_to_anthropic/chat` 布尔对）与 **#7818** 的错误
+>     日志 `spawn_blocking` 异步化，fork 独有逻辑保留；
+>   - `streaming.rs`——fork **4.20** 的四分支语义完整保留；上游 **#7986** 的
+>     `open_block_stop_events` 补关块挪到统一分支之前，对 fork 独有路径同样生效
+>     （纯截断路径上游仍未补，fork 保留自己的补法，见 4.20）；
+>   - `ProviderForm.tsx`——合并 `isCopilotProvider`（上游托管 Copilot 身份 +
+>     fork 的 claude 域匹配）与 `promptCacheRouting` 保存条件（Codex Chat /
+>     Claude openai_chat 两路）；
+>   - `AboutSection.tsx`——取上游新布局，lucide `Github` 品牌图标以文件内联 SVG
+>     `GithubGlyph` 替代（4.16）；
+>   - `types.ts`——采纳上游 `codexCopilotApiFormat` 字段（保留原始字符串，
+>     兼容新版本选择）。
+>
+> 另 `package.json` 随上游对齐 `@tauri-apps/api` ^2.8.0 → ^2.10.1（其余 tauri
+> 插件保持 fork 的约束范围）。
+>
+> 分歧点核对：4.1–4.28 逐条复核**全部保留**——4.26 上游本轮未改
+> `tailwind.config.cjs`（@theme 无需搬迁）；4.27 Gemini 金标快照未被上游动；
+> `codex_red_lines.rs` 的 `model_catalog_json` 语义上游改为“卡内指针优先”
+> （fork 未自定义，金标全过直接采纳）；4.19/4.13 的 NativeResponses 模板
+> “已转出”状态维持。**新增 4.29**：sha2 0.11 适配——上游 0.10 的 `finalize()`
+> 实现 `LowerHex` 而 fork 的 0.11 不实现，`forwarder.rs` 的
+> `format!("{:x}", …)` 改为 `hex::encode(…)`。
+>
+> 测试基建适配（上游新文件按 fork 惯例改）：
+> `CodexFormFields.modelFetch.test.tsx` 补 fork 的 4 个必填 props
+> （sessionAffinityHeader / codexNativeResponsesTemplate 两组）；
+> `ProviderForm.openclawHeaders.test.tsx` 删除文件内自带的
+> `server.listen({ onUnhandledRequest: "error" })`——与 fork 全局 msw 生命周期
+> （`tests/setupTests.ts` 的 beforeAll listen）冲突会报
+> “cannot configure an already enabled network”，改用全局 warn + 本文件
+> handlers 覆盖。
+>
+> 版本号随 merge 对齐上游 `4.0.7`（`package.json` / `Cargo.toml` /
+> `tauri.conf.json` 三处）；**本轮未发布 fork tag**（待定夺）。latest.json
+> 空 platforms 缺陷仍在（6.2）。
+>
+> 验证（2026-10-10）：Rust `cargo test -j 4` 全套绿（lib **3638** + 集成 **182**，
+> 17 个集成测试二进制含金标 39）、`cargo fmt --check`、
+> `cargo clippy --all-targets -- -D warnings` 全绿；前端
+> `pnpm vitest run --maxWorkers=8` **202 文件 / 2436 用例**全绿、`pnpm typecheck` /
+> `pnpm format:check` / `pnpm build:renderer` 全绿。合并提交 `3f5e2bf9`。
 
 ## 6. 维护约定
 
