@@ -655,6 +655,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 | `v3.20.3` | 2026-09-13 | 合入上游 v3.20.3（`bd247a4a`）；Kimi 等 Codex 预设改原生 Responses 直连、代理正确性修复、预设与定价维护。**首次发布失败**：标签误指上游提交，Release 跑的是上游工作流（硬校验 `TAURI_SIGNING_PRIVATE_KEY`），5 个平台全部在签名步骤失败、附件为空；把标签改指 fork 提交 `b24deaa9` 后重发成功 |
 | `v3.20.4` | 2026-09-23 | 合入上游 v3.20.4（`f2537fdf`，25 提交）；Copilot 端点剥离 `stop`、`additional_tools` 抬升为工具、Codex `detail:original` 图片归一化、GPT-6/Grok 家族档位与定价批次、WSL shell 启动输出过滤；fork 侧 rquickjs 0.12 锁文件对齐（14 资产） |
 | `v4.0.1` | 2026-10-05 | 合入上游 v4.0.0 **与** v4.0.1（`4804b723`，38 提交）：v4.0 收尾（配额重置倒计时与到期列表、用量表格分页、88API/兔子 API 等预设扩编、官方图标）、代理修复（零用量 `response.incomplete` → `api_error`、Codex 状态库 WSL 路径跳过加锁）、CI 基建（rust-cache + nextest + pinned toolchain）与发布流程改造；fork 侧移除手写的 `wix.version` 覆盖。**发布一次成功**：tag `v4.0.1` 指向 fork 提交 `32e4aa39`，14 资产（Linux x86_64/arm64 各 AppImage+deb+rpm、macOS dmg+zip+tar.gz、Windows x86_64/arm64 各 MSI+Portable.zip、latest.json），正式版（Latest）；随发布一并修掉 macOS/Linux CI 的 golden 模式快照（644→600） |
+| `v4.0.7` | 2026-10-11 | 合入上游 v4.0.2–v4.0.7（`1f786dad`，123 提交）：what's-new 应用内更新摘要机制（v4.0.2 起）、GitHub Copilot 托管账号（v4.0.5）、provider 搜索 / Skills 批量更新 / 配额着色 / classic sub-agent tools / 流式收尾修复（#7986，v4.0.6）、quotaDisplay / 会话压缩 rollout / stale-client / workspace 切换修复（#8054，v4.0.7）等六个版本的完整内容；fork 侧新增 sha2 0.11 适配（4.29）。**发布一次成功**：tag `v4.0.7` 指向 fork 提交 `e091fdd6`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。发布前曾遇仓库 Actions 被禁用（用户网页端恢复，见同步注记） |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -1086,6 +1087,26 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > `cargo clippy --all-targets -- -D warnings` 全绿；前端
 > `pnpm vitest run --maxWorkers=8` **202 文件 / 2436 用例**全绿、`pnpm typecheck` /
 > `pnpm format:check` / `pnpm build:renderer` 全绿。合并提交 `3f5e2bf9`。
+>
+> **发布（2026-10-11）**：tag `v4.0.7` → fork 提交 `e091fdd6`（显式创建并复核
+> `git log -1 v4.0.7`，符合 6.1），Release run `38068226111` 全绿——Resolve Version
+> 与 whats-new-check 先行通过，五平台构建 16–23 分钟，Publish 31s、Assemble
+> latest.json 6s、Sync to R2 2s（无 secrets 自动跳过），**14 个资产**、正式版
+> （Latest）。latest.json 的 `platforms` 仍为空（无签名，见 6.2）。
+>
+> ⚠️ 发布前发现仓库 **Actions 被禁用**：push 不触发 CI，`workflow_dispatch` 返回
+> 422 "Actions has been disabled for this repository"，而 `actions/permissions`
+> API 与 `gh workflow list` 均显示正常（设置与行为不一致）；GitHub Status 页无
+> 平台事件。由用户在网页端处理后恢复（恢复验证：dispatch 成功、CI 与 Release
+> 均正常触发）。再次遇到"push 后 CI 不跑"时先做此 422 判定。
+>
+> **CI 复核（2026-10-11）**：Actions 恢复后手动触发 ci.yml（run `38068135111`）：
+> 首轮 `Backend Checks (Windows + WSL2 home)` 红于 WSL 契约测试
+> `config::tests::atomic_write_replaces_existing_wsl_unc_file`——路径断言全通过后
+> `tempdir_in` 在 UNC 上报 `NotFound`（"The system cannot find the path
+> specified"）；该测试代码与 ci.yml 本轮 merge 均未触碰，判定 runner WSL 环境偶发
+> （UNC 挂载时序类问题，非代码回归）；`gh run rerun --failed` 重跑后**六个 job
+> 全绿**。
 
 ## 6. 维护约定
 
