@@ -344,6 +344,7 @@ wire_api = "responses"`;
   return (
     <FullScreenPanel
       isOpen={isOpen}
+      trackUnsavedChanges
       title={
         isEditMode
           ? t("universalProvider.edit", { defaultValue: "编辑统一供应商" })

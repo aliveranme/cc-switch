@@ -102,10 +102,22 @@ export const proxyApi = {
     return invoke("set_proxy_stack_member", { appType, providerId, enabled });
   },
 
+  // Codex 聚合的模型被别的模型目录挡住时，改用 CC Switch 生成的目录（去掉指向别的文件的
+  // model_catalog_json）。返回之后还剩的提示
+  async adoptCodexStackCatalog(): Promise<ProxyStackNotice | null> {
+    return invoke("adopt_codex_stack_catalog");
+  },
+
   // 重启 Codex 的托管守护进程（codex 命令行连的那个），让它重读模型目录。会中断正在运行的
   // 任务，只在用户确认之后调
   async restartCodexAppServerDaemon(): Promise<CodexDaemonRestartOutcome> {
     return invoke("restart_codex_app_server_daemon");
+  },
+
+  // 关掉看不到进程时出的「Codex 可能还在用旧的」提示：后端记下现在的模型目录和登录，同一份
+  // 不再提示
+  async acknowledgeCodexStaleClients(): Promise<void> {
+    return invoke("acknowledge_codex_stale_clients");
   },
 
   // ========== v3+ 全局/应用级配置 API ==========

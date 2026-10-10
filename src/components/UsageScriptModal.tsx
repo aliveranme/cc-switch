@@ -893,6 +893,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
   return (
     <FullScreenPanel
       isOpen={isOpen}
+      trackUnsavedChanges
       title={`${t("usageScript.title")} - ${provider.name}`}
       onClose={onClose}
       footer={footer}

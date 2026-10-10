@@ -1,9 +1,22 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "@/lib/toast";
 import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, KeyRound, MoreHorizontal, Plus } from "lucide-react";
+import {
+  ExternalLink,
+  KeyRound,
+  MoreHorizontal,
+  Plus,
+  Search,
+} from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Provider, VisibleApps } from "@/types";
 import { KNOWN_APP_TYPES, type AppTypeFilter } from "@/types/usage";
@@ -41,7 +54,7 @@ import {
 } from "@/utils/errorUtils";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { deepClone } from "@/utils/deepClone";
-import { isLinux, isWindows } from "@/lib/platform";
+import { isLinux, isMac, isWindows } from "@/lib/platform";
 import {
   APP_STORAGE_KEY,
   appPageBelongsTo,
@@ -54,6 +67,7 @@ import {
   type View,
 } from "@/lib/navigation";
 import { Sidebar } from "@/components/shell/Sidebar";
+import { useUpdate } from "@/contexts/UpdateContext";
 import { NewLayoutDialog } from "@/components/shell/NewLayoutDialog";
 import {
   AppPageHeader,
@@ -64,8 +78,13 @@ import { APP_DISPLAY_NAME, AppGlyph } from "@/components/shell/AppGlyph";
 import { ProfileSwitcher } from "@/components/profiles/ProfileSwitcher";
 import { ProviderList } from "@/components/providers/ProviderList";
 import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
+import {
+  hasOpencodeDefinition,
+  isNativeOpencodeConfig,
+} from "@/components/providers/forms/helpers/opencodeFormUtils";
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { discardUnsavedChanges, hasUnsavedChanges } from "@/lib/unsavedChanges";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { AuthCenterPanel } from "@/components/settings/AuthCenterPanel";
 import { AppsPage } from "@/components/apps/AppsPage";
@@ -78,7 +97,7 @@ import { EnvWarningBanner } from "@/components/env/EnvWarningBanner";
 import { SwitchModePanel } from "@/components/providers/mode/SwitchModePanel";
 import { DesktopAccessBar } from "@/components/providers/mode/DesktopAccessBar";
 import { proxyApi } from "@/lib/api/proxy";
-import type { StartupAttachFailure } from "@/types/proxy";
+import type { AppMode, StartupAttachFailure } from "@/types/proxy";
 import UsageScriptModal from "@/components/UsageScriptModal";
 import UnifiedMcpPanel from "@/components/mcp/UnifiedMcpPanel";
 import PromptPanel from "@/components/prompts/PromptPanel";
@@ -86,6 +105,7 @@ import { PROMPT_APP_IDS } from "@/lib/query/prompts";
 import UnifiedSkillsPanel from "@/components/skills/UnifiedSkillsPanel";
 import { DeepLinkImportDialog } from "@/components/DeepLinkImportDialog";
 import { FirstRunNoticeDialog } from "@/components/FirstRunNoticeDialog";
+import { WhatsNewNotice } from "@/components/WhatsNewDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { HoverTip } from "@/components/ui/hover-tip";
@@ -137,12 +157,14 @@ const getInitialApp = (): AppId => {
 function App() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const { hasUpdate } = useUpdate();
 
   const [activeApp, setActiveApp] = useState<AppId>(getInitialApp);
   const sharedFeatureApp = sharedFeatureAppOf(activeApp);
   const [currentView, setCurrentView] = useState<View>(readStoredView);
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>("general");
+  const [appConfigScrollTarget, setAppConfigScrollTarget] = useState<AppId>();
   // 进设置前停留的页面：设置目录里的「← 返回」回到这里
   const settingsReturnViewRef = useRef<View>("providers");
   const [openclawConfigTab, setOpenclawConfigTab] =
@@ -151,6 +173,22 @@ function App() {
     PROMPT_APP_IDS.includes(sharedFeatureApp) ? sharedFeatureApp : "claude",
   );
   const [isAddOpen, setIsAddOpen] = useState(false);
+  // 供应商搜索面板：页头按钮和 ⌘F 都能打开；换应用或离开供应商页就收起
+  const [providerSearchOpen, setProviderSearchOpen] = useState(false);
+  useEffect(() => {
+    setProviderSearchOpen(false);
+  }, [activeApp, currentView]);
+  // 供应商页顶部正在看的那格（直连 / 路由 / 聚合），由 SwitchModePanel 报上来。打开新增、
+  // 编辑时记下当时那格，表单按它选布局：在聚合那格打开就是聚合的简化表单。
+  const [providerModeView, setProviderModeView] = useState<{
+    app: AppId;
+    view: AppMode;
+  } | null>(null);
+  const [formModeView, setFormModeView] = useState<AppMode>();
+  const handleProviderModeViewChange = useCallback(
+    (app: AppId, view: AppMode) => setProviderModeView({ app, view }),
+    [],
+  );
   // 托盘里点了直连下需要路由的那家：打开应用页后弹「需要路由」对话框
   const [trayNeedsRoute, setTrayNeedsRoute] = useState<{
     app: AppId;
@@ -262,6 +300,13 @@ function App() {
 
   const { isRunning: isProxyRunning, takeoverStatus } = useProxyStatus();
   const proxyAppId = isProxyAppId(activeApp) ? activeApp : null;
+  // 换了应用、新面板还没报上来时为 undefined：表单按应用实际生效的模式
+  const currentModeView =
+    providerModeView?.app === activeApp ? providerModeView.view : undefined;
+  const openAddProvider = (modeView: AppMode | undefined) => {
+    setFormModeView(modeView);
+    setIsAddOpen(true);
+  };
   const currentAppUsesProxy =
     proxyAppId !== null || activeApp === "claude-desktop";
   const isCurrentAppTakeoverActive = proxyAppId
@@ -593,13 +638,26 @@ function App() {
     setUsageProvider(null);
   };
 
-  const openSettings = (section: SettingsSection = "general") => {
+  // 整页编辑器里有未保存的修改：先确认，确认放弃后再执行这次导航
+  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
+  const confirmLeave = (proceed: () => void) => {
+    if (!hasUnsavedChanges()) return false;
+    setPendingLeave(() => proceed);
+    return true;
+  };
+
+  const openSettings = (
+    section: SettingsSection = "general",
+    appConfigTarget?: AppId,
+  ) => {
     if (managementBusyRef.current) return;
+    if (confirmLeave(() => openSettings(section, appConfigTarget))) return;
     closeProviderPanels();
     if (currentViewRef.current !== "settings") {
       settingsReturnViewRef.current = currentViewRef.current;
     }
     setSettingsSection(section);
+    setAppConfigScrollTarget(appConfigTarget);
     setCurrentView("settings");
   };
 
@@ -609,6 +667,7 @@ function App() {
 
   const selectApp = (app: AppId) => {
     if (managementBusyRef.current) return;
+    if (confirmLeave(() => selectApp(app))) return;
     closeProviderPanels();
     setActiveApp(app);
     localStorage.setItem(APP_STORAGE_KEY, app);
@@ -621,6 +680,7 @@ function App() {
       return;
     }
     if (managementBusyRef.current) return;
+    if (confirmLeave(() => openPage(page))) return;
     closeProviderPanels();
     if (page === "prompts" && currentViewRef.current !== "prompts") {
       // 提示词页默认选中侧栏里最后选的那个应用
@@ -633,24 +693,33 @@ function App() {
   useTrayAppPageSeen(currentView === "providers" ? activeApp : null);
 
   useTrayNavigation((navigation) => {
-    if (navigation.section) {
-      openSettings(navigation.section);
-      return;
-    }
-    if (!navigation.app) return;
-    selectApp(navigation.app);
-    if (navigation.intent === "add") setIsAddOpen(true);
-    if (navigation.intent === "needsRoute" && navigation.providerId) {
-      setTrayNeedsRoute({
-        app: navigation.app,
-        providerId: navigation.providerId,
-        nonce: Date.now(),
-      });
-    }
+    const navigate = () => {
+      if (navigation.section) {
+        openSettings(navigation.section);
+        return;
+      }
+      if (!navigation.app) return;
+      selectApp(navigation.app);
+      // 托盘先换应用：新应用那格还没报上来，按它实际生效的模式
+      if (navigation.intent === "add") openAddProvider(undefined);
+      if (navigation.intent === "needsRoute" && navigation.providerId) {
+        setTrayNeedsRoute({
+          app: navigation.app,
+          providerId: navigation.providerId,
+          nonce: Date.now(),
+        });
+      }
+    };
+    if (managementBusyRef.current || !confirmLeave(navigate)) navigate();
   });
 
   // 侧栏、⌘K 进用量统计看全部应用；只有应用页 ⋯ 进来时带应用筛选
   const openPageFromNav = (page: GlobalPage | "settings") => {
+    // 「设置」上的绿点说的是 CC Switch 有新版本，点进去直接到「关于」里的更新按钮
+    if (page === "settings" && hasUpdate) {
+      openSettings("about");
+      return;
+    }
     if (page === "usage") setUsageAppFilter("all");
     openPage(page);
   };
@@ -811,16 +880,25 @@ function App() {
       provider.category !== "omo" &&
       provider.category !== "omo-slim"
     ) {
-      const { npm, models } = provider.settingsConfig;
+      // A copy gets a new ID, so it cannot inherit a built-in definition.
+      // Native V2 declarations name their package in `package`, not `npm`.
+      const isNative = isNativeOpencodeConfig(
+        JSON.stringify(provider.settingsConfig),
+        provider.meta?.opencodeConfigFormat,
+      );
       if (
-        typeof npm !== "string" ||
-        !npm.trim() ||
-        !models ||
-        typeof models !== "object" ||
-        Array.isArray(models) ||
-        Object.keys(models).length === 0
+        !hasOpencodeDefinition(
+          provider.settingsConfig,
+          isNative ? "package" : "npm",
+        )
       ) {
-        toast.error(t("opencode.duplicateRequiresDefinition"));
+        toast.error(
+          t(
+            isNative
+              ? "opencode.duplicateRequiresNativeDefinition"
+              : "opencode.duplicateRequiresDefinition",
+          ),
+        );
         return;
       }
     }
@@ -1059,7 +1137,7 @@ function App() {
             {t("appPage.viewUsage")}
           </DropdownMenuItem>
         )}
-        <DropdownMenuItem onSelect={() => openSettings("appConfig")}>
+        <DropdownMenuItem onSelect={() => openSettings("appConfig", activeApp)}>
           {t("appPage.configDirectory")}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => openPage("apps")}>
@@ -1099,7 +1177,7 @@ function App() {
         <>
           {currentView === "providers" &&
             activeApp !== "mcode" &&
-            (settingsData?.showProfileSwitcher ?? true) && (
+            (settingsData?.showProfileSwitcher ?? false) && (
               <ProfileSwitcher activeApp={activeApp} />
             )}
           {activeApp === "hermes" && (
@@ -1112,11 +1190,30 @@ function App() {
               <ExternalLink className="h-3.5 w-3.5" />
             </Button>
           )}
+          {currentView === "providers" &&
+            (settingsData?.showProviderSearch ?? true) && (
+              <HoverTip
+                content={t("provider.searchButtonTip", {
+                  shortcut: isMac() ? "⌘F" : "Ctrl+F",
+                })}
+              >
+                <Button
+                  variant="quiet"
+                  size="icon-compact"
+                  className="h-8 w-8"
+                  aria-label={t("provider.searchAriaLabel")}
+                  aria-pressed={providerSearchOpen}
+                  onClick={() => setProviderSearchOpen((open) => !open)}
+                >
+                  <Search className="h-4 w-4" />
+                </Button>
+              </HoverTip>
+            )}
           {currentView === "providers" && (
             <Button
               variant="solid"
               size="regular"
-              onClick={() => setIsAddOpen(true)}
+              onClick={() => openAddProvider(currentModeView)}
             >
               <Plus className="h-4 w-4" />
               {t("provider.addProvider")}
@@ -1169,14 +1266,19 @@ function App() {
   };
 
   const listCallbacks = {
-    onEdit: (provider: Provider) => setEditingProvider(provider),
+    onEdit: (provider: Provider) => {
+      setFormModeView(currentModeView);
+      setEditingProvider(provider);
+    },
     onDelete: (provider: Provider) =>
       setConfirmAction({ provider, action: "delete" }),
     onDuplicate: handleDuplicateProvider,
     onConfigureUsage: setUsageProvider,
     onOpenWebsite: handleOpenWebsite,
     onOpenTerminal: activeApp === "claude" ? handleOpenTerminal : undefined,
-    onCreate: () => setIsAddOpen(true),
+    onCreate: () => openAddProvider(currentModeView),
+    searchOpen: providerSearchOpen,
+    onSearchOpenChange: setProviderSearchOpen,
   };
 
   const renderProviderList = () => {
@@ -1198,6 +1300,7 @@ function App() {
             trayNeedsRoute?.app === proxyAppId ? trayNeedsRoute : undefined
           }
           onNeedsRouteHandled={() => setTrayNeedsRoute(null)}
+          onViewChange={handleProviderModeViewChange}
           startupFailure={startupFailure}
           onDismissStartupFailure={() =>
             setStartupFailures((list) =>
@@ -1422,6 +1525,7 @@ function App() {
       return (
         <SettingsPage
           section={settingsSection}
+          appConfigScrollTarget={appConfigScrollTarget}
           onImportSuccess={handleImportSuccess}
           onOpenApps={() => setCurrentView("apps")}
           onOpenApp={selectApp}
@@ -1443,7 +1547,10 @@ function App() {
           settingsSection={settingsSection}
           onSelectApp={selectApp}
           onSelectPage={openPageFromNav}
-          onSelectSettingsSection={setSettingsSection}
+          onSelectSettingsSection={(section) => {
+            setAppConfigScrollTarget(undefined);
+            setSettingsSection(section);
+          }}
           onExitSettings={exitSettings}
           appsUpdateAvailable={
             checkToolUpdatesOnStartup && toolUpdatesAvailable
@@ -1498,6 +1605,7 @@ function App() {
         onOpenChange={setIsAddOpen}
         appId={activeApp}
         onSubmit={addProvider}
+        modeView={formModeView}
       />
 
       <EditProviderDialog
@@ -1512,6 +1620,7 @@ function App() {
         appId={activeApp}
         isProxyTakeover={isCurrentAppTakeoverActive}
         isCurrent={effectiveEditingProvider?.id === currentProviderId}
+        modeView={formModeView}
       />
 
       {effectiveUsageProvider && (
@@ -1544,6 +1653,22 @@ function App() {
       />
 
       <ConfirmDialog
+        isOpen={pendingLeave !== null}
+        title={t("common.unsavedLeaveTitle")}
+        message={t("common.unsavedLeaveMessage")}
+        confirmText={t("common.unsavedLeaveConfirm")}
+        cancelText={t("common.unsavedLeaveCancel")}
+        zIndex="top"
+        onConfirm={() => {
+          const proceed = pendingLeave;
+          setPendingLeave(null);
+          discardUnsavedChanges();
+          proceed?.();
+        }}
+        onCancel={() => setPendingLeave(null)}
+      />
+
+      <ConfirmDialog
         isOpen={launchDashboardOpen}
         title={t("hermes.webui.launchConfirmTitle")}
         message={t("hermes.webui.launchConfirmMessage")}
@@ -1568,6 +1693,7 @@ function App() {
       <DeepLinkImportDialog />
       <FirstRunNoticeDialog />
       <NewLayoutDialog />
+      <WhatsNewNotice />
     </WindowControlsContext.Provider>
   );
 }

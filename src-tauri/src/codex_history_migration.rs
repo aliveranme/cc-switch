@@ -6,6 +6,7 @@
 use crate::codex_config::{
     get_codex_config_dir, read_codex_config_text, CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
 };
+use crate::codex_rollout_file;
 use crate::codex_state_db::{codex_state_db_is_lockable, codex_state_db_paths};
 use crate::config::{atomic_write, copy_file, get_app_config_dir};
 use crate::database::{is_official_seed_id, Database};
@@ -25,10 +26,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use toml_edit::DocumentMut;
 
-const MIGRATION_NAME: &str = "codex-history-provider-migration-v1";
-const OFFICIAL_UNIFY_MIGRATION_NAME: &str = "codex-official-history-unify-v1";
+pub(crate) const MIGRATION_NAME: &str = "codex-history-provider-migration-v1";
+pub(crate) const OFFICIAL_UNIFY_MIGRATION_NAME: &str = "codex-official-history-unify-v1";
 /// 还原操作自身的备份目录（与迁移备份分开，保持迁移账本目录纯净）。
-const OFFICIAL_UNIFY_RESTORE_BACKUP_NAME: &str = "codex-official-history-unify-restore-v1";
+pub(crate) const OFFICIAL_UNIFY_RESTORE_BACKUP_NAME: &str =
+    "codex-official-history-unify-restore-v1";
 /// SQLite 变量上限保守值，IN 列表按此分块。
 const STATE_DB_ID_CHUNK: usize = 500;
 
@@ -40,6 +42,11 @@ fn lock_codex_official_history_op() -> std::sync::MutexGuard<'static, ()> {
     CODEX_OFFICIAL_HISTORY_OP_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// 用户在「备份与恢复」里删除迁移备份目录时拿同一把锁，避免抽掉正在写的备份。
+pub(crate) fn lock_history_op_for_backup_cleanup() -> std::sync::MutexGuard<'static, ()> {
+    lock_codex_official_history_op()
 }
 /// Codex 内建默认 provider id：config.toml 没有 `model_provider` 键时会话归入此桶。
 /// 官方订阅（ChatGPT OAuth / OpenAI API key）的历史会话都记录这个 id。
@@ -486,7 +493,7 @@ fn backup_generation_matches_dir(generation: &Path, codex_dir_key: &str) -> bool
 }
 
 fn collect_official_session_ids_from_backup(path: &Path, session_ids: &mut HashSet<String>) {
-    let Ok(content) = fs::read_to_string(path) else {
+    let Ok(content) = codex_rollout_file::read_to_string(path) else {
         log::debug!("Failed to read unify backup file {}", path.display());
         return;
     };
@@ -1005,7 +1012,7 @@ fn collect_jsonl_files(dir: &Path, files: &mut Vec<PathBuf>, depth: u8, max_dept
         let path = entry.path();
         if path.is_dir() {
             collect_jsonl_files(&path, files, depth + 1, max_depth);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+        } else if codex_rollout_file::is_rollout_file(&path) {
             files.push(path);
         }
     }
@@ -1031,7 +1038,8 @@ fn rewrite_codex_session_file_lines(
     let metadata_before = fs::metadata(path).map_err(|e| AppError::io(path, e))?;
     let modified_before = metadata_before.modified().ok();
     let len_before = metadata_before.len();
-    let content = fs::read_to_string(path).map_err(|e| AppError::io(path, e))?;
+    // Codex 压缩过的 rollout（`.jsonl.zst`）解压后改写、再压回原形态
+    let content = codex_rollout_file::read_to_string(path).map_err(|e| AppError::io(path, e))?;
 
     let mut rewritten = String::with_capacity(content.len());
     let mut changed = false;
@@ -1056,7 +1064,7 @@ fn rewrite_codex_session_file_lines(
     ensure_codex_session_file_unchanged(path, modified_before, len_before)?;
     backup_codex_jsonl_file(path, codex_dir, backup_root)?;
     ensure_codex_session_file_unchanged(path, modified_before, len_before)?;
-    atomic_write(path, rewritten.as_bytes())?;
+    codex_rollout_file::write_rollout(path, rewritten.as_bytes())?;
     Ok(true)
 }
 
@@ -1958,6 +1966,66 @@ base_url = "https://proxy.example/v1"
 
         let text = fs::read_to_string(session_dir.join("session.jsonl")).expect("read session");
         assert!(text.contains("\"model_provider\":\"custom\""));
+    }
+
+    #[test]
+    fn rewrites_compressed_rollout_in_place_and_keeps_it_compressed() {
+        let dir = tempdir().expect("tempdir");
+        let codex_dir = dir.path().join(".codex");
+        let backup_root = dir.path().join("backup");
+        let session_dir = codex_dir.join("sessions/2026/05/20");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+        let path = session_dir.join("rollout-test.jsonl.zst");
+        let original = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s1\",\"model_provider\":\"rightcode\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"hi\"}}\n"
+        );
+        fs::write(
+            &path,
+            zstd::stream::encode_all(original.as_bytes(), 3).expect("encode"),
+        )
+        .expect("write session");
+
+        let old_mtime = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("open")
+            .set_times(fs::FileTimes::new().set_modified(old_mtime))
+            .expect("set mtime");
+
+        let mut files = Vec::new();
+        collect_jsonl_files(&codex_dir.join("sessions"), &mut files, 0, 8);
+        assert_eq!(files, vec![path.clone()]);
+
+        let changed = rewrite_codex_session_file_for_provider_bucket(
+            &path,
+            &codex_dir,
+            &HashSet::from(["rightcode".to_string()]),
+            &backup_root,
+        )
+        .expect("rewrite");
+
+        assert!(changed);
+        // 压缩会话的最后活跃时间取 mtime，改写不能让它变成「刚刚」
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("meta")
+                .modified()
+                .expect("mtime"),
+            old_mtime
+        );
+        let raw = fs::read(&path).expect("read raw");
+        assert_eq!(&raw[..4], &[0x28, 0xB5, 0x2F, 0xFD], "still zstd");
+        let next = codex_rollout_file::read_to_string(&path).expect("read rewritten");
+        assert!(next.contains("\"model_provider\":\"custom\""));
+        assert!(next.ends_with("\"content\":\"hi\"}}\n"));
+        let backup = fs::read(backup_root.join("jsonl/sessions/2026/05/20/rollout-test.jsonl.zst"))
+            .expect("backup kept as zst");
+        assert_eq!(
+            zstd::stream::decode_all(backup.as_slice()).expect("decode backup"),
+            original.as_bytes()
+        );
     }
 
     #[test]

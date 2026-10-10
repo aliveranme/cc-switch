@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Download,
   ExternalLink,
@@ -6,6 +6,9 @@ import {
   Info,
   Loader2,
   RefreshCw,
+  Sparkles,
+  Star,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
@@ -14,6 +17,8 @@ import { getVersion } from "@tauri-apps/api/app";
 import { settingsApi } from "@/lib/api";
 import { useUpdate } from "@/contexts/UpdateContext";
 import { Badge } from "@/components/ui/badge";
+import { WhatsNewDialog } from "@/components/WhatsNewDialog";
+import { WHATS_NEW_ENTRIES, entriesUpTo } from "@/lib/whatsNew";
 import appIcon from "@/assets/icons/app-icon.png";
 import { extractErrorMessage } from "@/utils/errorUtils";
 
@@ -23,6 +28,36 @@ interface AboutSectionProps {
 
 // 应用自身版本（getVersion，本地毫秒级、无网络）也缓存一份，纯为重挂时免去 loading 闪烁。
 let appVersionCache: string | null = null;
+
+// 邀 Star 条关掉后记在本机（纯界面偏好，不进库、不随云同步）
+const STAR_PROMPT_DISMISSED_KEY = "ccswitch:about:starPromptDismissed";
+
+function readStarPromptDismissed(): boolean {
+  try {
+    return localStorage.getItem(STAR_PROMPT_DISMISSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+// 上游用 lucide 的 `Github` 品牌图标；fork 的 lucide 1.x 已移除品牌导出，
+// 这里以文件内联 SVG 代替（fork-differences 4.16）。
+function GithubGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      fill="currentColor"
+      fillRule="evenodd"
+      height="1em"
+      style={{ flex: "none", lineHeight: 1 }}
+      viewBox="0 0 24 24"
+      width="1em"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+    >
+      <path d="M12 0c6.63 0 12 5.276 12 11.79-.001 5.067-3.29 9.567-8.175 11.187-.6.118-.825-.25-.825-.56 0-.398.015-1.665.015-3.242 0-1.105-.375-1.813-.81-2.181 2.67-.295 5.475-1.297 5.475-5.822 0-1.297-.465-2.344-1.23-3.169.12-.295.54-1.503-.12-3.125 0 0-1.005-.324-3.3 1.209a11.32 11.32 0 00-3-.398c-1.02 0-2.04.133-3 .398-2.295-1.518-3.3-1.209-3.3-1.209-.66 1.622-.24 2.83-.12 3.125-.765.825-1.23 1.887-1.23 3.169 0 4.51 2.79 5.527 5.46 5.822-.345.294-.66.81-.765 1.577-.69.31-2.415.81-3.495-.973-.225-.354-.9-1.223-1.845-1.209-1.005.015-.405.56.015.781.51.28 1.095 1.327 1.23 1.666.24.663 1.02 1.93 4.035 1.385 0 .988.015 1.916.015 2.196 0 .31-.225.664-.825.56C3.303 21.374-.003 16.867 0 11.791 0 5.276 5.37 0 12 0z"></path>
+    </svg>
+  );
+}
 
 /**
  * 设置 → 关于：版本、便携模式、检查更新 / 安装并重启、项目链接。
@@ -37,6 +72,14 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
     () => appVersionCache === null,
   );
   const [isDownloading, setIsDownloading] = useState(false);
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const [starPromptDismissed, setStarPromptDismissed] = useState(
+    readStarPromptDismissed,
+  );
+  const recentEntries = useMemo(
+    () => (version ? entriesUpTo(WHATS_NEW_ENTRIES, version) : []),
+    [version],
+  );
 
   const { hasUpdate, updateInfo, checkUpdate, resetDismiss, isChecking } =
     useUpdate();
@@ -95,6 +138,15 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
 
   const handleOpenGithub = useCallback(() => {
     void settingsApi.openExternal("https://github.com/farion1231/cc-switch");
+  }, []);
+
+  const handleDismissStarPrompt = useCallback(() => {
+    setStarPromptDismissed(true);
+    try {
+      localStorage.setItem(STAR_PROMPT_DISMISSED_KEY, "1");
+    } catch {
+      // 存不下就只在本次会话里隐藏
+    }
   }, []);
 
   const handleCheckUpdate = useCallback(async () => {
@@ -221,26 +273,17 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
       )}
 
       <div className="flex flex-wrap items-center gap-2 px-5 py-4">
-        <Button
-          type="button"
-          variant="neutral"
-          size="compact"
-          onClick={handleOpenGithub}
-        >
-          <svg
-            fill="currentColor"
-            fillRule="evenodd"
-            height="1em"
-            style={{ flex: "none", lineHeight: 1 }}
-            viewBox="0 0 24 24"
-            width="1em"
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-3.5 w-3.5"
+        {starPromptDismissed && (
+          <Button
+            type="button"
+            variant="neutral"
+            size="compact"
+            onClick={handleOpenGithub}
           >
-            <path d="M12 0c6.63 0 12 5.276 12 11.79-.001 5.067-3.29 9.567-8.175 11.187-.6.118-.825-.25-.825-.56 0-.398.015-1.665.015-3.242 0-1.105-.375-1.813-.81-2.181 2.67-.295 5.475-1.297 5.475-5.822 0-1.297-.465-2.344-1.23-3.169.12-.295.54-1.503-.12-3.125 0 0-1.005-.324-3.3 1.209a11.32 11.32 0 00-3-.398c-1.02 0-2.04.133-3 .398-2.295-1.518-3.3-1.209-3.3-1.209-.66 1.622-.24 2.83-.12 3.125-.765.825-1.23 1.887-1.23 3.169 0 4.51 2.79 5.527 5.46 5.822-.345.294-.66.81-.765 1.577-.69.31-2.415.81-3.495-.973-.225-.354-.9-1.223-1.845-1.209-1.005.015-.405.56.015.781.51.28 1.095 1.327 1.23 1.666.24.663 1.02 1.93 4.035 1.385 0 .988.015 1.916.015 2.196 0 .31-.225.664-.825.56C3.303 21.374-.003 16.867 0 11.791 0 5.276 5.37 0 12 0z"></path>
-          </svg>
-          {t("settings.github")}
-        </Button>
+            <GithubGlyph className="h-3.5 w-3.5" />
+            {t("settings.github")}
+          </Button>
+        )}
         <Button
           type="button"
           variant="neutral"
@@ -259,17 +302,61 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
           <ExternalLink className="h-3.5 w-3.5" />
           {t("settings.releaseNotes")}
         </Button>
-        <a
-          href="https://github.com/farion1231/cc-switch"
-          onClick={(event) => {
-            event.preventDefault();
-            handleOpenGithub();
-          }}
-          className="ms-auto text-caption text-fg-2 underline decoration-border-strong underline-offset-[3px] hover:text-fg-1"
-        >
-          {t("settings.starPrompt")}
-        </a>
+        {recentEntries.length > 0 && (
+          <Button
+            type="button"
+            variant="neutral"
+            size="compact"
+            onClick={() => setWhatsNewOpen(true)}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            {t("whatsNew.recentTitle")}
+          </Button>
+        )}
       </div>
+
+      {/* 下载与更新都走 ccswitch.io，用户不再经过仓库页，邀 Star 单独占一行；按钮即 GitHub 入口。
+          关掉后链接行补回 GitHub 按钮 */}
+      {!starPromptDismissed && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-3 bg-action-soft py-3.5 ps-5 pe-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <Star
+              aria-hidden="true"
+              className="h-5 w-5 shrink-0 animate-[spin_6s_linear_infinite] fill-amber-500 text-amber-500 motion-reduce:animate-none"
+            />
+            <p className="min-w-0 text-body text-fg-1">
+              {t("settings.starPrompt")}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="neutral"
+              size="compact"
+              onClick={handleOpenGithub}
+            >
+              <GithubGlyph className="h-3.5 w-3.5" />
+              {t("settings.starOnGithub")}
+            </Button>
+            <Button
+              type="button"
+              variant="quiet"
+              size="icon-compact"
+              onClick={handleDismissStarPrompt}
+              aria-label={t("common.close")}
+              title={t("common.close")}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <WhatsNewDialog
+        open={whatsNewOpen}
+        onClose={() => setWhatsNewOpen(false)}
+        entries={recentEntries}
+      />
     </div>
   );
 }

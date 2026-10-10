@@ -36,8 +36,8 @@ use crate::live::patch::toml::{value_text, TomlDocPatch, TomlSteps};
 use crate::live::patch::{Guarded, LivePatch, WholeFile};
 use crate::live::project::codex::{
     official_mirror_table, proxy_route_table, requires_openai_auth, row_catalog_pointer,
-    CodexConfigPatch, CodexProjection, KnownTable, Route, RouteAuth, RouteWrite, RowInput,
-    ROUTE_ID, WEB_SEARCH_DISABLED,
+    without_row_catalog, CodexConfigPatch, CodexProjection, KnownTable, Route, RouteAuth,
+    RouteWrite, RowInput, ROUTE_ID, WEB_SEARCH_DISABLED,
 };
 use crate::mode::contract::CONTRACT_VERSION;
 use crate::mode::operation::{AppWrite, FileChange, OperationReport};
@@ -267,7 +267,12 @@ pub(crate) fn predicted_official_login(
         .ok()
         .flatten()
         .map(|bytes| serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null));
-    let stash = load_stash(&DeviceStore::for_device(), &planned.official_logins).stash;
+    let stash = load_stash(
+        &DeviceStore::for_device(),
+        &planned.official_logins,
+        live.as_ref(),
+    )
+    .stash;
     let auth_plan = codex_login::plan(AuthInput {
         live: live.as_ref(),
         live_is_managed: live_is_managed(prepared, live.as_ref()),
@@ -387,15 +392,11 @@ fn exclusive_of(provider: &Provider, projection: &CodexProjection) -> Vec<(Strin
     exclusive
 }
 
-/// live 现在对应的那一家带进来的独有字段和行里指定的模型目录指针：切走时值还相同就删。
+/// live 现在对应的那一家带进来的独有字段：切走时值还相同就删。
 pub(crate) fn outgoing_exclusive(owner: &Owner<'_>) -> Vec<(String, TomlValue)> {
     match owner {
         Owner::Provider(provider) => match project(provider) {
-            Ok(projection) => {
-                let mut fields = exclusive_of(provider, &projection);
-                fields.extend(row_catalog_pointer(&projection.top).cloned());
-                fields
-            }
+            Ok(projection) => exclusive_of(provider, &projection),
             Err(err) => {
                 log::warn!(
                     "无法投影 Codex 供应商 {} 的独有字段，切走时不清理它们: {err}",
@@ -702,6 +703,16 @@ pub(crate) fn route_owns_catalog(route: &Provider) -> bool {
     project(route).is_ok_and(|projection| row_catalog_pointer(&projection.top).is_some())
 }
 
+/// 去掉路由那家行里自己指定的模型目录指针之后的 `settings_config`；行里没有时为 `None`。
+pub(crate) fn settings_without_row_catalog(route: &Provider) -> Option<Value> {
+    let text = without_row_catalog(route.settings_config.get("config")?.as_str()?)?;
+    let mut settings = route.settings_config.clone();
+    settings
+        .as_object_mut()?
+        .insert("config".to_string(), Value::String(text));
+    Some(settings)
+}
+
 /// 发布了 Stack 模型时不写进 `config.toml` 的全局键：Codex 拿它们覆盖目录里的每一行。
 const STACK_SUNK_WINDOW_KEYS: &[&str] = &["model_context_window", "model_auto_compact_token_limit"];
 
@@ -779,7 +790,12 @@ fn stack_catalog(
             },
         })
         .collect();
-    plan_codex_stack_catalog(route_row, &members).map(Some)
+    plan_codex_stack_catalog(
+        route_row,
+        &members,
+        crate::settings::codex_stack_classic_subagents(),
+    )
+    .map(Some)
 }
 
 fn table_text(table: &Table) -> String {
@@ -853,13 +869,12 @@ fn contract_of(
         exclusive: config
             .exclusive
             .iter()
-            .chain(row_catalog_pointer(&config.top))
             .map(|(key, value)| (key.clone(), Value::String(value_text(value))))
             .collect(),
     }
 }
 
-/// 读登录暂存。
+/// 读到的登录暂存。
 struct LoadedStash {
     stash: LoginStash,
     pre: Option<Vec<u8>>,
@@ -868,17 +883,12 @@ struct LoadedStash {
     unreadable: Option<String>,
 }
 
-fn load_stash(store: &DeviceStore, official_logins: &[Value]) -> LoadedStash {
+/// 读登录暂存。`live` 是现在的 `auth.json`：升级更早版本的暂存时要用（见 `LoginStash::loaded`）。
+fn load_stash(store: &DeviceStore, official_logins: &[Value], live: Option<&Value>) -> LoadedStash {
     let path = store.file(STASH_FILENAME);
     let pre = read_current(&path).ok().flatten();
     let (stash, unreadable) = match pre.as_deref().map(serde_json::from_slice::<LoginStash>) {
-        Some(Ok(stash)) => (
-            LoginStash {
-                initialized: true,
-                ..stash
-            },
-            None,
-        ),
+        Some(Ok(stash)) => (stash.loaded(official_logins, live), None),
         Some(Err(err)) => {
             log::warn!("Codex 登录暂存 {} 无法解析: {err}", path.display());
             (
@@ -958,7 +968,7 @@ pub(crate) fn run_with_edits(
         stash,
         pre: stash_pre,
         unreadable: stash_unreadable,
-    } = load_stash(store, &planned.official_logins);
+    } = load_stash(store, &planned.official_logins, live_auth.as_ref());
     let preserve = crate::settings::preserve_codex_official_auth_on_switch();
     let auth_plan = codex_login::plan(AuthInput {
         live: live_auth.as_ref(),

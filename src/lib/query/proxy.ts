@@ -97,7 +97,8 @@ function isStackWriteError(error: unknown): error is ProxyStackWriteError {
 }
 
 /**
- * 把一家加入或移出 Stack 模型。客户端只在启动时读模型列表，成功后提示重启。失败分两种：
+ * 把一家加入或移出 Stack 模型。Claude Code 运行中就会读到改过的 settings.json，Codex 只在
+ * 启动时读模型目录，成功后提示重启。失败分两种：
  * 什么都没改（弹后端的错误），已部分写入（下次操作或重启 CC Switch 时补完）。两种都按
  * 后端的状态重新显示，不在前端假设名单不变。
  */
@@ -117,9 +118,12 @@ export function useSetProxyStackMember() {
     }) => proxyApi.setProxyStackMember(appType, providerId, enabled),
     onSuccess: (notice, variables) => {
       toast.success(
-        t("provider.stackSaved", {
-          client: getAppLabel(variables.appType),
-        }),
+        t(
+          variables.appType === "codex"
+            ? "provider.stackSaved"
+            : "provider.stackSavedLive",
+          { client: getAppLabel(variables.appType) },
+        ),
         {
           description: variables.enabled
             ? t("provider.stackReselectHint")
@@ -152,6 +156,35 @@ export function useSetProxyStackMember() {
 }
 
 /**
+ * Codex 聚合的模型被路由供应商自己的模型目录挡住（routeOwnsCatalog）时，改用 CC Switch
+ * 生成的目录。客户端只在启动时读模型目录，成功后提示重启；还剩别的提示照样弹出。
+ */
+export function useAdoptCodexStackCatalog() {
+  const queryClient = useQueryClient();
+  const { t } = useTranslation();
+
+  return useMutation({
+    mutationFn: () => proxyApi.adoptCodexStackCatalog(),
+    onSuccess: (notice) => {
+      toast.success(t("provider.adoptCatalogDone"), { closeButton: true });
+      if (notice) {
+        toast.warning(t(`provider.${notice}`), { closeButton: true });
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(
+        t("provider.adoptCatalogFailed", {
+          error: extractErrorMessage(error),
+        }),
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["providers", "codex"] });
+    },
+  });
+}
+
+/**
  * 重启 Codex 的托管守护进程，让它重读模型目录。结束后重新查 Stack 名单：重启成功时
  * 「还在用旧模型列表」的提示随之消失。
  */
@@ -179,6 +212,20 @@ export function useRestartCodexAppServerDaemon() {
         }),
       );
     },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["providers", "codex"] });
+    },
+  });
+}
+
+/**
+ * 关掉看不到进程时出的「Codex 可能还在用旧的」提示：后端记下现在这份，之后再变才提示。
+ */
+export function useAcknowledgeCodexStaleClients() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => proxyApi.acknowledgeCodexStaleClients(),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["providers", "codex"] });
     },
