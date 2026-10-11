@@ -1017,7 +1017,8 @@ fn apply_provider_to_paths(
 ///
 /// profile 文件本身保留、只清关键字段：用户在 Desktop 里对这个 profile 改的设置
 /// （#4774 的 auto 模式）下次切回第三方时还在，Key 也从磁盘上清掉了。Desktop 只按
-/// `_meta.json` 的条目读 profile，摘掉条目后这个文件不会被列出。
+/// `_meta.json` 的条目读 profile，摘掉条目后这个文件不会被列出。补进去的官方插件市场
+/// 同理留着：CC Switch 分不清那是它写的还是用户自己开的，就不动。
 fn restore_official_at_paths(paths: &ClaudeDesktopPaths) -> Result<(), AppError> {
     let normal = deployment_mode_patch("1p");
     let mut threep = deployment_mode_patch("1p");
@@ -1112,8 +1113,9 @@ impl LivePatch for DropEmptyEnterpriseConfig {
     }
 }
 
-/// `build_gateway_profile` 的结果拆成补丁：关键字段替换，策略键缺失时才写。
-fn gateway_profile_patch(profile: Value) -> JsonPatch {
+/// `build_gateway_profile` 的结果拆成补丁：关键字段替换，策略键缺失时才写，再把缺的
+/// 官方插件市场补进 `allowedPluginMarketplaces`。
+fn gateway_profile_patch(profile: Value) -> DesktopProfilePatch {
     let mut patch = JsonPatch {
         clear: vec![ClearScope {
             parent: KeyPath::root(),
@@ -1131,7 +1133,122 @@ fn gateway_profile_patch(profile: Value) -> JsonPatch {
             }
         }
     }
-    patch
+    DesktopProfilePatch(patch)
+}
+
+/// Desktop profile 里官方插件市场的键名。Desktop schema 把它的 `failClosedValue` 定成
+/// 空数组：不点名，一个市场都不启用。
+const PLUGIN_MARKETPLACES_KEY: &str = "allowedPluginMarketplaces";
+
+/// Claude Desktop 随包发布的官方插件市场（schema 里这一节的标题是 "Curated by
+/// Anthropic"），顺序照 Desktop 自己的预设表。
+const OFFICIAL_PLUGIN_MARKETPLACES: &[(&str, &str)] = &[
+    ("github", "anthropics/knowledge-work-plugins"),
+    ("github", "anthropics/claude-plugins-official"),
+    ("github", "anthropics/financial-services"),
+    ("github", "anthropics/claude-for-legal"),
+    ("github", "anthropics/life-sciences"),
+];
+
+/// profile 补丁：先按 `JsonPatch` 的规则改键，再把官方插件市场补上。
+///
+/// 市场列表按需补齐，既不是整表替换、也不是「缺失才写」：用户会往这个键里加自己的
+/// 仓库（私有 GitHub 仓库、Git URL 都用同一个键），补写不能冲掉它们。
+struct DesktopProfilePatch(JsonPatch);
+
+impl LivePatch for DesktopProfilePatch {
+    fn apply(&self, path: &Path, pre: Option<&[u8]>) -> Result<Vec<u8>, LiveWriteError> {
+        let (mut doc, style) = patch_json::parse(path, pre)?;
+        self.0.apply_to(path, &mut doc)?;
+        add_official_marketplaces(&mut doc);
+        patch_json::serialize(path, &doc, &style)
+    }
+}
+
+/// Desktop schema 给 `allowedPluginMarketplaces` 的 `maxItems`。超长的数组整份无效，
+/// 而这个键的 `failClosedValue` 是空数组——写超了会把用户自己那几条一起清空。
+const PLUGIN_MARKETPLACES_MAX: usize = 100;
+
+/// 把缺的官方市场追加到 `allowedPluginMarketplaces` 末尾，用户已有的条目和顺序一条不动。
+/// 键不存在就整表写入；键在但不是数组时什么都不做——宁可少写，也不改写用户的结构。
+fn add_official_marketplaces(doc: &mut Value) {
+    let Some(obj) = doc.as_object_mut() else {
+        return;
+    };
+    let existing = match obj.get(PLUGIN_MARKETPLACES_KEY) {
+        Some(Value::Array(entries)) => entries.as_slice(),
+        Some(_) => return,
+        None => &[],
+    };
+    let additions = official_marketplaces_to_add(existing);
+    if additions.is_empty() {
+        return;
+    }
+    match obj.get_mut(PLUGIN_MARKETPLACES_KEY) {
+        Some(Value::Array(entries)) => {
+            // 用户已经堆到上限就一条都不补：官方市场是锦上添花，撑爆上限却会让他
+            // 自己那份列表整份作废。
+            let room = PLUGIN_MARKETPLACES_MAX.saturating_sub(entries.len());
+            entries.extend(additions.into_iter().take(room));
+        }
+        _ => {
+            obj.insert(PLUGIN_MARKETPLACES_KEY.to_string(), Value::Array(additions));
+        }
+    }
+}
+
+/// 官方市场里 profile 还没有的那几条，按 `OFFICIAL_PLUGIN_MARKETPLACES` 的顺序。
+fn official_marketplaces_to_add(existing: &[Value]) -> Vec<Value> {
+    OFFICIAL_PLUGIN_MARKETPLACES
+        .iter()
+        .map(|(source, repo)| json!({ "source": source, "repo": repo }))
+        .filter(|wanted| !marketplace_is_present(existing, wanted))
+        .collect()
+}
+
+/// profile 现有的条目里是否已经有 `wanted` 这一条。`wanted` 形如
+/// `{ "source": "github", "repo": "owner/name" }`。
+///
+/// 认人只认仓库：Desktop 允许同一条目带 `ref`、`installationPreference`、
+/// `manifestSha256` 这类修饰，那是同一条的另一种装法，不是另一条。指向同一个
+/// `owner/repo` 的 Git 地址也算同一条——这一条比 Desktop 自己宽：Desktop 是把条目
+/// 按键值整体深比，Git 地址写的和 `source: "github"` 写的在它眼里是两条，CC Switch
+/// 认成一条。宽的理由是失败方向：重复项用户清不掉，漏认顶多让用户自己加一下。
+///
+/// 拿不准时一律算「已经有了」：宁可少补一次，也不能每切一次供应商就往用户的列表里
+/// 追加一条重复项。
+fn marketplace_is_present(existing: &[Value], wanted: &Value) -> bool {
+    let Some(wanted_slug) = wanted.get("repo").and_then(Value::as_str) else {
+        return true;
+    };
+    existing.iter().any(|entry| {
+        [
+            entry.get("repo").and_then(Value::as_str),
+            entry
+                .get("url")
+                .and_then(Value::as_str)
+                .and_then(git_repo_slug),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|slug| slug.eq_ignore_ascii_case(wanted_slug))
+    })
+}
+
+/// 从 Git 地址里取出 `owner/repo`；主机名随便，取不出来返回 `None`。
+///
+/// 取出来的是归一化后的 `owner/repo`：查询串、片段、末尾的斜杠和 `.git` 都要去掉，
+/// 否则同一个仓库换一种写法（`…/life-sciences/`、`…/life-sciences.git/`）抽出的是
+/// 另一个字符串，和 `anthropics/life-sciences` 比不相等，重复判断就漏了。
+fn git_repo_slug(url: &str) -> Option<&str> {
+    let (_, rest) = url.split_once("://")?;
+    let (_, path) = rest.split_once('/')?;
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let path = path.trim_end_matches('/');
+    let (owner, repo) = path.split_once('/')?;
+    (!owner.is_empty() && !repo.is_empty() && !repo.contains('/')).then_some(path)
 }
 
 /// `configLibrary/_meta.json`：`entries` 里登记 CC Switch 的 profile，`appliedId`
@@ -1205,15 +1322,17 @@ fn build_gateway_profile(
     let mut profile = json!({
         "coworkEgressAllowedHosts": ["*"],
         "disableDeploymentModeChooser": true,
-        // 功能开关：开启 Claude Desktop 的自动模式、聊天标签页与高级文件分析，
-        // 并关闭遥测与非必要服务，与本地 reasoning_effort 注入等增强配合，
-        // 最大化第三方网关下的可用性。曾经一并写入的 chatCodeExecutionEnabled 已被
-        // Claude Desktop 移出配置键集合（启动日志报 "not a recognized configuration
-        // key"），不再写入。
+        // 功能开关：开启 Claude Desktop 的自动模式、聊天标签页、高级文件分析与内置
+        // 浏览器，并关闭遥测与非必要服务，与本地 reasoning_effort 注入等增强配合，
+        // 最大化第三方网关下的可用性。内置浏览器在 Desktop schema 里 default:false，
+        // 缺失就是关着，所以按 seed 写（见 DESKTOP_PROFILE_SEED），用户可以自己关掉。
+        // 曾经一并写入的 chatCodeExecutionEnabled 已被 Claude Desktop 移出配置键集合
+        //（启动日志报 "not a recognized configuration key"），不再写入。
         "isDesktopExtensionEnabled": true,
         "autoModeEnabled": true,
         "chatTabEnabled": true,
         "chatAdvancedFileAnalysisEnabled": true,
+        "builtinBrowserEnabled": true,
         // 上下文与网络偏好：优先选用 1M 上下文模型、跳过 WebFetch 预检（预检在第三方
         // 网关下常因跨域/证书链路失败而误判）、并允许 cowork 虚拟机启用 IPv6。
         "modelPrefer1mContext": true,
@@ -1653,6 +1772,11 @@ mod tests {
         );
         assert_eq!(profile["autoModeEnabled"], json!(true));
         assert_eq!(profile["chatTabEnabled"], json!(true));
+        assert_eq!(
+            profile["builtinBrowserEnabled"],
+            json!(true),
+            "Desktop schema 里该键 default:false，缺失等于关着"
+        );
         assert_eq!(profile["disableEssentialTelemetry"], json!(true));
         assert_eq!(profile["disableNonessentialTelemetry"], json!(true));
         assert_eq!(profile["disableNonessentialServices"], json!(true));
@@ -2328,6 +2452,7 @@ mod tests {
         let mut profile: Value = read_json_file(&paths.profile_path).expect("read profile");
         profile["userAutoMode"] = json!(true);
         profile["coworkEgressAllowedHosts"] = json!(["corp.example"]);
+        profile["builtinBrowserEnabled"] = json!(false);
         fs::write(
             &paths.profile_path,
             serde_json::to_string_pretty(&profile).unwrap(),
@@ -2341,11 +2466,167 @@ mod tests {
         let profile: Value = read_json_file(&paths.profile_path).expect("read profile");
         assert_eq!(profile["userAutoMode"], json!(true));
         assert_eq!(profile["coworkEgressAllowedHosts"], json!(["corp.example"]));
+        assert_eq!(
+            profile["builtinBrowserEnabled"],
+            json!(false),
+            "用户在 Desktop 里关掉的内置浏览器不能被切回默认值"
+        );
         assert_eq!(profile["disableDeploymentModeChooser"], json!(true));
         assert_eq!(profile["inferenceProvider"], json!("gateway"));
         assert!(
             profile.get("inferenceModels").is_none(),
             "the previous provider's models must not linger"
+        );
+    }
+
+    fn official_marketplaces() -> Vec<Value> {
+        OFFICIAL_PLUGIN_MARKETPLACES
+            .iter()
+            .map(|(source, repo)| json!({ "source": source, "repo": repo }))
+            .collect()
+    }
+
+    #[test]
+    fn marketplaces_are_written_whole_when_the_key_is_missing() {
+        let mut doc = json!({ "inferenceProvider": "gateway" });
+        add_official_marketplaces(&mut doc);
+        assert_eq!(doc[PLUGIN_MARKETPLACES_KEY], json!(official_marketplaces()));
+    }
+
+    /// 用户自己加的条目和已有的顺序都不能动；官方条目已有的不重复追加。
+    #[test]
+    fn marketplaces_never_duplicate_an_entry_the_profile_already_has() {
+        let mut doc = json!({
+            PLUGIN_MARKETPLACES_KEY: [
+                { "source": "git", "url": "https://github.com/me/private-skills" },
+                { "source": "github", "repo": "anthropics/claude-plugins-official", "ref": "v1" },
+                { "source": "url", "url": "https://github.com/anthropics/life-sciences.git" }
+            ]
+        });
+        add_official_marketplaces(&mut doc);
+
+        let entries = doc[PLUGIN_MARKETPLACES_KEY].as_array().expect("array");
+        assert_eq!(
+            &entries[..3],
+            &[
+                json!({ "source": "git", "url": "https://github.com/me/private-skills" }),
+                json!({ "source": "github", "repo": "anthropics/claude-plugins-official", "ref": "v1" }),
+                json!({ "source": "url", "url": "https://github.com/anthropics/life-sciences.git" })
+            ][..],
+            "用户的三条必须原位保留"
+        );
+        assert_eq!(
+            entries.len(),
+            3 + OFFICIAL_PLUGIN_MARKETPLACES.len() - 2,
+            "带 ref 的官方条目和一指到同一仓库的 URL 都该认出来，只补剩下三条"
+        );
+
+        let once = doc.clone();
+        add_official_marketplaces(&mut doc);
+        assert_eq!(doc, once, "再补一次不能变");
+    }
+
+    /// 键在但不是数组：宁可少写，也不改写用户的结构。
+    #[test]
+    fn marketplaces_leave_a_value_that_is_not_an_array_alone() {
+        let mut doc = json!({ PLUGIN_MARKETPLACES_KEY: "oops" });
+        add_official_marketplaces(&mut doc);
+        assert_eq!(doc[PLUGIN_MARKETPLACES_KEY], json!("oops"));
+    }
+
+    #[test]
+    fn git_urls_are_reduced_to_owner_and_repo() {
+        assert_eq!(
+            git_repo_slug("https://github.com/anthropics/life-sciences"),
+            Some("anthropics/life-sciences")
+        );
+        assert_eq!(
+            git_repo_slug("https://github.com/anthropics/life-sciences.git"),
+            Some("anthropics/life-sciences")
+        );
+        // 从地址栏里复制粘贴带出来的尾巴都得去掉，否则同一个仓库抽出来是另一个字符串，
+        // 重复判断会漏，切一次供应商就往用户列表里多怼一条。
+        for url in [
+            "https://github.com/anthropics/life-sciences/",
+            "https://github.com/anthropics/life-sciences.git/",
+            "https://github.com/anthropics/life-sciences?tab=readme",
+            "https://github.com/anthropics/life-sciences/#readme",
+        ] {
+            assert_eq!(
+                git_repo_slug(url),
+                Some("anthropics/life-sciences"),
+                "{url}"
+            );
+        }
+        assert_eq!(git_repo_slug("https://github.com/a/b/tree/main"), None);
+        assert_eq!(git_repo_slug("https://example.com"), None);
+        assert_eq!(git_repo_slug("https://github.com/"), None);
+        assert_eq!(git_repo_slug("not a url"), None);
+    }
+
+    /// 同一个仓库换个写法也得认出来，不能再补一条。
+    #[test]
+    fn marketplaces_recognize_an_official_repo_written_as_a_git_url() {
+        let mut doc = json!({
+            PLUGIN_MARKETPLACES_KEY: [
+                { "source": "url", "url": "https://github.com/anthropics/knowledge-work-plugins/" }
+            ]
+        });
+        add_official_marketplaces(&mut doc);
+
+        let entries = doc[PLUGIN_MARKETPLACES_KEY].as_array().expect("array");
+        assert_eq!(entries.len(), OFFICIAL_PLUGIN_MARKETPLACES.len());
+        assert_eq!(
+            entries[0],
+            json!({ "source": "url", "url": "https://github.com/anthropics/knowledge-work-plugins/" }),
+            "用户那条原位不动"
+        );
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry["repo"] == "anthropics/knowledge-work-plugins"),
+            "已经有同一个仓库了，不该再补一条 github 写法"
+        );
+    }
+
+    /// 用户自己堆到 schema 的 maxItems：一条都不补。撑爆上限会让整份列表失效，
+    /// 而它的 failClosedValue 是空数组，赔进去的是用户自己的条目。
+    #[test]
+    fn marketplaces_stay_within_the_schema_limit() {
+        let mut doc = json!({
+            PLUGIN_MARKETPLACES_KEY: (0..PLUGIN_MARKETPLACES_MAX)
+                .map(|i| json!({ "source": "git", "url": format!("https://github.com/me/repo{i}") }))
+                .collect::<Vec<_>>()
+        });
+        add_official_marketplaces(&mut doc);
+
+        let entries = doc[PLUGIN_MARKETPLACES_KEY].as_array().expect("array");
+        assert_eq!(entries.len(), PLUGIN_MARKETPLACES_MAX);
+        assert_eq!(
+            entries[0],
+            json!({ "source": "git", "url": "https://github.com/me/repo0" })
+        );
+    }
+
+    #[test]
+    fn claude_desktop_apply_writes_the_official_marketplaces() {
+        let temp = TempDir::new().expect("tempdir");
+        let paths = test_paths(temp.path());
+        let db = test_db();
+
+        apply_provider_to_paths(&db, &direct_provider("a"), &paths).expect("apply a");
+        let profile: Value = read_json_file(&paths.profile_path).expect("read profile");
+        assert_eq!(
+            profile[PLUGIN_MARKETPLACES_KEY],
+            json!(official_marketplaces())
+        );
+
+        apply_provider_to_paths(&db, &direct_provider("b"), &paths).expect("apply b again");
+        let profile: Value = read_json_file(&paths.profile_path).expect("read profile");
+        assert_eq!(
+            profile[PLUGIN_MARKETPLACES_KEY],
+            json!(official_marketplaces()),
+            "反复切换不该越补越长"
         );
     }
 

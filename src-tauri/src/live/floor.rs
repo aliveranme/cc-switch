@@ -206,9 +206,12 @@ pub fn desktop_profile_floor(key: &str) -> bool {
 }
 
 /// Claude Desktop profile 里的策略键：缺失时写入，存在时不动，用户可以自己收紧
-/// 出站白名单、打开部署模式选择器。
-pub const DESKTOP_PROFILE_SEED: &[&str] =
-    &["disableDeploymentModeChooser", "coworkEgressAllowedHosts"];
+/// 出站白名单、打开部署模式选择器、关掉内置浏览器。
+pub const DESKTOP_PROFILE_SEED: &[&str] = &[
+    "disableDeploymentModeChooser",
+    "coworkEgressAllowedHosts",
+    "builtinBrowserEnabled",
+];
 
 #[cfg(test)]
 mod tests {

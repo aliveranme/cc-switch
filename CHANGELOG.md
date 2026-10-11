@@ -33,10 +33,12 @@ The fourth patch release on the 4.0 stable line. Codex aggregation works for use
 
 ### 重新发布补充（fork 重发，2026-10-11）
 
-版本号与安装包命名不变，本次重发仅含以下两处 fork 修正（详见 `docs/fork-differences.md` 4.30）：
+版本号与安装包命名不变，本次重发含以下四处 fork 修正（详见 `docs/fork-differences.md` 4.30、4.31）：
 
 - **Claude Desktop 连接测试返回 HTTP 500**：`/claude-desktop` 网关的非流式请求有两条独立缺陷。其一，连接测试发的是探测级 `max_tokens=1`，而该供应商的上游是推理模型（reasoning token 计入 `max_tokens`），这个预算连推理都放不下，正文为空，上游回 `{"error":"empty response content","success":false}`；现在落在 1..15 区间的 `max_tokens` 会在转换时抬到 5120，≥16 的预算（含真实的小预算请求）原样透传——注意 16..127 这样的小预算遇到推理型上游仍可能正文为空，属已知缺口（见 `docs/fork-differences.md` 4.30）。其二，该上游把非流式补全裹在 `{"success":true,"data":{…}}` 里，而网关只认顶层 `choices`，于是即使预算够了回程也会报 `No choices in response`（HTTP 422）；现在 5 个读取点都会先解包这种成功信封（流式 SSE 帧不带信封，故流式路径不受影响）。同一形状下，非流式请求的用量此前被静默记成 0 token，auto-mode 安全分类器也因取不到裁决文本而静默 fail-open 放行——一并修掉。
 - **Claude Desktop 启动日志告警**：网关 profile 不再写 `chatCodeExecutionEnabled`。Claude Desktop 已把该键移出配置键集合，此前每次启动都会报 `Ignoring local configuration value "chatCodeExecutionEnabled": not a recognized configuration key`。
+- **Claude Desktop 内置浏览器打不开**：网关 profile 新增 `builtinBrowserEnabled: true`。该键在 Claude Desktop 里缺省为关，第三方网关下内置浏览器此前一直不可用。它登记在策略键名单里，**缺失时才写**——你在 Desktop 里自己关掉后，切换供应商不会替你打开。
+- **Claude Desktop 插件市场是空的**：网关 profile 按需把 5 个 Anthropic 官方插件市场（`anthropics/knowledge-work-plugins`、`claude-plugins-official`、`financial-services`、`claude-for-legal`、`life-sciences`）补进 `allowedPluginMarketplaces`。该键缺省为空数组，不点名就一个市场都不启用。补写只做加法：键不存在时整表写入，键在但不是数组时原样不动，是数组时只在末尾追加缺的那几条，**你自己加的私有仓库与 Git URL 一条不动、顺序不变**，反复切换也不会追加重复项。
 
 ## [4.0.7] - 2026-10-10
 

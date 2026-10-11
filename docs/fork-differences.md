@@ -66,10 +66,19 @@
 - 供应商默认模型回退与预设清理（sponsor 预设调整同步上游）
 - AuthCenter 账户用量展示（合入上游 #4887）
 - DeepLink 导入支持 `claude-desktop` app（见 4.11）
-- Claude Desktop 3P 供应商 profile 默认启用 `chatAdvancedFileAnalysisEnabled`、
-  `modelPrefer1mContext`、`skipWebFetchPreflight`、`coworkVmIpv6Enabled`
-  （上游无这四个字段；direct 与 proxy 两种模式共用 `build_gateway_profile`，
-  两处钉桩测试各断言一次）
+- Claude Desktop 3P 供应商 profile 的能力开关：`build_gateway_profile`（direct 与
+  proxy 两种模式共用）除 5 个连接键外还写 14 个键——打开
+  `isDesktopExtensionEnabled`、`autoModeEnabled`、`chatTabEnabled`、
+  `chatAdvancedFileAnalysisEnabled`、`builtinBrowserEnabled`、`modelPrefer1mContext`、
+  `skipWebFetchPreflight`、`coworkVmIpv6Enabled`、`toolSearchEnabled`，关闭
+  `disableEssentialTelemetry`、`disableNonessentialTelemetry`、
+  `disableNonessentialServices`（上游这些一个都不写）。其中
+  `disableDeploymentModeChooser`、`coworkEgressAllowedHosts`、`builtinBrowserEnabled`
+  三个策略键登记在 `DESKTOP_PROFILE_SEED`：**缺失时才写，存在就不动**，用户可以自己
+  收紧出站白名单、打开部署模式选择器、关掉内置浏览器（见 4.31，那里有钉桩测试清单）
+- Claude Desktop profile 的官方插件市场：`allowedPluginMarketplaces` 按需补齐 5 个
+  `anthropics/*` 官方仓库（键缺失则整表写入；键在但不是数组则不动；是数组只追加缺的，
+  用户已有条目与顺序一条不动，见 4.31）
 - **vitest 5 的类型适配**（2026-09-17）：vitest 5 把 `Assertion` 的签名从
   `Assertion<T = any>` 改为 `Assertion<R, T>`（两个必需类型参数），而
   `@testing-library/jest-dom` 7.0.1 的 `declare module 'vitest'` 声明合并因
@@ -848,6 +857,64 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 - **分类器侧影响**：见 4.2——信封不解包时 `extract_response_text` 恒为 `None`，上游 200
   带回的裁决被当成「无文本」而 fail-open **ALLOW**，即 auto-mode 静默失效；本次解包一并
   修掉（与 4.2 已记录的那类失效同向）。
+
+### 4.31 Claude Desktop profile：内置浏览器开关 + 官方插件市场按需补齐（2026-10-11）
+
+- **上游**：`build_gateway_profile` 只写连接与鉴权键（`inferenceProvider` 一族、
+  `coworkEgressAllowedHosts`、`disableDeploymentModeChooser`），profile 里其余键全留给
+  用户和 Claude Desktop 自己。
+- **fork 补写 `builtinBrowserEnabled`**：该键在 Desktop schema 里 `default: false`、
+  `scopes: ["3p"]`，缺失即等于关闭——第三方网关下内置浏览器整个不可用。fork 与同批
+  功能开关一样打开它，但**登记进 `DESKTOP_PROFILE_SEED`**：只在缺失时写入 `true`；
+  用户已经在 Desktop 里关掉（值为 `false`）就保持关闭，切换供应商不会替他打开。
+- **fork 按需补齐官方插件市场**：`allowedPluginMarketplaces` 在 Desktop schema 里
+  `failClosedValue: []`——不点名，一个市场都不启用。fork 把 Desktop 随包预设的 5 个官方
+  市场（schema 里那一节的标题是 "Curated by Anthropic"）补进这个键，顺序照 Desktop 自己
+  的预设表：`anthropics/knowledge-work-plugins`、`anthropics/claude-plugins-official`、
+  `anthropics/financial-services`、`anthropics/claude-for-legal`、
+  `anthropics/life-sciences`；条目形状是 `{ "source": "github", "repo": "owner/name" }`。
+- **写语义（本节重点）**：这个键归用户——私有仓库、Git URL、带 `ref` /
+  `installationPreference` / `manifestSha256` 的同一仓库都写在同一个数组里。所以既不能
+  整表替换，也不能「缺失才写」，只能**按需补齐**：
+
+  | 键的现状 | 动作 |
+  |---|---|
+  | 键不存在 | 整表写入 5 条官方市场 |
+  | 键存在但不是数组 | 原样不动（宁可少写，也不改写用户的结构） |
+  | 是数组 | 只在**末尾追加**缺的那几条；已有条目与其顺序一条不动 |
+
+- **重复判定**：按 `owner/repo` 认人，不比整体键值。现有条目的 `repo` 字段、或 `url`
+  字段抽出的 `owner/repo`（`git_repo_slug`：去掉查询串/片段、末尾斜杠与 `.git` 后归一化），
+  与官方仓库名做大小写不敏感比较。这一条**比 Desktop 自己宽**：Desktop 是把条目按键值
+  整体深比（`source` + `repo`/`url`，剥掉 `ref` / `manifestSha256`），Git 地址写的和
+  `source: "github"` 写的在它眼里是两条，CC Switch 认成一条。宽的理由是失败方向——重复项
+  用户清不掉，漏认顶多让用户自己加一下。抽不出 `owner/repo` 的条目一律算「已经有了」。
+- ⚠️ **已知缺口**：
+  - 官方市场**只增不减**：用户在 Desktop 里删掉某一条，下次切换供应商会重新补上——CC
+    Switch 分不清「从未写过」和「用户删了」，键上没有任何溯源标记。
+  - 同一个仓库挂在**别的 Git 主机**上（如 `gitlab.com/anthropics/life-sciences`）会被算作
+    官方市场已存在，于是不补 GitHub 那条。这是上一条「按 `owner/repo` 认人、不认主机」的
+    直接后果，属有意取舍。
+  - 补写字面受 schema 的 `maxItems: 100` 约束：用户自己的条目已经堆到 100 条时**一条都不
+    补**（撑爆上限会让整份数组失效，而它的 `failClosedValue` 是空数组，赔进去的是用户自己
+    的条目）；停在 96–99 条时只补到 100 为止。
+- **影响面**：只在 3P 网关模式的 profile 写入路径上生效（`build_gateway_profile` →
+  `gateway_profile_patch`）。`desktopHome` / `chatTabEnabled` 这类 surface 键仍不代写——
+  `desktopHome` 是一条 `??` 覆盖链（`wc(e) = Vje(e) ?? Hje(e)`，前者一到手就接管
+  chat/fileAnalysis/cowork 三个面并隐藏对应单项开关，且 `failClosedValue: "off"` 会让坏值
+  把三个面全关），代写会静默架空用户的独立开关。切回官方模式时
+  `restore_official_at_paths` 只清 5 个 floor 键，补进去的官方市场与 `builtinBrowserEnabled`
+  和既有的 seed 键一样留在 profile 里。开启内置浏览器会新增一条
+  `releases.claude.com`（站点安全校验）出站——同批写入的
+  `coworkEgressAllowedHosts: ["*"]` 已放行。
+- **测试**：`claude_desktop_apply_writes_3p_profile_and_meta`（默认写 `true`）、
+  `claude_desktop_switches_keep_the_users_own_profile_settings`（用户关掉后保留
+  `false`）、`marketplaces_are_written_whole_when_the_key_is_missing` /
+  `…_never_duplicate_an_entry_the_profile_already_has` /
+  `…_leave_a_value_that_is_not_an_array_alone` /
+  `…_recognize_an_official_repo_written_as_a_git_url` / `…_stay_within_the_schema_limit`、
+  `git_urls_are_reduced_to_owner_and_repo`、
+  `claude_desktop_apply_writes_the_official_marketplaces`。
 
 ## 5. 本地发布序列
 
