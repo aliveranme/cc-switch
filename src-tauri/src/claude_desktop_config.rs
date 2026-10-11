@@ -1205,11 +1205,12 @@ fn build_gateway_profile(
     let mut profile = json!({
         "coworkEgressAllowedHosts": ["*"],
         "disableDeploymentModeChooser": true,
-        // 功能开关：开启 Claude Desktop 的代码执行、自动模式、聊天标签页与高级文件分析，
+        // 功能开关：开启 Claude Desktop 的自动模式、聊天标签页与高级文件分析，
         // 并关闭遥测与非必要服务，与本地 reasoning_effort 注入等增强配合，
-        // 最大化第三方网关下的可用性。
+        // 最大化第三方网关下的可用性。曾经一并写入的 chatCodeExecutionEnabled 已被
+        // Claude Desktop 移出配置键集合（启动日志报 "not a recognized configuration
+        // key"），不再写入。
         "isDesktopExtensionEnabled": true,
-        "chatCodeExecutionEnabled": true,
         "autoModeEnabled": true,
         "chatTabEnabled": true,
         "chatAdvancedFileAnalysisEnabled": true,
@@ -1646,7 +1647,10 @@ mod tests {
         assert_eq!(profile["inferenceGatewayAuthScheme"], json!("bearer"));
         assert_eq!(profile["disableDeploymentModeChooser"], json!(true));
         assert_eq!(profile["coworkEgressAllowedHosts"], json!(["*"]));
-        assert_eq!(profile["chatCodeExecutionEnabled"], json!(true));
+        assert!(
+            profile.get("chatCodeExecutionEnabled").is_none(),
+            "Claude Desktop 已不认识该键，不应再写入"
+        );
         assert_eq!(profile["autoModeEnabled"], json!(true));
         assert_eq!(profile["chatTabEnabled"], json!(true));
         assert_eq!(profile["disableEssentialTelemetry"], json!(true));
@@ -1716,7 +1720,10 @@ mod tests {
         );
         assert_eq!(profile["inferenceGatewayAuthScheme"], json!("bearer"));
         assert_eq!(profile["coworkEgressAllowedHosts"], json!(["*"]));
-        assert_eq!(profile["chatCodeExecutionEnabled"], json!(true));
+        assert!(
+            profile.get("chatCodeExecutionEnabled").is_none(),
+            "Claude Desktop 已不认识该键，不应再写入"
+        );
         assert_eq!(profile["autoModeEnabled"], json!(true));
         assert_eq!(profile["chatTabEnabled"], json!(true));
         assert_eq!(profile["disableEssentialTelemetry"], json!(true));
