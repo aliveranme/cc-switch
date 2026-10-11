@@ -8,6 +8,7 @@ use super::{
     handler_config::{StreamUsageEventFilter, UsageParserConfig},
     handler_context::{RequestContext, StreamingTimeoutConfig},
     hyper_client::{ProxyResponse, MAX_BUFFERED_PROXY_BODY_BYTES},
+    providers::unwrap_chat_completion_envelope,
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
     usage::parser::TokenUsage,
@@ -241,6 +242,20 @@ pub async fn handle_streaming(
     }
 }
 
+/// 非流式上游响应体 → 用量。
+///
+/// 先解包上游的 "成功信封"（部分中转把补全裹成 `{"success":true,"data":{...}}`，见
+/// [`unwrap_chat_completion_envelope`]）：不解包时三套 `response_parser` 都读不到顶层
+/// `usage`，非流式请求的用量会被静默记成 0，而流式路径（SSE 帧不带信封）正常记账，
+/// 于是账面上只剩流式数据。解包只作用于本地副本，回给客户端的是原始字节。
+fn parse_non_streaming_usage(
+    parser_config: &UsageParserConfig,
+    json_value: &Value,
+) -> Option<TokenUsage> {
+    let json_value = unwrap_chat_completion_envelope(json_value.clone());
+    (parser_config.response_parser)(&json_value)
+}
+
 /// 处理非流式响应
 pub async fn handle_non_streaming(
     response: ProxyResponse,
@@ -271,7 +286,7 @@ pub async fn handle_non_streaming(
     if usage_logging_enabled(state) {
         if let Ok(json_value) = serde_json::from_slice::<Value>(&body_bytes) {
             // 解析使用量
-            if let Some(usage) = (parser_config.response_parser)(&json_value) {
+            if let Some(usage) = parse_non_streaming_usage(parser_config, &json_value) {
                 // 归因优先级：usage 解析出的模型 → 响应 model 字段 → 映射后的出站
                 // 模型（路由接管真值）→ 客户端请求模型。空字符串视为缺失。
                 let model = usage
@@ -974,6 +989,42 @@ mod tests {
     use crate::error::AppError;
     use crate::provider::ProviderMeta;
     use rust_decimal::Decimal;
+
+    #[test]
+    fn parse_non_streaming_usage_unwraps_success_envelope() {
+        // 中转上游把补全裹在 {"success":true,"data":{...}} 里：usage 藏在 data 下。
+        // 不解包则解析器返回 None，非流式用量被静默记成 0。
+        let wrapped = serde_json::json!({
+            "success": true,
+            "data": {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": 31, "completion_tokens": 68, "total_tokens": 99}
+            }
+        });
+
+        let usage = parse_non_streaming_usage(
+            &crate::proxy::handler_config::OPENAI_PARSER_CONFIG,
+            &wrapped,
+        )
+        .expect("信封内应能解析出用量");
+        assert_eq!(usage.input_tokens, 31);
+        assert_eq!(usage.output_tokens, 68);
+    }
+
+    #[test]
+    fn parse_non_streaming_usage_reads_plain_openai_body() {
+        let plain = serde_json::json!({
+            "id": "chatcmpl-1",
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}
+        });
+
+        let usage =
+            parse_non_streaming_usage(&crate::proxy::handler_config::OPENAI_PARSER_CONFIG, &plain)
+                .expect("裸补全体应能解析出用量");
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.output_tokens, 3);
+    }
 
     #[test]
     fn format_headers_redacts_credentials_and_cookies() {

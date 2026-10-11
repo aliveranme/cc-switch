@@ -290,6 +290,30 @@ pub fn get_adapter_for_provider_type(provider_type: &ProviderType) -> Box<dyn Pr
     }
 }
 
+/// 解包 OpenAI Chat 风格的成功信封，返回真正的补全体。
+///
+/// 部分中转上游（实测 cline）把**非流式**补全裹成
+/// `{"success": true, "data": {<补全体>}}`，`choices` / `usage` 都藏在 `data` 里。
+/// 下游的格式转换与用量解析只认顶层字段，不解包就会把 200 的成功响应当成无补全体
+/// （`No choices in response`）而失败，或把用量静默记成 0；分类器更会因为取不到裁决
+/// 文本而 fail-open 放行——即"分类器静默失效"。流式 SSE 帧不带信封，所以只有非流式
+/// 请求会撞上。
+///
+/// 判定刻意收紧：仅当顶层没有 `choices`、而 `data.choices` 确实是数组时才解包。裸补全体、
+/// Anthropic 消息体、Responses、Gemini 响应都原样返回，避免误伤。
+pub(crate) fn unwrap_chat_completion_envelope(mut body: serde_json::Value) -> serde_json::Value {
+    let wrapped = body.get("choices").is_none()
+        && body
+            .get("data")
+            .and_then(|data| data.get("choices"))
+            .map(|choices| choices.is_array())
+            .unwrap_or(false);
+    if wrapped {
+        return body["data"].take();
+    }
+    body
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,5 +573,51 @@ mod tests {
 
         let adapter = get_adapter_for_provider_type(&ProviderType::GeminiCli);
         assert_eq!(adapter.name(), "Gemini");
+    }
+
+    #[test]
+    fn test_unwrap_chat_completion_envelope_success_wrapper() {
+        let body = json!({
+            "success": true,
+            "data": {
+                "id": "gen_1",
+                "model": "deepseek/deepseek-v4.1-flash",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "Hi!"}
+                }],
+                "usage": {"prompt_tokens": 31, "completion_tokens": 22, "total_tokens": 53}
+            }
+        });
+
+        let unwrapped = unwrap_chat_completion_envelope(body);
+
+        assert_eq!(unwrapped["id"], "gen_1");
+        assert_eq!(unwrapped["choices"][0]["message"]["content"], "Hi!");
+        assert_eq!(unwrapped["usage"]["completion_tokens"], 22);
+        assert!(unwrapped.get("data").is_none(), "解包后不应再留着信封外层");
+    }
+
+    #[test]
+    fn test_unwrap_chat_completion_envelope_leaves_others_untouched() {
+        // 裸补全体、Anthropic 消息体、Responses、Gemini、失败信封、data 不是补全体
+        let cases = vec![
+            json!({"choices": [{"message": {"content": "flat"}}]}),
+            json!({"type": "message", "content": [{"type": "text", "text": "anthropic"}]}),
+            json!({"id": "resp_1", "output": [{"type": "message"}]}),
+            json!({"candidates": [{"content": {"parts": []}}]}),
+            json!({"error": "empty response content", "success": false}),
+            json!({"data": {"status": "ok"}, "success": true}),
+            json!({"data": {"choices": "not-an-array"}, "success": true}),
+        ];
+
+        for body in cases {
+            assert_eq!(
+                unwrap_chat_completion_envelope(body.clone()),
+                body,
+                "非补全体不应被改动"
+            );
+        }
     }
 }

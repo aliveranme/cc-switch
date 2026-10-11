@@ -490,9 +490,14 @@ pub fn transform_classifier_request(body: &Value) -> Value {
 ///
 /// 同时支持 Claude Messages API 和 OpenAI Chat Completions 两种响应格式的 usage 字段。
 /// 复用 `crate::proxy::usage::parser::TokenUsage` 已有的解析方法。
+///
+/// 先解包"成功信封"：部分中转上游把补全体裹在 `{"success":true,"data":{...}}` 里
+/// （见 `super::providers::unwrap_chat_completion_envelope`），不解包则两套解析都读不到
+/// usage，分类器用量恒记为兜底默认值。
 pub fn parse_classifier_usage(body: &Value) -> crate::proxy::usage::parser::TokenUsage {
-    crate::proxy::usage::parser::TokenUsage::from_claude_response(body)
-        .or_else(|| crate::proxy::usage::parser::TokenUsage::from_openai_response(body))
+    let body = super::providers::unwrap_chat_completion_envelope(body.clone());
+    crate::proxy::usage::parser::TokenUsage::from_claude_response(&body)
+        .or_else(|| crate::proxy::usage::parser::TokenUsage::from_openai_response(&body))
         .unwrap_or_default()
 }
 
@@ -745,6 +750,12 @@ pub fn transform_classifier_response_with(
     mode: ClassifierMode,
     options: ClassifierOptions,
 ) -> Value {
+    // 先解包"成功信封"（见 `super::providers::unwrap_chat_completion_envelope`）：
+    // 不解包时 extract_response_text 恒为 None，上游 200 带回的裁决会被当成"无文本"
+    // 走 fail-open 放行——分类器静默失效，是 auto-mode 最危险的失效方向。
+    let upstream_body = super::providers::unwrap_chat_completion_envelope(upstream_body.clone());
+    let upstream_body = &upstream_body;
+
     let upstream_text = extract_response_text(upstream_body).unwrap_or_default();
 
     // 从上游响应中提取真实用量（如果用不到则兜底为默认值）
@@ -1544,6 +1555,66 @@ mod tests {
                 .contains("<block>no</block>"),
             "空响应应包含 <block>no</block> 兜底放行"
         );
+    }
+
+    #[test]
+    fn test_transform_classifier_response_unwraps_success_envelope() {
+        // 上游把裁决裹在 {"success":true,"data":{...}} 里时应提取到裁决文本；
+        // 不解包则走 "No upstream classification available" 兜底放行。
+        let upstream = json!({
+            "success": true,
+            "data": {
+                "id": "gen_1",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": "<block>yes</block>\n<reason>rm -rf</reason>"
+                    }
+                }],
+                "usage": {"prompt_tokens": 31, "completion_tokens": 7, "total_tokens": 38}
+            }
+        });
+        let response =
+            transform_classifier_response(&upstream, "claude-opus-4-8", ClassifierMode::Block);
+
+        let text = response["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("<block>yes</block>"),
+            "信封内的裁决文本应被提取，实际: {text}"
+        );
+        assert!(
+            !text.contains("No upstream classification available"),
+            "不应落到 fail-open 兜底，实际: {text}"
+        );
+    }
+
+    #[test]
+    fn test_parse_classifier_usage_unwraps_success_envelope() {
+        let upstream = json!({
+            "success": true,
+            "data": {
+                "choices": [{"message": {"content": "<block>no</block>"}}],
+                "usage": {"prompt_tokens": 31, "completion_tokens": 7, "total_tokens": 38}
+            }
+        });
+
+        let usage = parse_classifier_usage(&upstream);
+        assert_eq!(usage.input_tokens, 31, "信封内的用量应被解析");
+        assert_eq!(usage.output_tokens, 7);
+    }
+
+    #[test]
+    fn test_parse_classifier_usage_plain_openai_body_unchanged() {
+        let upstream = json!({
+            "choices": [{"message": {"content": "<block>no</block>"}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}
+        });
+
+        let usage = parse_classifier_usage(&upstream);
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.output_tokens, 3);
     }
 
     #[test]

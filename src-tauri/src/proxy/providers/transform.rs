@@ -16,6 +16,33 @@ use serde_json::{json, Value};
 
 const ANTHROPIC_BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
 
+/// `max_tokens` 小到什么程度只可能是存活探测，而不是客户端真的只要这么点正文。
+///
+/// 取值与 Responses 路径的 `RESPONSES_MIN_MAX_OUTPUT_TOKENS` 一致——那里也是把
+/// "探测级预算" 抬到可用值，同一个客户端（Claude Desktop 的模型可用性探测发
+/// `max_tokens=1`）。
+const PROBE_MAX_TOKENS_THRESHOLD: u64 = 16;
+
+/// 探测级预算转发到 OpenAI Chat 上游时抬到的值。
+///
+/// 探测只要一个"上游活着"的信号，但 `max_tokens=1` 对推理型上游是**不可满足**的：
+/// deepseek 系这类模型把 reasoning token 也算进 `max_tokens`，预算在推理阶段就被顶满，
+/// 正文为空，上游直接回 500 `empty response content`（实测阈值：32 仍空，128 起才有正文）。
+/// `max_tokens` 是上限而非消耗量，模型给出答复后自然停止，因此抬高只改变探测这类
+/// "本来就拿不到任何正文"的请求。取值与分类器转发下限 `UPSTREAM_CLASSIFIER_MAX_TOKENS`
+/// 相同——同一个失败模式，同一个余量。
+const PROBE_MAX_TOKENS_FLOOR: u64 = 5120;
+
+/// 把探测级的 `max_tokens` 抬到可用下限；正常预算原样返回。
+fn clamp_probe_max_tokens(value: &Value) -> Value {
+    match value.as_u64() {
+        Some(budget) if (1..PROBE_MAX_TOKENS_THRESHOLD).contains(&budget) => {
+            json!(PROBE_MAX_TOKENS_FLOOR)
+        }
+        _ => value.clone(),
+    }
+}
+
 /// Strip only a leading Claude Code attribution line from system text.
 ///
 /// Claude Code can send dynamic `x-anthropic-billing-header` metadata at the
@@ -446,10 +473,11 @@ pub fn anthropic_to_openai_with_options(
     // 转换参数 — o-series 模型需要 max_completion_tokens
     let model = body.get("model").and_then(|m| m.as_str()).unwrap_or("");
     if let Some(v) = body.get("max_tokens") {
+        let budget = clamp_probe_max_tokens(v);
         if is_openai_o_series(model) {
-            result["max_completion_tokens"] = v.clone();
+            result["max_completion_tokens"] = budget;
         } else {
-            result["max_tokens"] = v.clone();
+            result["max_tokens"] = budget;
         }
     }
     if let Some(v) = body.get("temperature") {
@@ -968,6 +996,12 @@ fn clean_schema_inner(mut schema: Value, is_root: bool) -> Value {
 
 /// OpenAI 响应 → Anthropic 响应
 pub fn openai_to_anthropic(body: Value) -> Result<Value, ProxyError> {
+    // 部分中转上游把非流式补全裹在 "成功信封" 里（见
+    // `super::unwrap_chat_completion_envelope`）。不解包则下面第一句就报
+    // "No choices in response"：一个 200 的成功响应被当成格式错误，连带 id / model /
+    // usage 全部落到兜底值（用量静默记 0）。
+    let body = super::unwrap_chat_completion_envelope(body);
+
     let choices = body
         .get("choices")
         .and_then(|c| c.as_array())
@@ -1895,6 +1929,45 @@ mod tests {
         assert_eq!(result["stop_reason"], "end_turn");
         assert_eq!(result["usage"]["input_tokens"], 10);
         assert_eq!(result["usage"]["output_tokens"], 5);
+    }
+
+    #[test]
+    fn test_openai_to_anthropic_unwraps_success_envelope() {
+        // cline 等中转的非流式成功响应：补全体裹在 {"success":true,"data":{...}} 里。
+        let input = json!({
+            "success": true,
+            "data": {
+                "id": "gen_1",
+                "model": "deepseek/deepseek-v4.1-flash",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi!"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 31, "completion_tokens": 22, "total_tokens": 53}
+            }
+        });
+
+        let result = openai_to_anthropic(input).unwrap();
+        assert_eq!(result["id"], "gen_1");
+        assert_eq!(result["content"][0]["text"], "Hi!");
+        assert_eq!(result["stop_reason"], "end_turn");
+        assert_eq!(result["usage"]["input_tokens"], 31);
+        assert_eq!(result["usage"]["output_tokens"], 22);
+    }
+
+    #[test]
+    fn test_openai_to_anthropic_still_rejects_payload_without_choices() {
+        // 收紧解包判定：只有 data.choices 是真的数组才解包，失败信封照旧报格式错误。
+        let err = openai_to_anthropic(json!({
+            "error": "empty response content",
+            "success": false
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("No choices in response"),
+            "失败信封不应被当成补全体，实际: {err}"
+        );
     }
 
     fn chat_response_with_content(content: Value) -> Value {
@@ -2883,6 +2956,75 @@ mod tests {
         let result = anthropic_to_openai(input).unwrap();
         assert_eq!(result["max_tokens"], 1024);
         assert!(result.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn test_anthropic_to_openai_raises_probe_max_tokens() {
+        // Claude Desktop 的模型可用性探测发 max_tokens=1：推理型上游在这个预算下
+        // 正文为空并回 500。转换时把探测级预算抬到可用下限。
+        for budget in [1, 8, 15] {
+            let input = json!({
+                "model": "deepseek-v4.1-flash",
+                "max_tokens": budget,
+                "messages": [{"role": "user", "content": "."}]
+            });
+
+            let result = anthropic_to_openai(input).unwrap();
+            assert_eq!(
+                result["max_tokens"], PROBE_MAX_TOKENS_FLOOR,
+                "max_tokens={budget} 属探测级预算，应被抬到 {PROBE_MAX_TOKENS_FLOOR}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_anthropic_to_openai_raises_probe_max_tokens_for_o_series_too() {
+        let input = json!({
+            "model": "o4-mini",
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "."}]
+        });
+
+        let result = anthropic_to_openai(input).unwrap();
+        assert!(result.get("max_tokens").is_none());
+        assert_eq!(result["max_completion_tokens"], PROBE_MAX_TOKENS_FLOOR);
+    }
+
+    #[test]
+    fn test_anthropic_to_openai_keeps_legitimate_small_budgets() {
+        // 门槛及以上一律不抬：Claude Desktop 的标题生成等真实小预算请求不能被改大。
+        for budget in [16, 200, 1024] {
+            let input = json!({
+                "model": "deepseek-v4.1-flash",
+                "max_tokens": budget,
+                "messages": [{"role": "user", "content": "Hello"}]
+            });
+
+            let result = anthropic_to_openai(input).unwrap();
+            assert_eq!(
+                result["max_tokens"], budget,
+                "max_tokens={budget} 是正常预算，不应被改动"
+            );
+        }
+    }
+
+    #[test]
+    fn test_anthropic_to_openai_leaves_absent_or_non_integer_max_tokens_alone() {
+        let without = anthropic_to_openai(json!({
+            "model": "deepseek-v4.1-flash",
+            "messages": [{"role": "user", "content": "Hello"}]
+        }))
+        .unwrap();
+        assert!(without.get("max_tokens").is_none());
+        assert!(without.get("max_completion_tokens").is_none());
+
+        let zero = anthropic_to_openai(json!({
+            "model": "deepseek-v4.1-flash",
+            "max_tokens": 0,
+            "messages": [{"role": "user", "content": "Hello"}]
+        }))
+        .unwrap();
+        assert_eq!(zero["max_tokens"], 0, "0 不是探测级预算，原样透传即可");
     }
 
     fn run_tool_choice(value: Value) -> Value {

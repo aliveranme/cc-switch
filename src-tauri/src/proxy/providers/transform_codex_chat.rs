@@ -1647,6 +1647,11 @@ pub(crate) fn chat_completion_to_response_with_context(
     body: Value,
     tool_context: &CodexToolContext,
 ) -> Result<Value, ProxyError> {
+    // 中转上游可能把补全裹在 "成功信封" 里（见 unwrap_chat_completion_envelope）：
+    // 不解包时下面第一句会把 200 的成功响应报成 "No choices in chat response"，
+    // 且 id / model / created 一并丢失。流式聚合路径不经过这里，SSE 帧无信封。
+    let body = super::unwrap_chat_completion_envelope(body);
+
     let choices = body
         .get("choices")
         .and_then(|v| v.as_array())
