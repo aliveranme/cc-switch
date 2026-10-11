@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | 1f786dad（2026-10-10，**123 个提交**；明细见第 5 节；上一基线 4804b723，2026-10-05） |
-| 本地领先 | **431** 个提交（`git rev-list --count upstream/main..main`，统计于 merge 提交 = 430 既有 + 本次 merge 提交；本次补记提交再加 1） |
-| 本次 merge | 2026-10-10 合入上游 1f786dad（123 个提交，**452 文件 +29 428 / −7 143**，47 处冲突（8 处源码）手工解，见第 5 节）；上一次 2026-10-05 4804b723（38 个提交，4 处冲突） |
-| 本地版本 | `v4.0.7`（随 merge 对齐上游 v4.0.2–v4.0.7 六个版本；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-10 |
-| 测试规模 | 最近验证于 2026-10-10：Rust **3638** 单元 + **182** 集成（17 个集成测试二进制，其中金标 39）+ main 0；前端 vitest **2436**（202 文件） |
+| 上游基线 | df40d53c（2026-10-11，**8 个提交**；明细见第 5 节；上一基线 1f786dad，2026-10-10） |
+| 本地领先 | **439** 个提交（`git rev-list --count upstream/main..main`，统计于 2026-10-11，本次 4.30 修复提交之前） |
+| 本次 merge | 2026-10-11 合入上游 df40d53c（8 个提交，**35 文件**，见第 5 节）；上一次 2026-10-10 合入 1f786dad（123 个提交，**452 文件 +29 428 / −7 143**，47 处冲突（8 处源码）手工解） |
+| 本地版本 | `v4.0.8`（随 merge 对齐上游 v4.0.8；fork 发布序列见第 5 节） |
+| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-11 |
+| 测试规模 | 最近验证于 2026-10-11：Rust **3670** 单元通过 / 共 **3680**（`cargo test --lib`，10 ignored；3 项自绑定端口的用例在并行跑时偶发失败，单独重跑通过）+ **182** 集成（17 个集成测试二进制，其中金标 39）+ main 0；前端 vitest **2447**（204 文件） |
 
 ## 2. 修改总览（按主题）
 
@@ -22,7 +22,7 @@
 | 模块 | 差异 |
 |---|---|
 | **安全分类器协议**（新增 `classifier.rs` ~2 100 行，上游无此文件） | Claude Code security classifier 完整支持：`<block>`/`</severity>` 双模式、fast 单阶段与 both/thinking 双阶段检测、severity 响应转换、裁决提取与 usage 解析、上游文本协议标签净化（2.1.296 全文一致性校验）、`<cc_automode_permissions>` 规则块回注、`max_tokens` 下限抬高（见 4.2）。协议特征逐条对照官方 cli.js（2.1.193/2.1.219）与 `claude.exe`（2.1.296）逆向确认 |
-| **四向格式转换**（transform.rs / transform_codex_chat.rs / transform_codex_anthropic.rs / transform_gemini.rs / transform_responses.rs） | reasoning 全形状提取（含 DeepSeek 内联 think 块）；Anthropic document → Chat/Responses/Gemini；`json_object` 响应格式保留；`disable_parallel_tool_use` ↔ `parallel_tool_calls` 对称传递；非图片工具媒体降级为文本而非丢弃；usage 三线守恒（fresh-input 语义 + saturating_sub） |
+| **四向格式转换**（transform.rs / transform_codex_chat.rs / transform_codex_anthropic.rs / transform_gemini.rs / transform_responses.rs） | reasoning 全形状提取（含 DeepSeek 内联 think 块）；Anthropic document → Chat/Responses/Gemini；`json_object` 响应格式保留；`disable_parallel_tool_use` ↔ `parallel_tool_calls` 对称传递；非图片工具媒体降级为文本而非丢弃；usage 三线守恒（fresh-input 语义 + saturating_sub）；探测级 `max_tokens` 抬升与非流式「成功信封」解包（见 4.30） |
 | **prefix-cache 稳定性**（transform 系 + forwarder） | 剥离 `x-anthropic-billing-header` 的 rotating `cch=` nonce（`strip_volatile_cch`，逐行字节级确定）；mid-conversation system 重写为 user（见 4.1）；CacheTrace 调试链路（TRACE 级门控） |
 | **缓存链路可配置**（claude.rs / forwarder.rs / classifier.rs / codex_config.rs，见 4.17–4.19） | 会话级 `prompt_cache_key` 路由从 Codex 扩展到 Claude→Chat（复用 `promptCacheRouting` 三态）；`sessionAffinityHeader`（值 = 客户端会话 ID，多实例网关缓存亲和）；`preserveCacheControl`（网关层实现断点的上游）；`midConversationSystemPolicy`（4.1 策略可选）；`classifierSeverityBlockValue`（4.7 数值可配）；`codexNativeResponsesTemplate`（4.13 模板可选） |
 | **SSE 流式协议**（streaming.rs / streaming_codex_chat.rs / streaming_gemini.rs / streaming_responses.rs） | 终态必达（EOF sentinel、[DONE] 去重、截断流补 end_turn）；**伪成功防护**（空 delta chunk 后断流/DONE 发 error 而非伪造成功）；错误状态码与 retry-after 透传；`output_text.done`/`refusal.done` 跳 delta 恢复完整文本；whole-JSON 非流式回退（Responses 方向）；转换器 1MB 缓冲上限防 OOM；[DONE] 后残留数据守卫 |
@@ -756,6 +756,87 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   （上游新代码，Claude Desktop 会话指纹）改为 `hex::encode(hasher.finalize())`——
   输出同样是小写十六进制（64 字符），`&digest[..32]` 切片与 `ccsw-` 前缀不变。
 - ⚠️ 上游新代码里若再出现 `format!("{:x}", …hash…)`（或 `{:X}`），必须一并改写。
+
+### 4.30 Claude Desktop 探针：探测级 `max_tokens` 抬升 + 上游「成功信封」解包（2026-10-11）
+
+- **上游**：Anthropic→OpenAI Chat 转换对 `max_tokens` 是 1:1 原样复制
+  （`anthropic_to_openai_with_options`，o-series 换名 `max_completion_tokens` 但值不变）；
+  非流式回程 `openai_to_anthropic` 只从**顶层**读 `choices`/`usage`/`id`/`model`，
+  分类器的裁决文本提取与用量解析、Codex Chat 桥
+  `chat_completion_to_response_with_context`、`response_processor` 的非流式用量解析
+  同样只认顶层字段。
+- **现象**（2026-10-11 用户报障）：Claude Desktop 的连接测试恒失败，`provider = cline`
+  （`apiFormat=openai_chat`，route `claude-haiku-4-5` → 上游
+  `cline-pass/deepseek-v4.1-flash`）：
+  `HTTP 500` + `{"error":"empty response content","success":false}`。两层成因叠加：
+  1. **探测预算不可满足**：探测请求是 `{"model":"claude-haiku-4-5","max_tokens":1,
+     "messages":[{"role":"user","content":"."}]}`，非流式。上游是推理模型，reasoning
+     token 计入 `max_tokens`，1 个 token 连推理都放不下 → 正文为空 → 上游判
+     `empty response content` 并回 500。
+  2. **成功信封未解包**：该上游非流式**成功**响应是
+     `{"success":true,"data":{<补全体>}}`，`choices`/`usage` 只在 `data` 下、顶层没有
+     副本。即使把预算抬够，回程仍会在 `openai_to_anthropic` 报 `No choices in response`
+     （HTTP 422）。**流式帧不带信封**，所以只有非流式请求受影响——这也解释了为什么同一
+     provider 的流式对话一切正常，而非流式 200 响应的用量会被静默记成 0 token
+     （实测该 provider 非流式 200 共 92 条，92 条全部 0 token；流式 228 条无一为 0）。
+- **fork（本次修复）**：
+  - `providers/transform.rs`：新增 `PROBE_MAX_TOKENS_THRESHOLD = 16` 与
+    `PROBE_MAX_TOKENS_FLOOR = 5120`；`anthropic_to_openai_with_options` 把落在
+    **1..15** 区间的 `max_tokens` 抬到 5120（o-series 的 `max_completion_tokens` 同样抬）。
+    门槛及以上的正常预算原样透传，缺字段与非整数不动（`0` 也不动，与
+    `RESPONSES_MIN_MAX_OUTPUT_TOKENS` 的 `1..16` 判定一致）。
+  - `providers/mod.rs`：新增 `unwrap_chat_completion_envelope`，判定收紧为「顶层无
+    `choices` **且** `data.choices` 是数组」；接入 5 个读取点——
+    `transform::openai_to_anthropic`、
+    `transform_codex_chat::chat_completion_to_response_with_context`、
+    `classifier::transform_classifier_response_with`、`classifier::parse_classifier_usage`、
+    `response_processor::parse_non_streaming_usage`（末者只解包本地副本，回给客户端的
+    仍是原始字节）。裸补全体、Anthropic 消息体、Responses、Gemini 与**失败**信封一律原样返回。
+  - `claude_desktop_config.rs`：`build_gateway_profile` 不再写
+    `chatCodeExecutionEnabled`——Claude Desktop 已把该键移出配置键集合，每次启动都报
+    `Ignoring local configuration value "chatCodeExecutionEnabled": not a recognized
+    configuration key`（同一 profile 里其余键未见告警）。
+- **本机实测**（2026-10-11，上游直连，同一凭据 / 模型 / 提示词）：
+
+  | `max_tokens` | 结果 |
+  |---|---|
+  | 1、32 | HTTP 500 `{"error":"empty response content","success":false}` |
+  | 64（经网关） | HTTP 500 |
+  | 128 / 512 / 1024 | HTTP 200，有正文 |
+  | 5120（修复后的出站值） | HTTP 200 `{"success":true,"data":{…,"usage":{prompt_tokens:31, completion_tokens:68, completion_tokens_details:{reasoning_tokens:60}}}}` |
+
+  即修复后探针收到的是正常 Anthropic 消息体，Claude Desktop 的「连接测试」可通过。
+- **为什么抬到 5120 而不是 16**：Responses 路径的 `RESPONSES_MIN_MAX_OUTPUT_TOKENS = 16`
+  是**协议下限**（Responses API 拒绝小于 16 的 `max_output_tokens`）；这里的下限是
+  **推理预算下限**，实测 32 仍空、128 起才有正文，16 救不了。取 5120 与分类器转发的
+  `UPSTREAM_CLASSIFIER_MAX_TOKENS` 同值——同一类失败（推理 token 吃掉预算），同一余量。
+  `max_tokens` 是上限而非消耗量，模型给出答复即停，抬高只影响「本来拿不到任何正文」的探测。
+- **影响面（有意偏离上游，且不限于 Claude Desktop）**：抬升位于共享的
+  Anthropic→OpenAI Chat 转换，故**所有** `openai_chat` provider 的 1..15 token 请求都会
+  被抬到 5120（客户端仍收到合法响应，只是正文可能长于所请求的上限）；信封解包对所有 app
+  生效。选共享位置而非 Claude Desktop 专属分支，是为与 4.2 及
+  `RESPONSES_MIN_MAX_OUTPUT_TOKENS` 的既有先例一致，且每个改动点都能独立单测。
+- ⚠️ **已知缺口**：
+  - `apiFormat` 为 Anthropic 透传（不转换）的 provider 没有这层下限——若其上游是推理
+    模型，探针仍可能空正文 500。
+  - **16..127** 区间的预算原样透传，对推理型上游仍可能空正文（16 是「只可能是探测」的
+    保守门槛，再往上抬就会改动合法的小预算请求）。
+  - 信封解包只认「非流式成功 + `data.choices` 为数组」这一种形状；上游若改用别的包装层，
+    需在同样这 5 个读取点重新识别。
+  - 非流式响应若**转换失败**，`handlers.rs` 的 `raw_usage_response` 兜底快照读的仍是
+    原始顶层 `usage`（信封下为 0）；信封解包后该组合已不再触发，未改动。
+- **测试**：`providers::tests::test_unwrap_chat_completion_envelope_success_wrapper` /
+  `…_leaves_others_untouched`、`transform::tests::test_openai_to_anthropic_unwraps_success_envelope` /
+  `…_still_rejects_payload_without_choices` / `…_raises_probe_max_tokens` /
+  `…_raises_probe_max_tokens_for_o_series_too` / `…_keeps_legitimate_small_budgets` /
+  `…_leaves_absent_or_non_integer_max_tokens_alone`、
+  `classifier::tests::test_transform_classifier_response_unwraps_success_envelope` /
+  `…_parse_classifier_usage_unwraps_success_envelope` / `…_plain_openai_body_unchanged`、
+  `response_processor::tests::parse_non_streaming_usage_*`、
+  `claude_desktop_config::tests`（两处断言改为**不写** `chatCodeExecutionEnabled`）。
+- **分类器侧影响**：见 4.2——信封不解包时 `extract_response_text` 恒为 `None`，上游 200
+  带回的裁决被当成「无文本」而 fail-open **ALLOW**，即 auto-mode 静默失效；本次解包一并
+  修掉（与 4.2 已记录的那类失效同向）。
 
 ## 5. 本地发布序列
 
