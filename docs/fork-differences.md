@@ -9,11 +9,11 @@
 | 项目 | 值 |
 |---|---|
 | 上游基线 | df40d53c（2026-10-11，**8 个提交**；明细见第 5 节；上一基线 1f786dad，2026-10-10） |
-| 本地领先 | **439** 个提交（`git rev-list --count upstream/main..main`，统计于 2026-10-11，本次 4.30 修复提交之前） |
+| 本地领先 | **445** 个提交（`git rev-list --count upstream/main..main`，统计于 2026-10-11，含 4.30 / 4.31 两轮修复与 v4.0.8 重发） |
 | 本次 merge | 2026-10-11 合入上游 df40d53c（8 个提交，**35 文件**，见第 5 节）；上一次 2026-10-10 合入 1f786dad（123 个提交，**452 文件 +29 428 / −7 143**，47 处冲突（8 处源码）手工解） |
-| 本地版本 | `v4.0.8`（随 merge 对齐上游 v4.0.8；fork 发布序列见第 5 节） |
+| 本地版本 | `v4.0.8`（随 merge 对齐上游 v4.0.8；2026-10-11 同日重发，tag 由 `38acc5a1` 改指 `ae14e1a9`；fork 发布序列见第 5 节） |
 | 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-11 |
-| 测试规模 | 最近验证于 2026-10-11：Rust **3670** 单元通过 / 共 **3680**（`cargo test --lib`，10 ignored；3 项自绑定端口的用例在并行跑时偶发失败，单独重跑通过）+ **182** 集成（17 个集成测试二进制，其中金标 39）+ main 0；前端 vitest **2447**（204 文件） |
+| 测试规模 | 最近验证于 2026-10-11：Rust **3675** 单元通过 / 共 **3687**（`cargo test --lib`，10 ignored；2 项自绑定端口的用例在本机 cc-switch 运行时失败，`os error 10048`/`10053`——占用固定端口的那项恒失败，其余单独重跑通过）+ **182** 集成（17 个集成测试二进制，其中金标 39）+ main 0；前端 vitest **2447**（204 文件） |
 
 ## 2. 修改总览（按主题）
 
@@ -937,7 +937,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 | `v3.20.4` | 2026-09-23 | 合入上游 v3.20.4（`f2537fdf`，25 提交）；Copilot 端点剥离 `stop`、`additional_tools` 抬升为工具、Codex `detail:original` 图片归一化、GPT-6/Grok 家族档位与定价批次、WSL shell 启动输出过滤；fork 侧 rquickjs 0.12 锁文件对齐（14 资产） |
 | `v4.0.1` | 2026-10-05 | 合入上游 v4.0.0 **与** v4.0.1（`4804b723`，38 提交）：v4.0 收尾（配额重置倒计时与到期列表、用量表格分页、88API/兔子 API 等预设扩编、官方图标）、代理修复（零用量 `response.incomplete` → `api_error`、Codex 状态库 WSL 路径跳过加锁）、CI 基建（rust-cache + nextest + pinned toolchain）与发布流程改造；fork 侧移除手写的 `wix.version` 覆盖。**发布一次成功**：tag `v4.0.1` 指向 fork 提交 `32e4aa39`，14 资产（Linux x86_64/arm64 各 AppImage+deb+rpm、macOS dmg+zip+tar.gz、Windows x86_64/arm64 各 MSI+Portable.zip、latest.json），正式版（Latest）；随发布一并修掉 macOS/Linux CI 的 golden 模式快照（644→600） |
 | `v4.0.7` | 2026-10-11 | 合入上游 v4.0.2–v4.0.7（`1f786dad`，123 提交）：what's-new 应用内更新摘要机制（v4.0.2 起）、GitHub Copilot 托管账号（v4.0.5）、provider 搜索 / Skills 批量更新 / 配额着色 / classic sub-agent tools / 流式收尾修复（#7986，v4.0.6）、quotaDisplay / 会话压缩 rollout / stale-client / workspace 切换修复（#8054，v4.0.7）等六个版本的完整内容；fork 侧新增 sha2 0.11 适配（4.29）。**发布一次成功**：tag `v4.0.7` 指向 fork 提交 `e091fdd6`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。发布前曾遇仓库 Actions 被禁用（用户网页端恢复，见同步注记） |
-| `v4.0.8` | 2026-10-11 | 合入上游 v4.0.8（`df40d53c`，8 提交，35 文件）：Codex 桌面版自带命令行的模型列表回退（macOS 上 ChatGPT.app 优先于改名前的 Codex.app）、官方模型列表不可用时的分类原因提示与恢复、获取模型列表带上供应商配置的请求头（#7759/#7760）、「设置 → 数据」新增「打开日志」、深色模式文字调暗；fork 侧修正分类器转发 `max_tokens` 下限（修静默失效）并为回注块加作用域限定（4.2）。**发布一次成功**：tag `v4.0.8` 指向 fork 提交 `38acc5a1`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
+| `v4.0.8` | 2026-10-11 | 合入上游 v4.0.8（`df40d53c`，8 提交，35 文件）：Codex 桌面版自带命令行的模型列表回退（macOS 上 ChatGPT.app 优先于改名前的 Codex.app）、官方模型列表不可用时的分类原因提示与恢复、获取模型列表带上供应商配置的请求头（#7759/#7760）、「设置 → 数据」新增「打开日志」、深色模式文字调暗；fork 侧修正分类器转发 `max_tokens` 下限（修静默失效）并为回注块加作用域限定（4.2）。**发布一次成功**：tag `v4.0.8` 指向 fork 提交 `38acc5a1`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。**同日重发**：tag 改指 fork 提交 `ae14e1a9`（并入 4.30 探针修复与 4.31 内置浏览器 / 官方插件市场），14 资产原地覆盖、仍为 Latest，版本号与安装包命名不变 |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -1441,6 +1441,21 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 六个作业全过（Detect 7s、Backend ubuntu 6m09s、Backend macos 8m37s、Frontend
 > 4m45s、Backend Windows+WSL2 5m06s、Backend windows-latest 12m29s）——上轮
 > WSL2 偶发（见 v4.0.7 注记）本轮未复现；CodeQL run `38118053649` 亦 success。
+>
+> **重发（2026-10-11）**：`ae14e1a9`（4.31 内置浏览器开关 + 官方插件市场按需补齐）推送
+> `origin/main` 后，tag `v4.0.8` 由 `38acc5a1` **强制改指** `ae14e1a9`（`git tag -f` +
+> `git push -f origin v4.0.8`，仍指 fork 提交，符合 6.1），版本号与安装包命名不变。
+> Release run `38129801363` 全绿——whats-new-check 15s、Resolve Version 5s 先行通过
+> （四处版本号仍一致），五平台构建 11m33s–22m57s（macos-14 最慢，仍有 arm64 runner
+> 容量提示）、Publish 20s、Assemble latest.json 9s、Sync to R2 2s（无 secrets 自动
+> 跳过）。`softprops/action-gh-release@v3` 的 `overwrite_files: true` 让 14 个资产原地
+> 覆盖，仍为正式版（Latest，发布于 `2026-10-11T06:51:55Z`）；latest.json 的 `platforms`
+> 仍为空（见 6.2）。同轮 CI run `38129783173` 全绿（Detect 6s、Backend ubuntu 5m52s、
+> Backend macos 5m45s、Backend Windows+WSL2 4m51s、Backend windows-latest 14m54s；
+> Frontend Checks 因本轮无前端改动按变更检测跳过），**WSL2 作业已恢复运行且通过**
+> （此前因 LNK1327 暂禁用）；CodeQL run `38129782788` success。
+> ⚠️ 重发不是「新版本」：§6.2 说明 fork 的 `latest.json` 无签名内容，**已安装的
+> v4.0.8 收不到更新提示**，要拿到这两处修正必须重新下载安装包覆盖安装。
 
 ## 6. 维护约定
 
@@ -1450,7 +1465,9 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   配置的 `remote.upstream.tagOpt=--no-tags`，把上游标签拉进本地。
 - **协议修改**：必须先有失败测试（TDD），改动点必须带行为钉桩测试。
 - **行为分歧**：凡是有意偏离上游语义的改动，在代码注释中注明理由，并同步本节文档。
-- **推送目标**：`origin`（GitHub）+ `cnb`（cnb.cool）双远端。
+- **推送目标**：`origin`（GitHub）。`cnb`（cnb.cool）是计划中的第二远端，**本机克隆
+  尚未配置**（下列同步注记里的「未配置 `cnb` 远端」即指此）；本机实际远端只有 `origin`
+  与 `upstream`。
 
 ### 6.1 发布纪律（tag 必须指向 fork 提交）
 
@@ -1497,7 +1514,9 @@ endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 for
 ```
 
 `platforms` 为空 → 更新器找不到任何平台的更新，**自动更新静默失效**。
-已确认 v3.20.2 与 v3.20.3 均为空，属既有问题（非本次回归）。
+已确认 v3.20.2、v3.20.3 与 v4.0.1 / v4.0.7 / v4.0.8（含同日重发）均为空，属既有问题
+（非本次回归）。**推论**：重发同一版本号不会给已安装的用户任何更新提示，修正只能靠重新
+下载安装包覆盖安装。
 
 两条修复路径（需人工决策，涉及密钥，未擅自执行）：
 
