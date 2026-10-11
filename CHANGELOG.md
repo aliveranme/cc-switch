@@ -31,6 +31,13 @@ The fourth patch release on the 4.0 stable line. Codex aggregation works for use
 
 - **No database schema change** (still 20).
 
+### 重新发布补充（fork 重发，2026-10-11）
+
+版本号与安装包命名不变，本次重发仅含以下两处 fork 修正（详见 `docs/fork-differences.md` 4.30）：
+
+- **Claude Desktop 连接测试返回 HTTP 500**：`/claude-desktop` 网关的非流式请求有两条独立缺陷。其一，连接测试发的是探测级 `max_tokens=1`，而该供应商的上游是推理模型（reasoning token 计入 `max_tokens`），这个预算连推理都放不下，正文为空，上游回 `{"error":"empty response content","success":false}`；现在落在 1..15 区间的 `max_tokens` 会在转换时抬到 5120，门槛及以上的正常预算（含真实的小预算请求）原样透传。其二，该上游把非流式补全裹在 `{"success":true,"data":{…}}` 里，而网关只认顶层 `choices`，于是即使预算够了回程也会报 `No choices in response`（HTTP 422）；现在 5 个读取点都会先解包这种成功信封（流式 SSE 帧不带信封，故流式路径不受影响）。同一形状下，非流式请求的用量此前被静默记成 0 token，auto-mode 安全分类器也因取不到裁决文本而静默 fail-open 放行——一并修掉。
+- **Claude Desktop 启动日志告警**：网关 profile 不再写 `chatCodeExecutionEnabled`。Claude Desktop 已把该键移出配置键集合，此前每次启动都会报 `Ignoring local configuration value "chatCodeExecutionEnabled": not a recognized configuration key`。
+
 ## [4.0.7] - 2026-10-10
 
 The third patch release on the 4.0 stable line. Switching between the Plus and Team workspaces of the same OpenAI user works again (a 4.0 regression), quota windows can show what is used instead of what is left, compressed Codex session rollouts are read everywhere and can be enabled from Settings, and the Codex stale-client notice now covers direct ↔ routing switches and Windows. Usage accounting fixes cover Claude 1-hour cache writes, explicit-zero OpenAI cache fields from relays, Codex cache writes in session imports, missing Sonnet 5.5 / Haiku 5.5 prices and duplicate provider rows on the Claude stats tab; other fixes cover Codex top-level `base_url` being dropped on save, Windows batch files under non-ASCII usernames, and form editors in OpenCode, MiniMax Code and OpenClaw.
