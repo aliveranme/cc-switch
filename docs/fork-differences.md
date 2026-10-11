@@ -778,6 +778,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 | `v3.20.4` | 2026-09-23 | 合入上游 v3.20.4（`f2537fdf`，25 提交）；Copilot 端点剥离 `stop`、`additional_tools` 抬升为工具、Codex `detail:original` 图片归一化、GPT-6/Grok 家族档位与定价批次、WSL shell 启动输出过滤；fork 侧 rquickjs 0.12 锁文件对齐（14 资产） |
 | `v4.0.1` | 2026-10-05 | 合入上游 v4.0.0 **与** v4.0.1（`4804b723`，38 提交）：v4.0 收尾（配额重置倒计时与到期列表、用量表格分页、88API/兔子 API 等预设扩编、官方图标）、代理修复（零用量 `response.incomplete` → `api_error`、Codex 状态库 WSL 路径跳过加锁）、CI 基建（rust-cache + nextest + pinned toolchain）与发布流程改造；fork 侧移除手写的 `wix.version` 覆盖。**发布一次成功**：tag `v4.0.1` 指向 fork 提交 `32e4aa39`，14 资产（Linux x86_64/arm64 各 AppImage+deb+rpm、macOS dmg+zip+tar.gz、Windows x86_64/arm64 各 MSI+Portable.zip、latest.json），正式版（Latest）；随发布一并修掉 macOS/Linux CI 的 golden 模式快照（644→600） |
 | `v4.0.7` | 2026-10-11 | 合入上游 v4.0.2–v4.0.7（`1f786dad`，123 提交）：what's-new 应用内更新摘要机制（v4.0.2 起）、GitHub Copilot 托管账号（v4.0.5）、provider 搜索 / Skills 批量更新 / 配额着色 / classic sub-agent tools / 流式收尾修复（#7986，v4.0.6）、quotaDisplay / 会话压缩 rollout / stale-client / workspace 切换修复（#8054，v4.0.7）等六个版本的完整内容；fork 侧新增 sha2 0.11 适配（4.29）。**发布一次成功**：tag `v4.0.7` 指向 fork 提交 `e091fdd6`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。发布前曾遇仓库 Actions 被禁用（用户网页端恢复，见同步注记） |
+| `v4.0.8` | 2026-10-11 | 合入上游 v4.0.8（`df40d53c`，8 提交，35 文件）：Codex 桌面版自带命令行的模型列表回退（macOS 上 ChatGPT.app 优先于改名前的 Codex.app）、官方模型列表不可用时的分类原因提示与恢复、获取模型列表带上供应商配置的请求头（#7759/#7760）、「设置 → 数据」新增「打开日志」、深色模式文字调暗；fork 侧修正分类器转发 `max_tokens` 下限（修静默失效）并为回注块加作用域限定（4.2）。**发布一次成功**：tag `v4.0.8` 指向 fork 提交 `38acc5a1`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -1266,6 +1267,21 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > **本轮 fork 侧另有两处改动**（在合并之前提交）：`c9b5d50d` 抬高分类器转发 `max_tokens`
 > 下限（修上游 `empty response content` 静默失效）并回注 `<cc_automode_permissions>`；
 > `71bc9640` 给回注说明加作用域限定。详见 4.2。
+>
+> **发布（2026-10-11）**：tag `v4.0.8` → fork 提交 `38acc5a1`（显式创建并复核
+> `git log -1 v4.0.8`，符合 6.1），Release run `38118063159` 全绿——Resolve Version
+> 8s 与 whats-new-check 28s 先行通过，五平台构建 10m53s–24m29s（macos-14 最慢，有
+> "macOS arm64 runner 容量紧张"的排队提示）、Publish 23s、Assemble latest.json 8s、
+> Sync to R2 3s（无 secrets 自动跳过），**14 个资产**、正式版（Latest，创建于
+> `2026-10-11T06:25:56Z`）。资产与 v4.0.1/v4.0.7 一致：Linux x86_64/arm64 各
+> AppImage+deb+rpm、macOS dmg+zip+tar.gz、Windows x86_64/arm64 各 MSI+Portable.zip、
+> latest.json。latest.json 的 `platforms` 仍为空（无签名，见 6.2）。本轮 Actions
+> 正常触发，无需 dispatch。
+>
+> **CI 复核（2026-10-11）**：push 自动触发 ci.yml（run `38118053650`）**一次全绿**，
+> 六个作业全过（Detect 7s、Backend ubuntu 6m09s、Backend macos 8m37s、Frontend
+> 4m45s、Backend Windows+WSL2 5m06s、Backend windows-latest 12m29s）——上轮
+> WSL2 偶发（见 v4.0.7 注记）本轮未复现；CodeQL run `38118053649` 亦 success。
 
 ## 6. 维护约定
 
