@@ -1230,6 +1230,43 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > （UNC 挂载时序类问题，非代码回归）；`gh run rerun --failed` 重跑后**六个 job
 > 全绿**。
 
+> 2026-10-11 同步（**v4.0.8**）：合入上游 `1f786dad` 之后的 **8 个提交**至 `df40d53c`
+> （tag `v4.0.8`；35 文件 +1 401 / −121）。本轮覆盖上游 v4.0.8：Codex 桌面版自带命令行
+> 的模型列表回退（`codex_config.rs` +176，含 macOS 上 ChatGPT.app 优先于改名前的
+> Codex.app、Windows 取安装目录里最新的一个版本）、官方模型列表不可用时的**分类原因
+> 提示**与自动恢复（`codex_official_models.rs` +387、`mode/controller.rs`、聚合模式面板
+> `SwitchModePanel.tsx`）、「获取模型列表」带上**供应商配置的请求头**（#7759 OpenCode、
+> #7760 Claude·Codex·Grok 的「Header 覆盖」）、「设置 → 数据」新增「打开日志」按钮、
+> 深色模式三档文字调暗（`src/index.css`：`--foreground` 族与 `--text-1/2/3`）。
+> 数据库 schema 未变（仍为 20）。
+>
+> **冲突 0 处**（自动合并干净），但**有 1 处语义冲突必须手工补**：
+> `tests/components/CodexFormFields.test.tsx` 是上游本轮新增的，其 `baseProps` 按上游的
+> `CodexFormFieldsProps` 构造，而 fork 的该组件多了 4 个必填 props（`sessionAffinityHeader`
+> 一族与 `codexNativeResponsesTemplate` 一族）。**`vitest` 不做类型检查**，所以 204 文件
+> 全绿并不覆盖此处，只有 `pnpm typecheck` 报 TS2739；已按兄弟文件
+> `CodexFormFields.modelFetch.test.tsx` 的写法补默认值。
+> **教训：上游新增的组件测试，若组件在 fork 扩展过 props，必须过一遍 `pnpm typecheck`。**
+>
+> 分歧点核对：本轮上游改动的 35 个文件**未触及任何 §4 关键文件**——`streaming.rs`、
+> `session_usage.rs`、`atomic_write` 权限语义、`transform_codex_chat.rs`、`hermes_config.rs`、
+> `handlers.rs`、`classifier.rs` 全未出现在合并清单里。唯一与 4.26 有交集的是
+> `src/index.css`（上游调暗深色模式文字）：改动落在 `:root`/`.dark` 的**具体色值**上，与 fork
+> 把令牌声明放在 `@theme` 这件事无关，逐行核对后**原样采纳**。`release.yml` 复核：仍是 fork
+> 版（`whats-new-check` 作业在列、`needs: [whats-new-check, resolve-version]`、签名走
+> 「个人使用模式」降级），本次合并未触及 `.github/`。
+>
+> 验证（2026-10-11）：Rust `cargo test --lib` **3656 passed / 1 failed**——唯一失败为
+> `services::provider::tests::update_current_claude_desktop_provider_syncs_profile_when_proxy_takeover_is_active`
+> （端口 10048 被本机正在运行的 cc-switch 占用，环境性，非回归）；`cargo fmt --check`、
+> `cargo clippy --all-targets -- -D warnings` 全绿。前端 `pnpm vitest run` **204 文件 /
+> 2447 用例**全绿、`pnpm typecheck` / `pnpm format:check` / `pnpm build:renderer` 全绿。
+> 合并提交 `2b777f79`。
+>
+> **本轮 fork 侧另有两处改动**（在合并之前提交）：`c9b5d50d` 抬高分类器转发 `max_tokens`
+> 下限（修上游 `empty response content` 静默失效）并回注 `<cc_automode_permissions>`；
+> `71bc9640` 给回注说明加作用域限定。详见 4.2。
+
 ## 6. 维护约定
 
 - **上游同步**：`git fetch upstream --no-tags && git merge upstream/main`，merge 后跑
