@@ -21,7 +21,7 @@
 
 | 模块 | 差异 |
 |---|---|
-| **安全分类器协议**（新增 `classifier.rs` ~1 300 行，上游无此文件） | Claude Code security classifier 完整支持：`<block>`/`</severity>` 双模式、fast 单阶段与 both/thinking 双阶段检测、severity 响应转换、裁决提取与 usage 解析。协议特征逐条对照官方 cli.js（2.1.193/2.1.219）逆向确认 |
+| **安全分类器协议**（新增 `classifier.rs` ~2 100 行，上游无此文件） | Claude Code security classifier 完整支持：`<block>`/`</severity>` 双模式、fast 单阶段与 both/thinking 双阶段检测、severity 响应转换、裁决提取与 usage 解析、上游文本协议标签净化（2.1.296 全文一致性校验）、`<cc_automode_permissions>` 规则块回注、`max_tokens` 下限抬高（见 4.2）。协议特征逐条对照官方 cli.js（2.1.193/2.1.219）与 `claude.exe`（2.1.296）逆向确认 |
 | **四向格式转换**（transform.rs / transform_codex_chat.rs / transform_codex_anthropic.rs / transform_gemini.rs / transform_responses.rs） | reasoning 全形状提取（含 DeepSeek 内联 think 块）；Anthropic document → Chat/Responses/Gemini；`json_object` 响应格式保留；`disable_parallel_tool_use` ↔ `parallel_tool_calls` 对称传递；非图片工具媒体降级为文本而非丢弃；usage 三线守恒（fresh-input 语义 + saturating_sub） |
 | **prefix-cache 稳定性**（transform 系 + forwarder） | 剥离 `x-anthropic-billing-header` 的 rotating `cch=` nonce（`strip_volatile_cch`，逐行字节级确定）；mid-conversation system 重写为 user（见 4.1）；CacheTrace 调试链路（TRACE 级门控） |
 | **缓存链路可配置**（claude.rs / forwarder.rs / classifier.rs / codex_config.rs，见 4.17–4.19） | 会话级 `prompt_cache_key` 路由从 Codex 扩展到 Claude→Chat（复用 `promptCacheRouting` 三态）；`sessionAffinityHeader`（值 = 客户端会话 ID，多实例网关缓存亲和）；`preserveCacheControl`（网关层实现断点的上游）；`midConversationSystemPolicy`（4.1 策略可选）；`classifierSeverityBlockValue`（4.7 数值可配）；`codexNativeResponsesTemplate`（4.13 模板可选） |
@@ -154,7 +154,7 @@
 ## 3. 本地新增文件（上游不存在）
 
 ```
-src-tauri/src/proxy/classifier.rs            # 安全分类器协议（~1300 行）
+src-tauri/src/proxy/classifier.rs            # 安全分类器协议（~2 100 行）
 src-tauri/src/proxy/providers/codex_chat_history.rs  # 工具历史恢复
 src-tauri/src/resources/gpt5_6_sol_template.json
 src/components/JsonEditorImpl.tsx
@@ -194,9 +194,49 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 
 ### 4.2 安全分类器 fail-open vs 官方 fail-closed
 
-- **官方**（cli.js `uSo`）：无 `<block>` 标签即 BLOCK（fail-closed），不可解析即拦截。
+> **协议基线：Claude Code 2.1.296**（2026-10-11 从本机 `claude.exe` 逆向复核）。本节
+> 的官方行为描述以 2.1.296 为准；2.1.219 的旧函数名（`uSo`/`xBs`/`Piy`）已对应为
+> 2.1.296 的 `bBe`（block 模式解析）/ `Luo`（severity 模式解析）/ `sBe`（分类器
+> prompt 构造）/ `WBe`（`<thinking>` 剥离）。
+
+- **auto mode 有两层，别混淆**（2.1.296 起明确）：
+  1. **服务端层（arbiter）**：不是独立请求，而是搭在**主请求**上的
+     `safeguards:[{type:"dangerous_tool_use",…}]` body 字段 +
+     `dangerous-tool-use-2026-09-03` beta 头；只有官方端点能服务。第三方 base URL
+     下 `dM()` 返回 `"arbiterWithLocalFallback"`，即**默认照挂**（2026-10-11
+     二进制复核，`claude.exe` 2.1.296，挂载点 ~223090967）。网关若因它 400，CC
+     走的是**优雅回落**：`ein()` 置 `thirdPartyServerClassifierRefused` latch →
+     本会话不再挂 `safeguards`/beta → **继续用本地分类器**（日志原文 "auto mode
+     decides with the local classifier"），**不 deny**。`yy()` 里那句 "every
+     auto-mode tool use is denied as classifier-unavailable" 是同一三元表达式的
+     `else` 支，即**非第三方**路径——两者别对调。官方开关
+     `CLAUDE_CODE_AUTO_MODE_SERVER=0`（`dM()` → `"off"`）关的就是这一层，作用是
+     省掉这次注定失败的往返；未设时第三方默认开启。真正会 hard deny 的是另一条
+     路：连续 `Cv=10` 次拿不到裁定 → `qxr()` 的 `behavior:"deny"`，与本 latch
+     无直接因果。
+  2. **本地分类器层（local classifier）**：客户端用 `sBe()` 自建 security-monitor
+     prompt（身份句 `You are a security monitor for autonomous AI coding agents.` +
+     `<transcript>` 包裹 + `stop_sequences: ["</block>"]`，severity 模式为
+     `["</severity>"]`），以独立 side query 发出。**本节及 `src-tauri/src/proxy/
+     classifier.rs` 处理的是这一层。**
+  - ⚠️ 两层**正交**：`=0` 不会关掉本地层，本地分类器请求照样穿过网关——那正是
+    `classifier.rs` 要解决的兼容问题。上游 PR #4987/#7636/#4923 至今 OPEN。
+- **官方**（2.1.296 `bBe`）：不是"取第一个 `<block>`"，而是**全文一致性校验**——
+  在原文（**含 `<thinking>`**）与去 `<thinking>` 文本上各扫一遍
+  `/<block>(yes|no)\b/gi`，取值去重后必须唯一，否则返回 `null` → fail-closed BLOCK。
+  severity 模式（`Luo`）要求去 `<thinking>` 后**恰好一个** `<severity>N</severity>`，
+  同样 null → BLOCK。2.1.296 起 `severityByModel` 默认已内建
+  claude-sonnet-5 / opus-4-8（含 `[1m]`），severity 默认生效，不再是"需显式配置"。
 - **fork**：有标签但不可识别 → BLOCK（对齐官方）；**完全无标签 → 启发式解读后默认放行**；
   上游超时/4xx/5xx/JSON 解析失败 → ALLOW。severity 模式的 BLOCK 数值可由 provider meta `classifierSeverityBlockValue` 覆盖（默认 1000，见 4.18）。
+- **fork 的响应侧净化（2.1.296 对齐）**：`classifier.rs` 把上游模型输出拼进
+  "Upstream analysis" 后再交给 CC，而 2.1.296 的解析是全文一致性校验——上游自述、
+  对 prompt 的引用或提示注入里只要出现一个 `<block>`/`<severity>` 标签，就会与代理
+  自己输出的裁决冲突 → `null` → **本该放行的动作被反判为 BLOCK**（fail-closed）。
+  因此 `sanitize_upstream_analysis()` 在**两种模式**下都剥离
+  `thinking`/`block`/`severity`/`reason`/`category` 五类标签（大小写不敏感、含未闭合
+  开标签），只保留标签内外的文字以保证分析可读。早期实现只在 severity 模式净化，
+  block 模式存在这一硬缺陷。
 - **原因**：官方的 fail-closed 假设分类器请求**总能成功**（官方 Anthropic API
   稳定且协议固定）。fork 面向第三方网关：DeepSeek/Kimi/GLM 等对分类器协议
   （`<transcript>` 包裹、`<block>`/`</severity>` 标签、fast 单阶段）的兼容性不可控，
@@ -205,6 +245,74 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   上游异常时"记录 + 放行"，宁可少一道安全网，不可让工作流整体不可用。
 - ⚠️ 后果：任何上游故障 = 分类器静默关闭。这是 fork 与官方最根本的安全属性分歧，
   已通过 warn 日志留痕；产品文档（README）应明示。
+- ✅ **`<cc_automode_permissions>` 回注（已实现）**：`transform_classifier_request` 整段替换
+  system 会把用户的 auto-mode hard/soft-deny 规则一起丢掉——那些规则在原生 prompt 里经
+  `<permissions_template>` 渲染进 `<cc_automode_permissions>`，是"哪些动作绝对不许做"
+  的唯一载体。现在 `build_classifier_system()` 用 `extract_automode_permissions()` 把该块
+  整块抽出（大小写不敏感；开/闭标签缺一不抽，宁可不下发也不下发半截规则），追加到简化
+  prompt 尾部。**规则块放在格式契约之前、并在其后重述一次输出格式**：长 prompt 的尾部是
+  模型最重视的位置，把"恰好一个 `<block>`"留在最后可降低长规则块把输出格式冲淡的概率
+  （模型一旦不按格式回，裁决兜底是保守的 BLOCK，正是不想要的 fail-closed）。无规则块时
+  system 逐字等于简化 prompt，行为与改动前完全一致。
+  - 对应测试：`test_transform_classifier_request_reinjects_automode_permissions`、
+    `test_transform_classifier_request_without_permissions_stays_simple`、
+    `test_extract_automode_permissions_bounds`、
+    `test_extract_automode_permissions_from_system_array`。
+- ✅ **分类器 `max_tokens` 下限（已实现，2026-10-11）**：官方 stage-1 发的是 `64 + Wn`
+  （第三方 `Wn=0` ⇒ **64**）。那个值依赖 `stop_sequences: ["</block>"]` 截断，且假定上游
+  不是推理模型——转发到第三方时两条都不成立：`stop_sequences` 已被移除（网关不认），
+  而**推理模型把 reasoning token 也算进 `max_tokens`**，64 会在推理阶段就被顶满 → 正文
+  为空 → 网关按 `{"error":"empty response content"}` 500 返回 → fork 的 fail-open 把它
+  兜成 ALLOWED。结果是**分类器静默失效**：不报错、不拦截，最难发现的一种。
+  `transform_classifier_request` 现在把 `max_tokens` 抬到
+  `UPSTREAM_CLASSIFIER_MAX_TOKENS = 5120`，**只抬不降**（stage-2 的 `8192 + Wn` 原样
+  保留；字段缺失时补上）。`max_tokens` 是上限而非消耗，模型输出裁决后自然停止，计费按
+  实际生成量算，调大不产生额外开销。
+  - 本机实测（2026-10-11 13:36–14:10 日志快照，该时间段正是本次排查所处的运行会话；
+    provider `cline`、`api_format=openai_chat`、上游 `cline-pass/deepseek-v4.1-flash`）：
+    **203 次**检测到分类器请求、203 次转发、**194 次**以 `empty response content` 500
+    失败并回落 ALLOWED，仅 9 次拿到裁决，0 次 BLOCK——修复前本地分类器基本等于不存在。
+  - 对应测试：`test_transform_classifier_request_removes_incompatible_params`（断言抬高）、
+    `test_transform_classifier_request_keeps_larger_max_tokens`、
+    `test_transform_classifier_request_fills_missing_max_tokens`。
+- ⚠️ **已知缺口（未处理）**：
+  1. **主请求上的 `safeguards` 有意不剥离**（2026-10-11 复核结案，结论见下方
+     "复核状态"）。代理层不动手：对 `openai_chat` / `openai_responses` /
+     `gemini_native` 供应商，格式转换本来就会重建 body 丢掉该字段、且
+     `should_send_anthropic_headers` 为假连 `anthropic-beta` 都不发；对 anthropic
+     原生第三方网关它确实会透传，但网关 400 的后果只是本会话回落本地分类器，不是
+     deny。主动剥离反而会牺牲"走官方兼容中转（能服务该 beta）时本可拿到的第 1 层"。
+  2. `<category>` 展示标签未实现：2.1.296 的 `<category>` 要求 slug 命中固定规则名
+     集合，而简化 prompt 没有规则目录，无法产出合法 slug；`bBe` 不读 `<category>`，
+     对裁决无影响，故只是 CC 侧 UI/遥测缺失。
+  3. **回注的规则块不做标签净化**（有意）：`<cc_automode_permissions>` 的内容是 CC 渲染的
+     规则文本，理论上不含协议标签；即便含，响应侧的 `sanitize_upstream_analysis()` 也会
+     把模型可能回显的标签剥掉，故不额外改写规则内容（改写有损坏规则语义的风险）。
+
+#### 复核状态：主请求 `safeguards` 会不会到第三方网关（2026-10-11 结案）
+
+`claude.exe` 2.1.296 二进制逐窗口复核 + 本机日志实测，三条独立证据：
+
+- **源码（挂载）**：`rp` 请求体字面量里 `...DCe&&Ff!==void 0&&{safeguards:[{type:Gme,
+  classifier_context:Ff}]}`（~223090967），条件链 `DCe = Ap && Ag && !Pg &&
+  kvr(qw).includes(iR)`，而 `Ap = Y.serverClassifier===!0 && Ff!==void 0 && Uu &&
+  Kme() && !Lf(Ze,iR) && !Qse()`。第三方分支 `dM()` 默认返回
+  `"arbiterWithLocalFallback"`，`IYt()` 在 `CLAUDE_CODE_AUTO_MODE_SERVER` 未设、
+  `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` 未设时为 `true`。**结论：自定义 base URL
+  下默认照挂**（条件是"默认"，被 `DISABLE_EXPERIMENTAL_BETAS` / `AUTO_MODE_SERVER=0`
+  / 组织 hipaa / 远端 flag `tengu_iridescent_crystal` / 上下文超 ~1040000 字节任一否决）。
+- **源码（后果）**：唯一剥 `safeguards` 的函数 `xn()` 只用于缓存指纹 envelope
+  （`body:xn(ye(h))`，~219852600），不出网。400 处理器 `yy()`（~223074600）里
+  `$o = xw() = f9()==="thirdParty" && NT.includes(iR.header)`，`if(Km(Ze,iR),$o){ein()}`
+  ——**只有第三方支置 latch，而该支文案是 "auto mode decides with the local
+  classifier"**；deny 文案在 `else` 支。latch 读取处一律是 `!Qse()`，作用为"关掉
+  服务端层、改走本地"，外加 `takeServerClassifierFallbackAnnouncement()` 的一次性提示。
+- **本机实测**：provider `cline` 为 `api_format=openai_chat`，转换路径
+  `anthropic_to_openai` 从 `json!({})` 重建 body → 字段被丢；`should_send_anthropic_headers`
+  为假 → 连 beta 头都不发。646 403 行运行日志中 **0 条 HTTP 400**、0 条含 `dangerous`。
+
+**落地动作**：不改代理层；`src-tauri/src/live/floor.rs` 的
+`CLAUDE_CODE_AUTO_MODE_SERVER` 注释已同步改写（原文误写"否则整会话 deny"）。
 
 ### 4.3 content_filter 语义双向不一致
 
@@ -281,17 +389,25 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 - ⚠️ 对"仅支持 Chat Completions 且不走 fork 代理"的存量端点，迁移后直连会失败
   （可预期的一次性错误；fork 以本地 Responses→Chat 转换兜底）。
 
-### 4.7 severity 模式（2.1.219 新增协议）
+### 4.7 severity 模式（2.1.219 新增协议；2.1.296 起默认生效）
 
 - fork 支持 `</severity>` severity 响应转换（剥离多余标签保证恰好一个 `<severity>`，
   上游文本以 `1000` 表达 BLOCK）。
-- **原因**：Claude Code 2.1.219 引入 severity 分类模式——Piy 解析器按数值阈值
-  比较 `<severity>` 输出（0 ≤ 合法值 ≤ 100）。fork 要支持新版客户端，必须识别
-  severity 请求并产出 severity 响应；`1000` 表达 BLOCK（> 任意合法阈值，语义上
-  等价于最大值 100 但更醒目）；剥离额外标签是防御性保守行为（解析器取第一个匹配，
-  多余标签无害但可能触发校验）。
-- ⚠️ 该模式在本仓库的 cli.js 副本（2.1.193）中不存在，取值 `1000` 与"恰好一个"
-  假设基于 2.1.219 实测——若客户端对数值做 0-100 范围校验，需改为 `100`（语义等价）。
+- **原因**：Claude Code 2.1.219 引入 severity 分类模式——解析器按数值阈值
+  比较 `<severity>` 输出。fork 要支持新版客户端，必须识别 severity 请求并产出
+  severity 响应；`1000` 表达 BLOCK（> 任意合法阈值，语义上等价于最大值 100 但更醒目）。
+- **2.1.296 复核补充**（2026-10-11 从本机 `claude.exe` 逆向）：
+  - 解析器为 `Luo`：要求**去 `<thinking>` 后恰好一个** `<severity>N</severity>`
+    （不是"取第一个"—多一个标签即 `null` → fail-closed BLOCK），且 `stop_reason`
+    ∈ {`stop_sequence`, `end_turn`}；协议转换产出的 `end_turn` 合法。
+  - `1000` 仍安全：解析只做 `Number()`，**阈值**才被 `SBe` 夹到 `[0,100]`，
+    故 `1000` 恒 `>` 任意阈值（BLOCK）、`0` 恒 `≤` 任意阈值（ALLOW）。
+    **客户端不对 severity 数值本身做范围校验**，故无需改成 `100`（4.18 的开关仍保留
+    作为逃生阀）。
+  - `severityByModel` 在默认配置中已内建 claude-sonnet-5 / opus-4-8（含 `[1m]`），
+    命中的模型**默认走 severity**——旧文档"需显式配置才启用"已过时，severity 路径
+    现在承担实际流量。
+- ⚠️ 该模式在本仓库的 cli.js 副本（2.1.193）中不存在，以上为 2.1.219/2.1.296 实测。
 
 ### 4.8 工具历史恢复的会话键
 
@@ -481,7 +597,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 
 **（b）`classifierSeverityBlockValue`**：4.7 的 severity 拦截值（默认 `1000`）可由 provider 覆盖为 `100`。
 
-- **原因**：`1000` 基于 2.1.219 实测推断（仓库内 cli.js 副本为 2.1.193，无 severity 模式），无法确证客户端是否对数值做 0-100 范围校验；给出开关让用户实测冲突时就地调整，无需等 fork 发版。ALLOW 恒为 `0`，不受该项影响。
+- **原因**：`1000` 基于 2.1.219 实测推断（仓库内 cli.js 副本为 2.1.193，无 severity 模式）。2026-10-11 的 2.1.296 复核**已确证客户端不对 severity 数值本身做范围校验**（解析只做 `Number()`，被夹到 `[0,100]` 的是阈值 `SBe`），故 `1000` 恒为 BLOCK、无需改值；该开关保留为逃生阀：若某网关/客户端组合出现冲突可就地调成 `100`，无需等 fork 发版。ALLOW 恒为 `0`，不受该项影响。
 - **实现**：`classifier::ClassifierOptions` + `transform_classifier_response_with(..)`；`transform_classifier_response` 保留为默认值入口。
 - **对应测试**：`test_severity_block_value_defaults_to_1000`、`test_severity_block_value_honors_override`、`test_severity_allow_stays_zero_under_override`、`test_classifier_options_from_provider_meta`。
 - ⚠️ 分类器的 **fail-open 兼容策略（4.2）本次未改动**，仍是“上游异常 → 放行”。

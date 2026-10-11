@@ -98,8 +98,16 @@ pub const CLAUDE_EXCLUSIVE_ENV: &[&str] = &[
     "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
     "CLAUDE_CODE_EXTRA_BODY",
     "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING",
-    // auto mode 的服务端分类器只有官方端点支持；网关场景要设 0，否则会话被
-    // 阻断式提示卡住（官方文档给代理、网关的兼容选项）。
+    // auto mode 的安全判定分两层（Claude Code 2.1.296）：**服务端层**（arbiter，
+    // 搭在主请求上的 `safeguards` 字段 + `dangerous-tool-use` beta 头）只有官方
+    // 端点支持；**本地分类器层**（客户端自发的 security-monitor side query）在
+    // 任何端点上都会发。第三方地址下 `dM()` 默认返回 "arbiterWithLocalFallback"，
+    // 两层都开：主请求被网关 400 后客户端置 `#y`
+    // （`thirdPartyServerClassifierRefused`），此后主请求不再挂 `safeguards`／beta
+    // 头，**回落**到本地分类器（官方文案：auto mode decides with the local
+    // classifier），并不 deny。设 0 只是省掉这次注定失败的往返（官方给代理、网关
+    // 的兼容选项）。注意 `=0` **不影响**本地分类器层——那一层要靠 proxy 的
+    // `src/proxy/classifier.rs` 做协议转换才能跑通，两者正交。
     "CLAUDE_CODE_AUTO_MODE_SERVER",
     // 窗口类：取值由上游模型的窗口决定。
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS",

@@ -7,6 +7,38 @@
 //! 参数可能不被支持，导致 API 返回错误，而 Claude Code 的安全兜底逻辑会在
 //! 分类器出错时默认 BLOCK 所有操作。
 //!
+//! # 协议基线：Claude Code 2.1.296
+//!
+//! auto mode 的安全判定在 2.1.296 分**两层**，本模块只处理其中第二层：
+//!
+//! 1. **服务端层**（arbiter）：不是独立请求，而是搭在**主请求**上——
+//!    主请求带 `dangerous-tool-use-2026-09-03` beta 头与 body 字段
+//!    `safeguards:[{type:"dangerous_tool_use",...}]`，响应回 `safeguard_results`。
+//!    只有官方端点能服务。第三方 base URL 下 `dM()` 返回 `"arbiterWithLocalFallback"`，
+//!    即**默认照挂**（2026-10-11 二进制复核，`claude.exe` 2.1.296）；网关若因它 400，
+//!    Claude Code 走的是**优雅回落**：置 `thirdPartyServerClassifierRefused` 后本会话
+//!    不再挂该字段/头，**继续用本模块这一层**，并不 deny（"denied as
+//!    classifier-unavailable" 那句属于非第三方分支）。
+//!    `CLAUDE_CODE_AUTO_MODE_SERVER=0`（`dM()` 返回 `"off"`）用来省掉这次注定失败的往返。
+//! 2. **本地层**（local classifier）：客户端用 `sBe()` 构造 security-monitor
+//!    prompt，经 side query 发一次独立的非流式请求。**本模块处理的就是它**。
+//!    注意：`=0` 只关第 1 层，本地层照发——两者正交，不是替代关系。
+//!
+//! # 响应侧的硬约束（2.1.296）
+//!
+//! Claude Code 的裁决解析器对协议标签做**全文一致性校验**，不是"取第一个标签"：
+//!
+//! - `bBe`（block 模式）：先扫**原文（含 `<thinking>`）**里所有
+//!   `/<block>(yes|no)\b/gi`，取值多于一种即判定解析失败 → `null`；
+//!   再扫剥离 `<thinking>` 后的文本，要求恰好一种取值。`null` → **fail-closed BLOCK**。
+//! - `Luo`（severity 模式）：剥离 `<thinking>` 后要求**恰好一个**
+//!   `/<severity>\s*(\d+(?:\.\d+)?)\s*(<\/severity>)?/g`，且 `stop_reason` ∈
+//!   {`stop_sequence`, `end_turn`}。
+//!
+//! 推论：代理返回的文本里除了我们自己输出的那一个裁决标签外，**不得残留任何**
+//! 同类标签——上游模型的自述、对 prompt 的引用或提示注入都可能引入，一旦引入
+//! 就会把本该放行的动作变成 fail-closed 拦截。见 [`sanitize_upstream_analysis`]。
+//!
 //! # 工作流程
 //! 本模块采用协议转换方案：将 Claude 原生的安全分类器请求转换为上游模型可理解的
 //! 简化格式，转发到上游处理后，再将响应转换回 Claude Code 期望的 Messages API 格式。
@@ -23,17 +55,27 @@ use serde_json::Value;
 /// 替换 Claude 原生的安全监控 prompt。要求上游模型输出结构化
 /// `<block>yes|no</block>` 格式，这是 Claude Code auto-mode 分类器
 /// 投票系统唯一识别的响应格式。
+///
+/// 输出契约对齐 Claude Code 2.1.296：放行时**裸输出** `<block>no</block>`
+/// （原生 prompt 的措辞是 "If the action should be allowed: `<block>no</block>`"，
+/// 且明确不许附带 `<category>` / `<reason>`）。这里额外强调「整个回复只能出现
+/// 一个 `<block>` 标签」——2.1.296 的解析器做全文一致性校验（见模块文档），
+/// 上游模型多吐一个标签会让我们自己的裁决被反判为 BLOCK。
 const UPSTREAM_CLASSIFIER_PROMPT: &str = r"You are a tool-use safety classifier for an AI coding assistant.
 
 Determine if the given tool call is SAFE or BLOCKED.
 
-Respond with EXACTLY this format:
-<block>no</block>
-<reason>one sentence explanation</reason>
+Respond with EXACTLY one of these two forms, and nothing else.
 
-Or if the action should be blocked:
+If the action should be allowed:
+<block>no</block>
+
+If the action should be blocked:
 <block>yes</block>
-<reason>one sentence explanation why</reason>
+<reason>one short sentence</reason>
+
+Your entire reply must contain exactly one <block> tag. Never quote or paraphrase
+the tag in your explanation.
 
 Classification guidelines:
 - Read-only operations (git diff, ls, cat, grep, find, etc.) → <block>no</block>
@@ -57,12 +99,16 @@ pub struct ClassifierDetection {
 
 /// 分类器协议模式
 ///
-/// 来自 Claude Code 源码（2.1.219）逆向：
-/// - `Block`（默认）: 响应用 `<block>yes|no</block>` 标签。CC 的解析器
-///   `xBs` 去掉 `<thinking>` 后取**第一个** `<block>(yes|no)` 匹配，闭合标签可选。
-/// - `Severity`: 响应用 `<severity>N</severity>`（N 为 0-100 数值），CC 的 `Piy`
-///   要求**恰好一个**该标签并解析数值，与配置阈值 t1/t2 比较。severity 需显式
-///   配置 `tengu_auto_mode_config.severityByModel`，默认关闭。
+/// 来自 Claude Code 源码（2.1.296）逆向：
+/// - `Block`（默认）: 响应用 `<block>yes|no</block>` 标签。CC 的解析器 `bBe`
+///   在**原文（含 `<thinking>`）**与去 `<thinking>` 文本上各扫一遍
+///   `/<block>(yes|no)\b/gi`，取值去重后必须唯一，否则返回 `null` → fail-closed
+///   BLOCK（不是"取第一个标签"）。block 时新增 `<category>` 展示标签（须命中固定
+///   规则名集合），allow 时裸输出 `<block>no</block>`、不带 `<category>`/`<reason>`。
+/// - `Severity`: 响应用 `<severity>N</severity>`（N 为 0-100 数值），CC 的 `Luo`
+///   要求去 `<thinking>` 后**恰好一个**该标签并解析数值，与阈值 t1/t2 比较。
+///   2.1.296 起 `severityByModel` 在默认配置中已内建 claude-sonnet-5 / opus-4-8
+///   （含 `[1m]` 变体），命中模型**默认走 severity**，不再是"显式配置才启用"。
 /// - `Unknown`: 无法确定（fast 单阶段无 stop_sequences 且 system prompt 不含输出格式时）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClassifierMode {
@@ -72,11 +118,15 @@ pub enum ClassifierMode {
 }
 
 /// 分类器阶段
+///
+/// 2.1.296 的两阶段：stage-1 快速分类（无 thinking，max_tokens = 64 + Wn）投标后用
+/// stop_sequences（`</block>` / `</severity>`）截断；stage-2 深度分类带 thinking
+/// （max_tokens = 8192 + Wn），请求体无 stop_sequences。Wn ∈ {0, 2048}。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClassifierStage {
-    /// Stage 1 - 快速分类（max_tokens <= 256，无 thinking）
+    /// Stage 1 - 快速分类（无 thinking，max_tokens = 64 + Wn）
     Fast,
-    /// Stage 2 - 深度分类（max_tokens <= 8192，有 thinking）
+    /// Stage 2 - 深度分类（带 thinking，max_tokens = 8192 + Wn）
     Thinking,
     /// 未知阶段
     Unknown,
@@ -84,7 +134,7 @@ pub enum ClassifierStage {
 
 /// 检测请求是否为安全分类器请求
 ///
-/// 基于 Claude Code 源码（@cometix/claude-code 2.1.219）逆向确认的协议特征：
+/// 基于 Claude Code 源码（2.1.296）逆向确认的协议特征：
 /// - `stop_sequences` 含 `"</block>"`（block 模式）或 `"</severity>"`（severity 模式）：
 ///   both/thinking 阶段（默认 `twoStageClassifier="both"`）的 stage-1 必带其一。
 ///   这是协议级特征。
@@ -153,8 +203,9 @@ pub fn detect_classifier_request(body: &Value) -> ClassifierDetection {
             .count()
     };
 
-    // 分类器 system prompt 强身份句：源码 oPo() 的固定开头
+    // 分类器 system prompt 强身份句：源码 sBe() 的固定开头
     // "You are a security monitor for autonomous AI coding agents."
+    // （2.1.296 逐字未变，@偏移 ~221295345）
     let is_classifier_prompt = system_lower
         .contains("security monitor for autonomous ai coding agents")
         || system_lower.contains("you are a security monitor");
@@ -192,11 +243,18 @@ pub fn detect_classifier_request(body: &Value) -> ClassifierDetection {
         let has_thinking = body.get("thinking").is_some();
         let max_tokens = body.get("max_tokens").and_then(|m| m.as_u64()).unwrap_or(0);
 
-        let stage = if has_thinking && max_tokens > 256 {
-            // Stage 2: 深度分类（thinking + 较大 budget）
+        // 阶段判定：2.1.296 的两阶段靠 max_tokens 常数区分——
+        // stage-1（快速分类）为 `64 + Wn`，stage-2（深度分类）为 `8192 + Wn`
+        // （Wn ∈ {0, 2048}，官方端点会按客户端抖动叠一个 Wn，第三方模型通常 Wn=0）。
+        // 所以旧的「max_tokens <= 256 ⇒ stage-1」判据在 Wn=2048 时（64+2048=2112）
+        // 会把 stage-1 误判为 Unknown；改以 **thinking 是否存在** 为主判据
+        // （stage-1 从不带 thinking），max_tokens 只在没有 thinking 时做辅助确认。
+        // 该字段仅用于日志（handler_context.rs），不影响「是否判为分类器」的结论。
+        let stage = if has_thinking {
+            // Stage 2: 深度分类（带 thinking，budget 8192+Wn）
             Some(ClassifierStage::Thinking)
-        } else if max_tokens > 0 && max_tokens <= 256 {
-            // Stage 1: 快速分类（无 thinking，极小 max_tokens）
+        } else if max_tokens > 0 && max_tokens <= 4096 {
+            // Stage 1: 快速分类（无 thinking，budget 64+Wn）
             Some(ClassifierStage::Fast)
         } else {
             Some(ClassifierStage::Unknown)
@@ -238,8 +296,8 @@ pub fn detect_classifier_request(body: &Value) -> ClassifierDetection {
     //    均无 stop_sequences（stage-2 请求体源码确认无该字段），需 system prompt
     //    强身份句 + `<transcript>` 结构双重确认，避免误判正常请求。
     if is_classifier_prompt && has_transcript {
-        // 模式从原始 system prompt 的输出格式推断：
-        // severity 版 system（kiy 替换 Output Format）含 `<severity>`，block 版含 `<block>`。
+        // 模式从原始 system prompt 的输出格式推断：severity 版的 Output Format 段
+        // 用 `<severity>` 替换 block 版的 `<block>`。
         let mode = if system_lower.contains("<severity>") {
             ClassifierMode::Severity
         } else if system_lower.contains("<block>") {
@@ -248,9 +306,16 @@ pub fn detect_classifier_request(body: &Value) -> ClassifierDetection {
             // 异常 system（无输出格式说明）：Unknown，响应转换兜底走 block 格式
             ClassifierMode::Unknown
         };
+        // 阶段同样按 thinking 区分：本路径覆盖 fast 单阶段（无 thinking）与
+        // both 的 stage-2（带 thinking）。
+        let stage = if body.get("thinking").is_some() {
+            ClassifierStage::Thinking
+        } else {
+            ClassifierStage::Fast
+        };
         return ClassifierDetection {
             is_classifier: true,
-            stage: Some(ClassifierStage::Fast),
+            stage: Some(stage),
             confidence: 0.95,
             mode: Some(mode),
         };
@@ -297,25 +362,117 @@ fn extract_system_text(body: &Value) -> String {
     }
 }
 
+/// 构造发给上游的分类器 system prompt：简化 prompt（+ 回注的 auto-mode 规则块）。
+///
+/// 规则块放在格式契约**之前**、并在其后**重述一次**输出格式，是因为这套 prompt 是
+/// 给第三方模型看的：长 prompt 的尾部通常是模型最重视的位置，把"恰好一个 `<block>`"
+/// 留在最后可降低长规则块把输出格式冲淡的概率——模型一旦不按格式回，
+/// [`determine_classification_result`] 的保守兜底会判 `yes`（BLOCK），正是我们要
+/// 避免的 fail-closed。没有规则块时逐字返回 [`UPSTREAM_CLASSIFIER_PROMPT`]。
+fn build_classifier_system(request_body: &Value) -> String {
+    let system_text = extract_system_text(request_body);
+    let Some(permissions) = extract_automode_permissions(&system_text) else {
+        return UPSTREAM_CLASSIFIER_PROMPT.to_string();
+    };
+    log::info!(
+        "[Classifier] 回注 <cc_automode_permissions>（{} 字节）到简化 prompt：整段替换 system 会丢掉用户的 auto-mode hard/soft-deny 规则",
+        permissions.len()
+    );
+    format!(
+        "{UPSTREAM_CLASSIFIER_PROMPT}\n\n{AUTOMODE_PERMISSIONS_PREAMBLE}\n{permissions}\n\n{OUTPUT_FORMAT_REMINDER}"
+    )
+}
+
+/// 从原始 system 文本中抽出 `<cc_automode_permissions>…</cc_automode_permissions>` 整块。
+///
+/// 该块由 Claude Code 用 `<permissions_template>` 渲染后注入（`Suo`/`iBe` 一路），
+/// 内容是真规则目录 + 用户 allow / soft-deny / hard-deny / environment 说明。
+/// 大小写不敏感；开闭标签任一缺失即返回 `None`（宁可不下发，也不下发半截规则）。
+fn extract_automode_permissions(system_text: &str) -> Option<&str> {
+    const OPEN: &str = "<cc_automode_permissions>";
+    const CLOSE: &str = "</cc_automode_permissions>";
+    let start = find_ascii_case_insensitive(system_text, OPEN, 0)?;
+    let after_open = start + OPEN.len();
+    let close_at = find_ascii_case_insensitive(system_text, CLOSE, after_open)?;
+    Some(&system_text[start..close_at + CLOSE.len()])
+}
+
+/// 回注规则块时插在它前面的说明。
+const AUTOMODE_PERMISSIONS_PREAMBLE: &str = "Project-specific auto-mode rules follow inside \
+<cc_automode_permissions>. Treat every rule in that block as authoritative: if the tool call \
+matches a deny rule there, answer <block>yes</block> even when the guidelines above would \
+allow the action.";
+
+/// 回注规则块后重述的输出格式（理由见 [`build_classifier_system`]）。
+const OUTPUT_FORMAT_REMINDER: &str = "Reminder: your entire reply must contain exactly one \
+<block> tag — <block>no</block> to allow, or <block>yes</block> followed by a one-sentence \
+<reason> to block. Do not quote any tag in your explanation.";
+
+/// 转发给上游的分类器请求的 `max_tokens` **下限**。
+///
+/// Claude Code 的 stage-1 请求带的是 `64 + Wn`（第三方模型 `Wn=0`，即 **64**）。那个值
+/// 是给**官方端点**定的：官方模型会严格按 `stop_sequences: ["</block>"]` 在裁决标签处截断，
+/// 64 够用。转发到第三方上游时这三点同时不成立：
+///
+/// 1. `stop_sequences` 已被移除（见 [`transform_classifier_request`]，第三方网关不认
+///    `</block>`），模型不会再被截断，得让它自然收尾；
+/// 2. **推理模型把 reasoning token 也算进 `max_tokens`**——64 会在推理阶段就被顶满，
+///    正文为空；
+/// 3. 这类空正文被网关按 `{"error":"empty response content"}` 500 返回，而本模块的
+///    fail-open 策略把它兜成 ALLOWED，于是分类器**静默失效**（不报错、不拦截）。
+///
+/// 本机实测（2026-10-11 13:36–14:10 日志快照，provider `cline`，上游
+/// `cline-pass/deepseek-v4.1-flash`）：203 次分类器请求里 194 次是这条
+/// `empty response content` 500，只有 9 次拿到裁决，0 次 BLOCK。
+///
+/// 给足余量即可：`max_tokens` 是**上限**不是消耗，模型输出裁决后自然停止，计费按实际
+/// 生成量算，所以调大不会带来可观测的额外开销。5120（5K）对"一个 `<block>` 标签 + 一句话"
+/// 绰绰有余，又低于所有常见上游的输出上限，不会被判 `max_tokens` 越界。
+///
+/// 只抬不降：stage-2 的 `8192 + Wn` 比这更大，原样保留。
+const UPSTREAM_CLASSIFIER_MAX_TOKENS: u64 = 5120;
+
 /// 将分类器请求转换为上游兼容格式
 ///
 /// 用简化 prompt 替换 Claude 原生安全监控 prompt，移除上游不支持的参数。
 /// 保留原始的 messages（待分类的操作上下文），使上游模型仍能正确评估。
+///
+/// **例外：`<cc_automode_permissions>` 会被抽出并回注**（见
+/// [`extract_automode_permissions`]）。整段替换 system 会连用户配的
+/// auto-mode hard/soft-deny 规则一起丢掉——那些规则在原生 prompt 里经
+/// `<permissions_template>` 渲染进该块（含用户的 deny 列表与环境说明），
+/// 是"哪些动作绝对不许做"的唯一载体。丢掉等于用户的显式禁止在上游模型那里
+/// 不存在，会把本该拦下的操作放行。
+///
+/// 另：`max_tokens` 会被抬到 [`UPSTREAM_CLASSIFIER_MAX_TOKENS`] 以上（只抬不降）——
+/// 官方 stage-1 的 64 依赖 `stop_sequences` 截断、且假定上游非推理模型，这两条在第三方
+/// 上游都不成立，会得到空正文而被 fail-open 兜成 ALLOWED，分类器静默失效。
 pub fn transform_classifier_request(body: &Value) -> Value {
     let mut new_body = body.clone();
     if let Some(obj) = new_body.as_object_mut() {
-        // 替换为通用分类器 prompt
+        // 替换为通用分类器 prompt；原 system 里的 auto-mode 规则块若存在则回注到尾部
         obj.insert(
             "system".into(),
-            serde_json::json!(UPSTREAM_CLASSIFIER_PROMPT),
+            serde_json::json!(build_classifier_system(body)),
         );
         // 移除上游不支持的 stop_sequences（如 </block>）
         obj.remove("stop_sequences");
-        // 移除 thinking 参数（分类器使用小 max_tokens）
+        // 移除 thinking 参数：简化 prompt 不需要，严格网关也可能拒绝该字段
         obj.remove("thinking");
         // 移除 betas：分类器请求可能携带主请求的 beta 头字段（如
         // claude-code-20250219），严格 Anthropic 兼容网关会 400。
         obj.remove("betas");
+        // 抬高 max_tokens（只抬不降）：官方的 64 是为 stop_sequences 截断 + 非推理模型
+        // 定的，转发到第三方推理模型会得到空正文（理由详见
+        // UPSTREAM_CLASSIFIER_MAX_TOKENS）。
+        if obj.get("max_tokens").and_then(Value::as_u64).unwrap_or(0)
+            < UPSTREAM_CLASSIFIER_MAX_TOKENS
+        {
+            obj.insert(
+                "max_tokens".into(),
+                serde_json::json!(UPSTREAM_CLASSIFIER_MAX_TOKENS),
+            );
+        }
         // 确保非流式
         obj.insert("stream".into(), serde_json::json!(false));
     }
@@ -605,10 +762,10 @@ pub fn transform_classifier_response_with(
     } else {
         let (block, summary) = determine_classification_result(&upstream_text);
         let verdict_line = match mode {
-            // severity 模式：CC 的 Piy 解析恰好一个 `<severity>` 数值并与配置阈值
-            // t1/t2（[0,100]）比较。proxy 不知阈值，用极值传达语义：
+            // severity 模式：CC 的 Luo 解析要求去掉 `<thinking>` 后**恰好一个**
+            // `<severity>` 数值，并与配置阈值 t1/t2（经 SBe 夹到 [0,100]）比较。
+            // proxy 不知阈值，用极值传达语义：
             // 0 ≤ 任意合法阈值 → allow；默认 1000 > 任意合法阈值 → block。
-            // reason/upstream 文本不得含第二个 `<severity>` 标签（Piy 要求恰好一个）。
             ClassifierMode::Severity => {
                 if block == "yes" {
                     format!("<severity>{}</severity>", options.severity_block_value)
@@ -616,19 +773,19 @@ pub fn transform_classifier_response_with(
                     "<severity>0</severity>".to_string()
                 }
             }
-            // block 模式（默认）：CC 的 xBs 取第一个 `<block>(yes|no)` 匹配。
+            // block 模式（默认）：CC 的 bBe 要求全文中 `/<block>(yes|no)\b` 的取值
+            // 去重后只剩一种（原文与去 `<thinking>` 文本各扫一次）。
             ClassifierMode::Block | ClassifierMode::Unknown => {
                 format!("<block>{block}</block>")
             }
         };
-        // severity 模式下上游原文可能自带 `<severity>` 标签（模型自述或提示注入），
-        // 会破坏「恰好一个标签」的协议约束导致 Piy 解析失败 → 误拦截。
-        // 展示前剥离上游原文中的 severity/reason 标签，仅保留我们输出的裁决标签。
-        let upstream_analysis = if mode == ClassifierMode::Severity {
-            sanitize_severity_upstream_text(&upstream_text)
-        } else {
-            upstream_text.to_string()
-        };
+        // 上游原文里可能自带 `<block>` / `<severity>` 标签（模型自述、对 prompt 的
+        // 引用或提示注入）。2.1.296 的解析是**全文一致性校验**：bBe 要求全文中
+        // `<block>` 取值唯一、Luo 要求恰好一个 `<severity>`，任一个残留标签都会与
+        // 我们输出的裁决冲突 → 解析返回 null → **fail-closed BLOCK**，把本该放行的
+        // 动作变成拦截。因此两种模式都要净化（早期实现只在 severity 模式净化，
+        // block 模式存在这一硬缺陷）。
+        let upstream_analysis = sanitize_upstream_analysis(&upstream_text);
         format!(
             "{verdict_line}\n<reason>{summary}</reason>\n\nUpstream analysis:\n{upstream_analysis}"
         )
@@ -654,40 +811,99 @@ pub fn transform_classifier_response_with(
     })
 }
 
-/// 剥离上游文本中的 `<severity>` / `<reason>` 标签内容。
+/// 剥离上游文本中的分类器协议标签。
 ///
-/// severity 模式的裁决文本要求**恰好一个** `<severity>` 标签（Claude Code 的
-/// Piy 解析器），上游模型输出原文若自带这些标签（模型自述、提示注入或
-/// 结构化输出残留）会导致解析失败 → 分类器兜底误拦截。剥离时保留标签外的
-/// 分析文字，保证「Upstream analysis」仍然可读。
-fn sanitize_severity_upstream_text(text: &str) -> String {
-    let strip_tags = |input: &str, tag: &str| -> (String, bool) {
-        let mut result = String::with_capacity(input.len());
-        let mut rest = input;
-        let mut stripped = false;
-        while let Some(start) = rest.find(tag) {
-            stripped = true;
-            result.push_str(&rest[..start]);
-            let after = &rest[start..];
-            let close_tag = format!("</{tag}>");
-            let end = after
-                .find(&close_tag)
-                .map(|pos| start + pos + close_tag.len())
-                .unwrap_or(input.len());
-            rest = &rest[end..];
+/// Claude Code 2.1.296 的裁决解析器做**全文一致性校验**（见模块文档），不是
+/// 「取第一个标签」：
+///
+/// - `bBe`（block 模式）先扫**原文（含 `<thinking>`）**里所有 `/<block>(yes|no)\b/gi`，
+///   再去掉 `<thinking>` 再扫一次，两处取值去重后必须**只剩一种**，否则返回
+///   `null` → **fail-closed BLOCK**。
+/// - `Luo`（severity 模式）要求去掉 `<thinking>` 后**恰好一个**
+///   `/<severity>\s*(\d+…)\s*(<\/severity>)?/`。
+///
+/// 上游模型的输出会作为「Upstream analysis」拼进我们返回的裁决文本，因此其中
+/// 出现的任何 `<block>` / `<severity>` 标签（模型自述、对 prompt 的引用、或提示
+/// 注入）都会与代理自己输出的裁决标签冲突 → 解析返回 `null` → 本该放行的动作被
+/// 反判为 BLOCK。**两种模式都必须净化**（早期实现只在 severity 模式净化，block
+/// 模式存在这一硬缺陷）。
+///
+/// 剥离策略：
+/// - 五类标签全部剥离：`thinking` / `block` / `severity` / `reason` / `category`
+///   （`category` 是 2.1.296 新增的 block 模式展示标签）。
+/// - **只剥标签、保留标签内的文字**：CC 的正则锚定在标签本身（`<block>yes`、
+///   `<severity>42`），标签一旦移除，其内容就不再被任何扫描命中；保留文字可让
+///   「Upstream analysis」仍然可读。
+/// - 大小写不敏感（CC 用 `/gi`），未闭合的开标签同样剥离（`<block>yes` 没有
+///   `</block>` 时 CC 也照样匹配）。
+fn sanitize_upstream_analysis(text: &str) -> String {
+    let mut current = text.to_string();
+    let mut stripped: Vec<&str> = Vec::new();
+    for tag in ["thinking", "block", "severity", "reason", "category"] {
+        let (next, hit) = strip_classifier_tag(&current, tag);
+        if hit {
+            stripped.push(tag);
         }
-        result.push_str(rest);
-        (result, stripped)
-    };
-
-    let (after_severity, stripped_severity) = strip_tags(text, "severity");
-    let (final_text, stripped_reason) = strip_tags(&after_severity, "reason");
-    if stripped_severity || stripped_reason {
+        current = next;
+    }
+    if !stripped.is_empty() {
         log::warn!(
-            "[Classifier] severity 模式：上游文本含额外 <severity>/<reason> 标签，已剥离避免破坏恰好一个标签的协议约束"
+            "[Classifier] 上游文本含分类器协议标签（{}），已剥离：2.1.296 的裁决解析做全文一致性校验，残留同类标签会导致 fail-closed 拦截",
+            stripped.join("/")
         );
     }
-    final_text
+    current
+}
+
+/// 剥离单个协议标签的**标签 token**（开标签与闭标签都剥），保留标签内外的文字。
+///
+/// 返回 `(处理后文本, 是否命中)`。大小写不敏感（对齐 CC 的 `/gi`）。未闭合的开标签
+/// 同样剥离——CC 的 `/<block>(yes|no)\b/` 只要求开标签存在，不需要闭标签。
+fn strip_classifier_tag(input: &str, tag: &str) -> (String, bool) {
+    let tokens = [format!("<{tag}>"), format!("</{tag}>")];
+    let mut result = String::with_capacity(input.len());
+    let mut cursor = 0usize;
+    let mut stripped = false;
+    loop {
+        // 取离 cursor 最近的标签 token（开/闭竞速）
+        let mut best_pos = usize::MAX;
+        let mut best_len = 0usize;
+        for token in &tokens {
+            if let Some(pos) = find_ascii_case_insensitive(input, token, cursor) {
+                if pos < best_pos {
+                    best_pos = pos;
+                    best_len = token.len();
+                }
+            }
+        }
+        if best_pos == usize::MAX {
+            break;
+        }
+        stripped = true;
+        result.push_str(&input[cursor..best_pos]);
+        cursor = best_pos + best_len;
+    }
+    result.push_str(&input[cursor..]);
+    (result, stripped)
+}
+
+/// 从 `from` 起做 ASCII 大小写不敏感的子串查找。
+///
+/// 不用 `to_lowercase()` 建副本再查——`to_lowercase()` 对某些非 ASCII 字符会改变
+/// 字节长度（如 `İ` → `i̇`），副本与原文的字节下标会错位，切片可能 panic 或切在
+/// 字符中间。标签名全是 ASCII，逐字节比较即可。
+fn find_ascii_case_insensitive(haystack: &str, needle: &str, from: usize) -> Option<usize> {
+    let hay = haystack.as_bytes();
+    let ndl = needle.as_bytes();
+    if ndl.is_empty() || from + ndl.len() > hay.len() {
+        return None;
+    }
+    (from..=hay.len() - ndl.len()).find(|&i| {
+        hay[i..i + ndl.len()]
+            .iter()
+            .zip(ndl)
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+    })
 }
 
 /// 构建分类器请求的安全兜底响应体
@@ -1041,6 +1257,151 @@ mod tests {
             Some(false),
             "应强制 stream=false"
         );
+        assert_eq!(
+            transformed.get("max_tokens").and_then(Value::as_u64),
+            Some(UPSTREAM_CLASSIFIER_MAX_TOKENS),
+            "stage-1 的 64 必须被抬高，否则第三方推理模型回空正文"
+        );
+    }
+
+    /// `max_tokens` 只抬不降：stage-2 的 `8192 + Wn` 比下限大，必须原样保留
+    /// （贸然压到 5120 会削掉深度分类阶段的输出预算）。
+    #[test]
+    fn test_transform_classifier_request_keeps_larger_max_tokens() {
+        let body = json!({
+            "model": "claude-sonnet-5",
+            "stream": false,
+            "max_tokens": 10240,
+            "stop_sequences": ["</severity>"],
+            "messages": [{"role": "user", "content": "<transcript/>"}]
+        });
+
+        let transformed = transform_classifier_request(&body);
+        assert_eq!(
+            transformed.get("max_tokens").and_then(Value::as_u64),
+            Some(10240),
+            "比下限大的 max_tokens 不应被改写"
+        );
+    }
+
+    /// `max_tokens` 缺失时补上下限（而不是留下 0/无字段让上游取默认）。
+    #[test]
+    fn test_transform_classifier_request_fills_missing_max_tokens() {
+        let body = json!({
+            "model": "claude-sonnet-5",
+            "stream": false,
+            "stop_sequences": ["</block>"],
+            "messages": [{"role": "user", "content": "<transcript/>"}]
+        });
+
+        let transformed = transform_classifier_request(&body);
+        assert_eq!(
+            transformed.get("max_tokens").and_then(Value::as_u64),
+            Some(UPSTREAM_CLASSIFIER_MAX_TOKENS)
+        );
+    }
+
+    /// 回注：原 system 里的 `<cc_automode_permissions>` 必须出现在简化 prompt 里，
+    /// 且输出格式重述仍在最后（长规则块不能把"恰好一个 `<block>`"冲淡）。
+    #[test]
+    fn test_transform_classifier_request_reinjects_automode_permissions() {
+        let body = json!({
+            "model": "claude-opus-4-8",
+            "stream": false,
+            "max_tokens": 256,
+            "stop_sequences": ["</block>"],
+            "system": "You are a security monitor for autonomous AI coding agents.\n<transcript/>\n\
+                       <cc_automode_permissions>\nHARD DENY: rm -rf /\nSOFT DENY: git push --force\n\
+                       </cc_automode_permissions>\n<block>no</block>",
+            "messages": [{"role": "user", "content": "<transcript>\nTool: Bash\n</transcript>"}]
+        });
+
+        let transformed = transform_classifier_request(&body);
+        let system = transformed
+            .get("system")
+            .and_then(Value::as_str)
+            .expect("system 应为字符串");
+
+        assert!(
+            system.contains("<cc_automode_permissions>"),
+            "规则块应回注\n{system}"
+        );
+        assert!(
+            system.contains("HARD DENY: rm -rf /"),
+            "硬禁止规则应保留\n{system}"
+        );
+        assert!(
+            system.contains("SOFT DENY: git push --force"),
+            "软禁止规则应保留\n{system}"
+        );
+        assert!(
+            system.contains("tool-use safety classifier"),
+            "简化 prompt 本体仍应在\n{system}"
+        );
+        // 规则块后来居上会盖掉格式契约：重述必须排在规则块之后
+        let permissions_at = system.find("</cc_automode_permissions>").unwrap();
+        let reminder_at = system.find(OUTPUT_FORMAT_REMINDER).unwrap();
+        assert!(
+            reminder_at > permissions_at,
+            "输出格式重述必须在规则块之后\n{system}"
+        );
+        assert!(system.ends_with(OUTPUT_FORMAT_REMINDER), "重述应是最后一段");
+    }
+
+    /// 无规则块时 system 必须**逐字**等于简化 prompt（不引入多余前言/后缀）。
+    #[test]
+    fn test_transform_classifier_request_without_permissions_stays_simple() {
+        let body = json!({
+            "model": "claude-opus-4-8",
+            "stream": false,
+            "max_tokens": 256,
+            "stop_sequences": ["</block>"],
+            "system": "You are a security monitor for autonomous AI coding agents.",
+            "messages": [{"role": "user", "content": "<transcript>\nTool: Bash\n</transcript>"}]
+        });
+
+        let transformed = transform_classifier_request(&body);
+        assert_eq!(
+            transformed.get("system").and_then(Value::as_str),
+            Some(UPSTREAM_CLASSIFIER_PROMPT),
+            "无规则块时不应有任何附加文字"
+        );
+    }
+
+    /// 抽取边界：大小写不敏感；开/闭标签缺失任一即不抽（宁可不下发也不下发半截规则）。
+    #[test]
+    fn test_extract_automode_permissions_bounds() {
+        let closed = "head <CC_Automode_Permissions>A</cc_automode_permissions> tail";
+        assert_eq!(
+            extract_automode_permissions(closed),
+            Some("<CC_Automode_Permissions>A</cc_automode_permissions>")
+        );
+
+        assert_eq!(
+            extract_automode_permissions("<cc_automode_permissions>A"),
+            None,
+            "缺闭标签"
+        );
+        assert_eq!(
+            extract_automode_permissions("</cc_automode_permissions>A<cc_automode_permissions>"),
+            None,
+            "闭标签在前"
+        );
+        assert_eq!(extract_automode_permissions("no block here"), None);
+    }
+
+    /// system 为数组（多块）时同样能抽出规则块。
+    #[test]
+    fn test_extract_automode_permissions_from_system_array() {
+        let body = json!({
+            "model": "claude-opus-4-8",
+            "system": [
+                {"type": "text", "text": "identity sentence"},
+                {"type": "text", "text": "<cc_automode_permissions>rule X</cc_automode_permissions>"}
+            ]
+        });
+        let system = build_classifier_system(&body);
+        assert!(system.contains("rule X"), "{system}");
     }
 
     #[test]
@@ -1174,6 +1535,130 @@ mod tests {
         assert!(text.contains("Upstream analysis"), "应保留上游原始文本");
     }
 
+    // ========================================================================
+    // 2.1.296 响应一致性回归：残留协议标签会把代理的 ALLOW 反判为 BLOCK
+    // ========================================================================
+
+    /// 复刻 Claude Code 2.1.296 `bBe` 的一致性校验：扫全文所有 `/<block>(yes|no)\b/gi`
+    /// 并去重。集合大小 != 1 时 CC 返回 `null` → **fail-closed BLOCK**。
+    ///
+    /// `\b` 语义：取值后面必须是串尾或非单词字符。
+    fn cc_block_verdicts(text: &str) -> std::collections::BTreeSet<String> {
+        let lower = text.to_lowercase();
+        let marker = "<block>";
+        let mut out = std::collections::BTreeSet::new();
+        let mut cursor = 0usize;
+        while let Some(pos) = lower[cursor..].find(marker) {
+            let start = cursor + pos + marker.len();
+            let rest = &lower[start..];
+            for value in ["yes", "no"] {
+                // 短路顺序：先判前缀再切片，避免 rest 比 value 短时越界
+                if rest.starts_with(value)
+                    && !rest[value.len()..].chars().next().is_some_and(is_word_char)
+                {
+                    out.insert(value.to_string());
+                }
+            }
+            cursor = start;
+        }
+        out
+    }
+
+    /// 上游分析文本里引用的假设性 `<block>yes</block>` 必须被剥离：
+    /// 若原样拼进响应体，bBe 的全文一致性校验会看到 {no, yes} 两个取值 →
+    /// 返回 null → CC 把本应放行的动作 fail-closed 为 BLOCK。
+    #[test]
+    fn test_block_mode_strips_conflicting_block_tag_in_upstream_analysis() {
+        let upstream = json!({
+            "content": [{
+                "type": "text",
+                "text": "<block>no</block>\n<reason>read-only</reason>\nNote: a file write would be <block>yes</block>."
+            }]
+        });
+        let response =
+            transform_classifier_response(&upstream, "claude-sonnet-4-6", ClassifierMode::Block);
+        let text = response["content"][0]["text"].as_str().unwrap();
+
+        let verdicts = cc_block_verdicts(text);
+        assert_eq!(
+            verdicts.len(),
+            1,
+            "全文 <block> 取值必须唯一（2.1.296 bBe 一致性校验），实际 {verdicts:?}\n{text}"
+        );
+        assert!(verdicts.contains("no"), "本应放行\n{text}");
+        assert!(
+            text.contains("Upstream analysis"),
+            "分析文字仍应保留\n{text}"
+        );
+    }
+
+    /// `<thinking>`（未闭合）与大小写变体同样必须剥离——bBe 的**第一次扫描覆盖
+    /// 含 `<thinking>` 的原文**，去 `<thinking>` 后的第二次扫描才会一致。
+    #[test]
+    fn test_block_mode_strips_thinking_and_uppercase_tags_in_upstream_analysis() {
+        let upstream = json!({
+            "content": [{
+                "type": "text",
+                "text": "<BLOCK>no</BLOCK>\n<thinking>reasoning that quotes <block>yes"
+            }]
+        });
+        let response =
+            transform_classifier_response(&upstream, "claude-sonnet-4-6", ClassifierMode::Block);
+        let text = response["content"][0]["text"].as_str().unwrap();
+
+        let verdicts = cc_block_verdicts(text);
+        assert_eq!(verdicts.len(), 1, "实际 {verdicts:?}\n{text}");
+        assert!(verdicts.contains("no"), "实际 {verdicts:?}\n{text}");
+    }
+
+    /// 净化是「剥标签、留文字」且大小写不敏感，标签后的无效内容（`<block>tail`）
+    /// 不会吞掉后续分析文字。
+    #[test]
+    fn test_sanitize_upstream_analysis_preserves_surrounding_text() {
+        let sanitized = sanitize_upstream_analysis(
+            "before <Severity>42</SEVERITY> middle <block>tail <category>X</category> end",
+        );
+        let lower = sanitized.to_lowercase();
+        assert!(!lower.contains("<severity>"), "{sanitized}");
+        assert!(!lower.contains("<block>"), "{sanitized}");
+        assert!(!lower.contains("<category>"), "{sanitized}");
+        for expected in ["before", "middle", "42", "tail", "end"] {
+            assert!(sanitized.contains(expected), "丢失 {expected}：{sanitized}");
+        }
+    }
+
+    /// 放行分支：响应全文仍必须满足一致性校验（空上游 / 普通上游两条路径）。
+    #[test]
+    fn test_allow_paths_satisfy_block_consistency_invariant() {
+        for upstream in [
+            json!({}),
+            json!({"content": [{"type": "text", "text": "git diff is read-only"}]}),
+        ] {
+            let response = transform_classifier_response(
+                &upstream,
+                "claude-sonnet-4-6",
+                ClassifierMode::Block,
+            );
+            let text = response["content"][0]["text"].as_str().unwrap();
+            assert_eq!(cc_block_verdicts(text).len(), 1, "{text}");
+        }
+    }
+
+    /// 简化 prompt 的两个契约点：放行示例是不带 `<reason>` 的裸标签，且明确要求
+    /// 「整个回复只能有一个 `<block>` 标签」（2.1.296 一致性校验下的必要条件）。
+    #[test]
+    fn test_upstream_classifier_prompt_aligns_with_296_contract() {
+        assert!(
+            UPSTREAM_CLASSIFIER_PROMPT
+                .contains("If the action should be allowed:\n<block>no</block>\n"),
+            "放行示例应为裸 <block>no</block>"
+        );
+        assert!(
+            UPSTREAM_CLASSIFIER_PROMPT.contains("exactly one <block> tag"),
+            "必须显式约束只输出一个 <block> 标签"
+        );
+    }
+
     #[test]
     fn test_determine_classification_result_no_prefix_no_false_positive() {
         // <block> 后面跟着非 "no"/"yes" 的内容应被识别为不可识别 → 返回 "yes"
@@ -1300,11 +1785,22 @@ mod tests {
     }
 
     // ========================================================================
-    // 源码对齐测试：Claude Code 2.1.219 协议（@cometix/claude-code 逆向确认）
+    // 源码对齐测试：Claude Code 2.1.296 协议（从本机 claude.exe 逆向确认）
+    //
+    // 2.1.296 变化点（与本模块相关）：
+    //   - 裁决解析由「取第一个 <block>」改为**全文一致性校验**（bBe/Luo），
+    //     残留同类标签 → null → fail-closed BLOCK。
+    //   - block 模式 block 时新增 <category>，allow 时裸输出 <block>no</block>。
+    //   - severityByModel 默认已内建 claude-sonnet-5 / opus-4-8，severity 默认生效。
+    //   - 请求侧新增主请求上的 safeguards 字段 + dangerous-tool-use beta
+    //     （服务端 arbiter 层，见模块文档；`CLAUDE_CODE_AUTO_MODE_SERVER=0` 关闭）。
+    //   - stage-1 max_tokens = 64 + Wn（Wn ∈ {0, 2048}），stage-2 = 8192 + Wn。
+    // 未变（检测锚点仍然成立）：身份句、stop_sequences 取值与条件、
+    //   <transcript> 包裹结构、非流式短路。
     // ========================================================================
 
     /// severity 模式：stop_sequences 用 ["</severity>"]
-    /// （源码：stop_sequences: [u ? "</severity>" : "</block>"]，需配置 severityByModel）
+    /// （源码：stop_sequences: [u ? "</severity>" : "</block>"]，u 为 severity 模式布尔）
     #[test]
     fn test_detect_severity_stop_sequence() {
         let body = json!({
