@@ -821,10 +821,21 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
     模型，探针仍可能空正文 500。
   - **16..127** 区间的预算原样透传，对推理型上游仍可能空正文（16 是「只可能是探测」的
     保守门槛，再往上抬就会改动合法的小预算请求）。
+  - 抬升值是编译期常量，**不查路由模型的输出上限**：若把该 route 指向输出上限 < 5120 的
+    **非推理**模型，探测请求会由原来的 200 变成上游 400（如官方 OpenAI 的 `max_tokens`
+    超限报错）。缓解需按模型上限钳制下限，当前未做；本机实测的上游上限足够，未受影响。
+  - 第 6 个 OpenAI Chat 读取点 `handlers.rs::chat_sse_to_response_value`（把被误标为非流
+    式的 SSE 正文聚合成补全体）**未**接入解包；仅当某 provider 既用成功信封、又对
+    `stream:false` 回 SSE 帧时才可达——已确认的 cline 流式帧不带信封，故当前不可达。
+  - 解包判据是「顶层**无** `choices` **且** `data.choices` 是数组」：若上游在信封顶层同时
+    放一个 `choices: null`（或其它非数组哨兵），解包不生效、退回旧行为（422 + 用量 0）。
+    该形态属假设，尚未见到实例。
   - 信封解包只认「非流式成功 + `data.choices` 为数组」这一种形状；上游若改用别的包装层，
     需在同样这 5 个读取点重新识别。
   - 非流式响应若**转换失败**，`handlers.rs` 的 `raw_usage_response` 兜底快照读的仍是
-    原始顶层 `usage`（信封下为 0）；信封解包后该组合已不再触发，未改动。
+    原始顶层 `usage`（信封下为 0）；该快照全零时会被 `has_billable_tokens` 过滤，因此
+    不会写出 0 用量行——未改动（`data.choices` 为空数组时仍会走转换失败的兜底，但同样
+    写不出 0 用量行）。
 - **测试**：`providers::tests::test_unwrap_chat_completion_envelope_success_wrapper` /
   `…_leaves_others_untouched`、`transform::tests::test_openai_to_anthropic_unwraps_success_envelope` /
   `…_still_rejects_payload_without_choices` / `…_raises_probe_max_tokens` /
