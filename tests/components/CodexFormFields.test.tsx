@@ -71,6 +71,12 @@ function renderCodexForm() {
     onMaxOutputTokensChange: vi.fn(),
     promptCacheRouting: "auto",
     onPromptCacheRoutingChange: vi.fn(),
+    // fork 的额外必填 props（上游此测试没有它们；构造默认值即可，与
+    // CodexFormFields.modelFetch.test.tsx 的构造方式一致）
+    sessionAffinityHeader: "",
+    onSessionAffinityHeaderChange: vi.fn(),
+    codexNativeResponsesTemplate: "full",
+    onCodexNativeResponsesTemplateChange: vi.fn(),
     speedTestEndpoints: [],
     customUserAgent: "",
     onCustomUserAgentChange: vi.fn(),
