@@ -938,7 +938,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 | `v4.0.1` | 2026-10-05 | 合入上游 v4.0.0 **与** v4.0.1（`4804b723`，38 提交）：v4.0 收尾（配额重置倒计时与到期列表、用量表格分页、88API/兔子 API 等预设扩编、官方图标）、代理修复（零用量 `response.incomplete` → `api_error`、Codex 状态库 WSL 路径跳过加锁）、CI 基建（rust-cache + nextest + pinned toolchain）与发布流程改造；fork 侧移除手写的 `wix.version` 覆盖。**发布一次成功**：tag `v4.0.1` 指向 fork 提交 `32e4aa39`，14 资产（Linux x86_64/arm64 各 AppImage+deb+rpm、macOS dmg+zip+tar.gz、Windows x86_64/arm64 各 MSI+Portable.zip、latest.json），正式版（Latest）；随发布一并修掉 macOS/Linux CI 的 golden 模式快照（644→600） |
 | `v4.0.7` | 2026-10-11 | 合入上游 v4.0.2–v4.0.7（`1f786dad`，123 提交）：what's-new 应用内更新摘要机制（v4.0.2 起）、GitHub Copilot 托管账号（v4.0.5）、provider 搜索 / Skills 批量更新 / 配额着色 / classic sub-agent tools / 流式收尾修复（#7986，v4.0.6）、quotaDisplay / 会话压缩 rollout / stale-client / workspace 切换修复（#8054，v4.0.7）等六个版本的完整内容；fork 侧新增 sha2 0.11 适配（4.29）。**发布一次成功**：tag `v4.0.7` 指向 fork 提交 `e091fdd6`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。发布前曾遇仓库 Actions 被禁用（用户网页端恢复，见同步注记） |
 | `v4.0.8` | 2026-10-11 | 合入上游 v4.0.8（`df40d53c`，8 提交，35 文件）：Codex 桌面版自带命令行的模型列表回退（macOS 上 ChatGPT.app 优先于改名前的 Codex.app）、官方模型列表不可用时的分类原因提示与恢复、获取模型列表带上供应商配置的请求头（#7759/#7760）、「设置 → 数据」新增「打开日志」、深色模式文字调暗；fork 侧修正分类器转发 `max_tokens` 下限（修静默失效）并为回注块加作用域限定（4.2）。**发布一次成功**：tag `v4.0.8` 指向 fork 提交 `38acc5a1`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。**同日重发**：tag 改指 fork 提交 `ae14e1a9`（并入 4.30 探针修复与 4.31 内置浏览器 / 官方插件市场），14 资产原地覆盖、仍为 Latest，版本号与安装包命名不变 |
-| `v4.0.9` | 2026-10-12 | 合入上游 v4.0.9（`99277921`，41 提交，109 文件 +7 187 / −1 456）：供应商表单整体重构（说明移入 help tips、模型选择对话框、默认模型=列表第一行、Codex 子代理模型、full URL 移入高级）、Codex 新线程/自动化 Chat 上游 400 与 xAI 422 修复、Claude OpenAI 格式上游改发 Bearer、聚合模式按成员合并兼容开关、冷启动语言校正（#8023）、本机「连接地址」（#7878）、macOS 本地网络权限、7 家新预设（SoruxGPT/IKunCode/RunToken/BotCF/YYLX/TokenFlux/OpenModel）；fork 侧 8 处适配（见同步注记）。发布结果：[发布后补记] |
+| `v4.0.9` | 2026-10-12 | 合入上游 v4.0.9（`99277921`，41 提交，109 文件 +7 187 / −1 456）：供应商表单整体重构（说明移入 help tips、模型选择对话框、默认模型=列表第一行、Codex 子代理模型、full URL 移入高级）、Codex 新线程/自动化 Chat 上游 400 与 xAI 422 修复、Claude OpenAI 格式上游改发 Bearer、聚合模式按成员合并兼容开关、冷启动语言校正（#8023）、本机「连接地址」（#7878）、macOS 本地网络权限、7 家新预设（SoruxGPT/IKunCode/RunToken/BotCF/YYLX/TokenFlux/OpenModel）；fork 侧 8 处适配（见同步注记）。**发布一次成功**：tag `v4.0.9` 指向 fork 提交 `707a6a15`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -1499,6 +1499,16 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 仍为 fork 版本，whats-new-check 在位）。验证全绿：Rust **3707**（`cargo test --lib`）、
 > vitest **2548**（208 文件）、fmt / clippy `-D warnings` / typecheck / format:check /
 > whats-new 结构测试。
+
+> **发布（2026-10-12）**：tag `v4.0.9` → fork 提交 `707a6a15`（显式 `git tag -f` 并复核
+> `git log -1 v4.0.9`，符合 6.1；远端原先无该 tag、无上游标签泄漏），Release run
+> `38265985666` 全绿——Resolve Version 10s 与 whats-new-check 30s 先行通过，五平台构建
+> 12m7s–23m28s（macos-14 最慢，有 arm64 runner 容量排队提示）、Publish 35s、
+> Assemble latest.json 6s、Sync to R2 3s（无 secrets 自动跳过），**14 个资产**、正式版
+> （Latest，创建于 `2026-10-12T15:16:25Z`）。同轮 CI run `38263676453` **一次全绿**
+> （Detect 9s、Backend windows-latest 13m7s、ubuntu-22.04 6m9s、Windows+WSL2 5m4s、
+> Frontend 5m1s、macos-latest 9m4s），CodeQL run `38263676351` success。latest.json 的
+> `platforms` 仍为空（无签名，见 6.2）。
 
 ## 6. 维护约定
 
