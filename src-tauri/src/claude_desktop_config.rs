@@ -935,17 +935,15 @@ fn normalize_mimo_anthropic_thinking_history(body: &mut Value) {
 }
 
 pub fn proxy_gateway_base_url_from_db(db: &Database) -> Result<String, AppError> {
-    // get_proxy_config is async-tagged but its body is fully synchronous (rusqlite
-    // under a Mutex), so block_on cannot deadlock the calling thread.
-    let config = futures::executor::block_on(db.get_proxy_config())?;
-    if config.listen_port == 0 {
+    let (host, port) = db.get_proxy_client_endpoint_sync();
+    if port == 0 {
         return Err(AppError::Config(
             "Claude Desktop 代理地址需要真实监听端口；请先启动本地代理或使用固定端口".to_string(),
         ));
     }
     Ok(format!(
         "{}{}",
-        crate::services::proxy::proxy_origin(&config.listen_address, config.listen_port),
+        crate::services::proxy::proxy_origin(&host, port),
         CLAUDE_DESKTOP_PROXY_PREFIX
     ))
 }
@@ -1540,6 +1538,7 @@ mod tests {
     use crate::database::Database;
     use crate::provider::{ClaudeDesktopModelRoute, ProviderMeta};
     use serde_json::json;
+    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
 
@@ -1829,6 +1828,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn claude_desktop_proxy_apply_writes_local_gateway_profile_with_safe_models() {
         let temp = TempDir::new().expect("tempdir");
         let paths = test_paths(temp.path());
@@ -1838,10 +1838,12 @@ mod tests {
         apply_provider_to_paths(&db, &provider, &paths).expect("apply proxy provider");
 
         let profile: Value = read_json_file(&paths.profile_path).expect("read profile");
-        assert_eq!(
-            profile["inferenceGatewayBaseUrl"],
-            json!("http://127.0.0.1:15721/claude-desktop")
-        );
+        // gateway URL 的 host 来自本机 settings.json 的「连接地址」（未设时 127.0.0.1）。
+        // 期望值走同一解析函数、不写死字面量，避免测试依赖运行机器的本机设置；与写该
+        // 设置的测试（#[serial]）串行，防两次读取之间被改写。
+        let expected_gateway =
+            proxy_gateway_base_url_from_db(&db).expect("gateway base url resolves");
+        assert_eq!(profile["inferenceGatewayBaseUrl"], json!(expected_gateway));
         assert_eq!(profile["inferenceGatewayAuthScheme"], json!("bearer"));
         assert_eq!(profile["coworkEgressAllowedHosts"], json!(["*"]));
         assert!(
@@ -1869,6 +1871,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn claude_desktop_proxy_accepts_managed_oauth_providers_without_static_key() {
         for (provider_type, api_format) in [
             ("github_copilot", "openai_chat"),
@@ -1884,10 +1887,10 @@ mod tests {
             apply_provider_to_paths(&db, &provider, &paths).expect("apply oauth proxy provider");
 
             let profile: Value = read_json_file(&paths.profile_path).expect("read profile");
-            assert_eq!(
-                profile["inferenceGatewayBaseUrl"],
-                json!("http://127.0.0.1:15721/claude-desktop")
-            );
+            // 同上：期望值动态解析，不依赖运行机器的「连接地址」设置。
+            let expected_gateway =
+                proxy_gateway_base_url_from_db(&db).expect("gateway base url resolves");
+            assert_eq!(profile["inferenceGatewayBaseUrl"], json!(expected_gateway));
             assert_eq!(
                 profile["inferenceModels"],
                 json!([{ "name": "claude-sonnet-4-6", "labelOverride": "GPT-5.4" }])

@@ -930,7 +930,9 @@ fn blocked_from_routing(app: &AppType, provider: &Provider) -> bool {
 
 /// Codex / Grok Build 配置里当前供应商的 `wire_api`；TOML 读不懂时退回唯一的一条赋值。
 fn codex_wire_api(config_text: &str) -> Option<String> {
-    if let Ok(doc) = config_text.parse::<toml::Value>() {
+    // toml 1.x 的 `str::parse::<Value>()` 只解析单个值，整份文档必然 Err；改用文档解析器
+    // （同 codex_config.rs），多 provider 表按 `model_provider` 命中而不是退化成行扫描。
+    if let Ok(doc) = toml::from_str::<toml::Value>(config_text) {
         if let Some(active) = doc.get("model_provider").and_then(|v| v.as_str()) {
             if let Some(wire_api) = doc
                 .get("model_providers")
@@ -1956,7 +1958,7 @@ fn collect_snapshots(
     let port = snapshots
         .iter()
         .any(|snapshot| snapshot.service_down)
-        .then(|| app_state.db.get_proxy_listen_sync().1);
+        .then(|| app_state.db.get_proxy_client_endpoint_sync().1);
     let visible: Vec<(AppType, bool)> = snapshots
         .iter()
         .map(|snapshot| (snapshot.app.clone(), snapshot.mode == TrayMode::Direct))
@@ -4311,5 +4313,42 @@ mod tests {
         assert!(clear_app_problems(&AppType::Codex));
         assert!(!clear_app_problems(&AppType::Codex));
         assert!(collect_problems(None, &rerouted).is_empty());
+    }
+
+    #[test]
+    fn codex_wire_api_reads_the_selected_provider_table() {
+        // 多 provider 表：按 `model_provider` 命中。toml 1.x 下 `str::parse::<Value>()`
+        // 解析整份文档必然 Err，会退化成「唯一一条 wire_api」规则而漏判（误报“不需要路由”）。
+        let doc = r#"model_provider = "beta"
+
+[model_providers.alpha]
+wire_api = "chat"
+
+[model_providers.beta]
+wire_api = "responses"
+"#;
+        assert_eq!(codex_wire_api(doc).as_deref(), Some("responses"));
+
+        // 顶层 wire_api。
+        assert_eq!(
+            codex_wire_api("wire_api = 'chat'\n").as_deref(),
+            Some("chat")
+        );
+
+        // model_provider 指向的表没有 wire_api：退回顶层。
+        let fallback = r#"model_provider = "gamma"
+wire_api = "chat"
+
+[model_providers.gamma]
+name = "Gamma"
+"#;
+        assert_eq!(codex_wire_api(fallback).as_deref(), Some("chat"));
+
+        // 非 TOML 文本：退回「唯一一条赋值」；多条赋值无法判定。
+        assert_eq!(
+            codex_wire_api("not toml at all\nwire_api = \"anthropic\"\n").as_deref(),
+            Some("anthropic")
+        );
+        assert_eq!(codex_wire_api("wire_api = \"a\"\nwire_api = \"b\"\n"), None);
     }
 }

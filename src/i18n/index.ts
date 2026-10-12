@@ -18,9 +18,6 @@ const localeLoaders: Record<Language, () => Promise<{ default: object }>> = {
 
 const loadedLanguages = new Set<Language>();
 
-const isLanguage = (value: string): value is Language =>
-  value === "zh" || value === "zh-TW" || value === "en" || value === "ja";
-
 async function loadLanguage(lng: Language): Promise<void> {
   if (loadedLanguages.has(lng)) return;
   const resource = await localeLoaders[lng]();
@@ -28,16 +25,14 @@ async function loadLanguage(lng: Language): Promise<void> {
   loadedLanguages.add(lng);
 }
 
+const isLanguage = (value: unknown): value is Language =>
+  value === "zh" || value === "zh-TW" || value === "en" || value === "ja";
+
 const getInitialLanguage = (): Language => {
   if (typeof window !== "undefined") {
     try {
       const stored = window.localStorage.getItem("language");
-      if (
-        stored === "zh" ||
-        stored === "zh-TW" ||
-        stored === "en" ||
-        stored === "ja"
-      ) {
+      if (isLanguage(stored)) {
         return stored;
       }
     } catch (error) {
@@ -117,5 +112,30 @@ export async function ensureLanguage(lng: string): Promise<void> {
   await loadLanguage(lng);
   await i18n.changeLanguage(lng);
 }
+
+/**
+ * 用后端 settings.json 里保存的语言校正界面语言。
+ *
+ * 首屏语言取自 localStorage（同步可读），但它只是缓存：开发版与正式版的
+ * WebView 来源不同、WebView 数据被清空时都会读不到或读到旧值，界面就落到
+ * 系统语言。启动后拿到后端设置再对一次，不一致时切换并回写缓存。
+ */
+export const syncLanguageFromSettings = (language?: string | null): void => {
+  if (!isLanguage(language)) return;
+
+  if (i18n.language !== language) {
+    // 走 ensureLanguage：语言包按需加载，直接 changeLanguage 会让未加载的目标
+    // 语言整页退回 fallback（en），校正反而把界面从系统语言变成英文。
+    void ensureLanguage(language);
+  }
+
+  try {
+    if (window.localStorage.getItem("language") !== language) {
+      window.localStorage.setItem("language", language);
+    }
+  } catch (error) {
+    console.warn("[i18n] Failed to persist language preference", error);
+  }
+};
 
 export default i18n;

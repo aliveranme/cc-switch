@@ -79,7 +79,6 @@ export function useSettingsForm(): UseSettingsFormResult {
   );
 
   const initialLanguageRef = useRef<Language>("zh");
-  const seededRef = useRef(false);
 
   const readPersistedLanguage = useCallback((): Language => {
     if (typeof window !== "undefined") {
@@ -101,11 +100,10 @@ export function useSettingsForm(): UseSettingsFormResult {
     [i18n],
   );
 
-  // 初始化设置数据（仅从服务端数据填充一次，后续由 resetSettings / updateSettings 接管）
+  // 初始化设置数据：每次服务端数据变化都重新同步（自动保存/重取后目录草稿随之丢弃，见
+  // 上游 #8023 的 useDirectorySettings）；仅依赖 data，语言变化不触发重同步。
   useEffect(() => {
     if (!data) return;
-    if (seededRef.current) return;
-    seededRef.current = true;
 
     const normalizedLanguage = normalizeLanguage(
       data.language ?? readPersistedLanguage(),
