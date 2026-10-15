@@ -12,7 +12,7 @@
 | 本地领先 | **450** 个提交（`git rev-list --count upstream/main..main`，统计于 `41ff634c`，2026-10-15；含本次同步的 11 处 fork 侧适配修复。该数随每次提交增长，此处的锚点是提交号而非「当前」） |
 | 本次 merge | 2026-10-15 合入上游 51ac86f1（95 个提交，**211 文件 +31 317 / −3 318**，12 处冲突全手工解 + 11 处 fork 侧适配，见第 5 节注记）；上一次 2026-10-12 合入 99277921（41 个提交，**109 文件**） |
 | 本地版本 | `v4.0.12`（随 merge 对齐上游 v4.0.12；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-15（`<merge>`） |
+| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-15（`3e202e23`） |
 | 测试规模 | 最近验证于 2026-10-15：Rust **3843** 单元通过（`cargo test --lib`，10 ignored；集成测试由 CI nextest 覆盖）+ 前端 vitest **2869**（220 文件）；`cargo fmt --check` / `clippy -D warnings` / `pnpm typecheck` / `format:check` / whats-new 结构测试全绿 |
 
 ## 2. 修改总览（按主题）
@@ -948,7 +948,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 | `v4.0.7` | 2026-10-11 | 合入上游 v4.0.2–v4.0.7（`1f786dad`，123 提交）：what's-new 应用内更新摘要机制（v4.0.2 起）、GitHub Copilot 托管账号（v4.0.5）、provider 搜索 / Skills 批量更新 / 配额着色 / classic sub-agent tools / 流式收尾修复（#7986，v4.0.6）、quotaDisplay / 会话压缩 rollout / stale-client / workspace 切换修复（#8054，v4.0.7）等六个版本的完整内容；fork 侧新增 sha2 0.11 适配（4.29）。**发布一次成功**：tag `v4.0.7` 指向 fork 提交 `e091fdd6`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。发布前曾遇仓库 Actions 被禁用（用户网页端恢复，见同步注记） |
 | `v4.0.8` | 2026-10-11 | 合入上游 v4.0.8（`df40d53c`，8 提交，35 文件）：Codex 桌面版自带命令行的模型列表回退（macOS 上 ChatGPT.app 优先于改名前的 Codex.app）、官方模型列表不可用时的分类原因提示与恢复、获取模型列表带上供应商配置的请求头（#7759/#7760）、「设置 → 数据」新增「打开日志」、深色模式文字调暗；fork 侧修正分类器转发 `max_tokens` 下限（修静默失效）并为回注块加作用域限定（4.2）。**发布一次成功**：tag `v4.0.8` 指向 fork 提交 `38acc5a1`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。**同日重发**：tag 改指 fork 提交 `ae14e1a9`（并入 4.30 探针修复与 4.31 内置浏览器 / 官方插件市场），14 资产原地覆盖、仍为 Latest，版本号与安装包命名不变 |
 | `v4.0.9` | 2026-10-12 | 合入上游 v4.0.9（`99277921`，41 提交，109 文件 +7 187 / −1 456）：供应商表单整体重构（说明移入 help tips、模型选择对话框、默认模型=列表第一行、Codex 子代理模型、full URL 移入高级）、Codex 新线程/自动化 Chat 上游 400 与 xAI 422 修复、Claude OpenAI 格式上游改发 Bearer、聚合模式按成员合并兼容开关、冷启动语言校正（#8023）、本机「连接地址」（#7878）、macOS 本地网络权限、7 家新预设（SoruxGPT/IKunCode/RunToken/BotCF/YYLX/TokenFlux/OpenModel）；fork 侧 8 处适配（见同步注记）。**发布一次成功**：tag `v4.0.9` 指向 fork 提交 `707a6a15`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
-| `v4.0.12` | 2026-10-15 | 合入上游 v4.0.12（`51ac86f1`，95 提交，211 文件 +31 317 / −3 318）：Apps 页可安装/更新/**卸载**编码客户端（多安装诊断 + 手动指令 + Node 版本预检）、自定义供应商图标「My Icons」库与深链 `iconUrl`、新增 **Local 预设组**（Ollama / LM Studio / llama.cpp / vLLM，本机地址绕开代理）、14 家云平台预设、会话日志扫描改为后台 10 分钟 / 用量页按所选间隔、土耳其语界面与不支持语言回落英文、深链 `apiFormat` 与 Pi 供应商导入、Grok Build 当前布局卸载；fork 侧 11 处适配（见同步注记）。**发布**：tag `v4.0.12` 指向 fork 提交 `<doc>`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
+| `v4.0.12` | 2026-10-15 | 合入上游 v4.0.12（`51ac86f1`，95 提交，211 文件 +31 317 / −3 318）：Apps 页可安装/更新/**卸载**编码客户端（多安装诊断 + 手动指令 + Node 版本预检）、自定义供应商图标「My Icons」库与深链 `iconUrl`、新增 **Local 预设组**（Ollama / LM Studio / llama.cpp / vLLM，本机地址绕开代理）、14 家云平台预设、会话日志扫描改为后台 10 分钟 / 用量页按所选间隔、土耳其语界面与不支持语言回落英文、深链 `apiFormat` 与 Pi 供应商导入、Grok Build 当前布局卸载；fork 侧 11 处适配（见同步注记）。**发布**：见本节的发布注记 |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
