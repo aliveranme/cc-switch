@@ -948,7 +948,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 | `v4.0.7` | 2026-10-11 | 合入上游 v4.0.2–v4.0.7（`1f786dad`，123 提交）：what's-new 应用内更新摘要机制（v4.0.2 起）、GitHub Copilot 托管账号（v4.0.5）、provider 搜索 / Skills 批量更新 / 配额着色 / classic sub-agent tools / 流式收尾修复（#7986，v4.0.6）、quotaDisplay / 会话压缩 rollout / stale-client / workspace 切换修复（#8054，v4.0.7）等六个版本的完整内容；fork 侧新增 sha2 0.11 适配（4.29）。**发布一次成功**：tag `v4.0.7` 指向 fork 提交 `e091fdd6`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。发布前曾遇仓库 Actions 被禁用（用户网页端恢复，见同步注记） |
 | `v4.0.8` | 2026-10-11 | 合入上游 v4.0.8（`df40d53c`，8 提交，35 文件）：Codex 桌面版自带命令行的模型列表回退（macOS 上 ChatGPT.app 优先于改名前的 Codex.app）、官方模型列表不可用时的分类原因提示与恢复、获取模型列表带上供应商配置的请求头（#7759/#7760）、「设置 → 数据」新增「打开日志」、深色模式文字调暗；fork 侧修正分类器转发 `max_tokens` 下限（修静默失效）并为回注块加作用域限定（4.2）。**发布一次成功**：tag `v4.0.8` 指向 fork 提交 `38acc5a1`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。**同日重发**：tag 改指 fork 提交 `ae14e1a9`（并入 4.30 探针修复与 4.31 内置浏览器 / 官方插件市场），14 资产原地覆盖、仍为 Latest，版本号与安装包命名不变 |
 | `v4.0.9` | 2026-10-12 | 合入上游 v4.0.9（`99277921`，41 提交，109 文件 +7 187 / −1 456）：供应商表单整体重构（说明移入 help tips、模型选择对话框、默认模型=列表第一行、Codex 子代理模型、full URL 移入高级）、Codex 新线程/自动化 Chat 上游 400 与 xAI 422 修复、Claude OpenAI 格式上游改发 Bearer、聚合模式按成员合并兼容开关、冷启动语言校正（#8023）、本机「连接地址」（#7878）、macOS 本地网络权限、7 家新预设（SoruxGPT/IKunCode/RunToken/BotCF/YYLX/TokenFlux/OpenModel）；fork 侧 8 处适配（见同步注记）。**发布一次成功**：tag `v4.0.9` 指向 fork 提交 `707a6a15`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
-| `v4.0.12` | 2026-10-15 | 合入上游 v4.0.12（`51ac86f1`，95 提交，211 文件 +31 317 / −3 318）：Apps 页可安装/更新/**卸载**编码客户端（多安装诊断 + 手动指令 + Node 版本预检）、自定义供应商图标「My Icons」库与深链 `iconUrl`、新增 **Local 预设组**（Ollama / LM Studio / llama.cpp / vLLM，本机地址绕开代理）、14 家云平台预设、会话日志扫描改为后台 10 分钟 / 用量页按所选间隔、土耳其语界面与不支持语言回落英文、深链 `apiFormat` 与 Pi 供应商导入、Grok Build 当前布局卸载；fork 侧 11 处适配（见同步注记）。**发布**：见本节的发布注记 |
+| `v4.0.12` | 2026-10-15 | 合入上游 v4.0.12（`51ac86f1`，95 提交，211 文件 +31 317 / −3 318）：Apps 页可安装/更新/**卸载**编码客户端（多安装诊断 + 手动指令 + Node 版本预检）、自定义供应商图标「My Icons」库与深链 `iconUrl`、新增 **Local 预设组**（Ollama / LM Studio / llama.cpp / vLLM，本机地址绕开代理）、14 家云平台预设、会话日志扫描改为后台 10 分钟 / 用量页按所选间隔、土耳其语界面与不支持语言回落英文、深链 `apiFormat` 与 Pi 供应商导入、Grok Build 当前布局卸载；fork 侧 11 处适配（见同步注记）。**发布一次成功**：tag `v4.0.12` 指向 fork 提交 `9c5bedf5`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -1577,6 +1577,15 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > `pnpm typecheck` / `format:check`。本机 `cargo test --lib` 曾出现 1 个自绑定端口的偶发
 > 失败（`proxy::server::tests::*`，单独重跑必过，见 6.3 相关记录），复跑为 0 失败。
 
+> **发布（2026-10-15）**：tag `v4.0.12` → fork 提交 `9c5bedf5`（显式 `git tag -f` 并复核
+> `git log -1 v4.0.12`，符合 6.1；本地与远端此前均无该 tag，无上游标签泄漏），Release run
+> `38695742575` 全绿——whats-new-check 24s 与 Resolve Version 6s 先行通过，五平台构建
+> 11m8s–27m18s（macos-14 最慢，带 arm64 runner 容量排队提示）、Publish 31s、
+> Assemble latest.json 5s、Sync to R2 3s（无 secrets 自动跳过），**14 个资产**、正式版
+> （Latest，发布于 `2026-10-15T07:27:27Z`）。同轮 CI run `38695616048` **一次全绿**
+> （17m52s，六个作业），CodeQL run `38695615706` success（13m0s）。
+> `latest.json` 仍为 `{"version":"4.0.12",...,"platforms":{}}`（无签名，见 6.2）。
+
 ## 6. 维护约定
 
 - **上游同步**：`git fetch upstream --no-tags && git merge upstream/main`，merge 后跑
@@ -1634,7 +1643,7 @@ endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 for
 ```
 
 `platforms` 为空 → 更新器找不到任何平台的更新，**自动更新静默失效**。
-已确认 v3.20.2、v3.20.3 与 v4.0.1 / v4.0.7 / v4.0.8（含同日重发）/ v4.0.9 均为空，属既有问题
+已确认 v3.20.2、v3.20.3 与 v4.0.1 / v4.0.7 / v4.0.8（含同日重发）/ v4.0.9 / v4.0.12 均为空，属既有问题
 （非本次回归）。**推论**：重发同一版本号不会给已安装的用户任何更新提示，修正只能靠重新
 下载安装包覆盖安装。
 
