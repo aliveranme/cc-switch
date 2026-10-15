@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | 99277921（2026-10-12，**41 个提交**；明细见第 5 节；上一基线 df40d53c，2026-10-11） |
-| 本地领先 | **448** 个提交（`git rev-list --count upstream/main..main`，统计于 `55d86db3`，2026-10-12；含本次同步的 8 处 fork 侧适配修复。该数随每次提交增长，此处的锚点是提交号而非「当前」） |
-| 本次 merge | 2026-10-12 合入上游 99277921（41 个提交，**109 文件 +7 187 / −1 456**，6 处冲突全手工解 + 8 处 fork 侧适配，见第 5 节注记）；上一次 2026-10-11 合入 df40d53c（8 个提交，**35 文件**） |
-| 本地版本 | `v4.0.9`（随 merge 对齐上游 v4.0.9；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-12（`55d86db3`） |
-| 测试规模 | 最近验证于 2026-10-12：Rust **3707** 单元通过（`cargo test --lib`，10 ignored；集成测试由 CI nextest 覆盖）+ 前端 vitest **2548**（208 文件）；`cargo fmt --check` / `clippy -D warnings` / `pnpm typecheck` / `format:check` / whats-new 结构测试全绿 |
+| 上游基线 | 51ac86f1（2026-10-14，**95 个提交**；明细见第 5 节；上一基线 99277921，2026-10-12） |
+| 本地领先 | **450** 个提交（`git rev-list --count upstream/main..main`，统计于 `41ff634c`，2026-10-15；含本次同步的 11 处 fork 侧适配修复。该数随每次提交增长，此处的锚点是提交号而非「当前」） |
+| 本次 merge | 2026-10-15 合入上游 51ac86f1（95 个提交，**211 文件 +31 317 / −3 318**，12 处冲突全手工解 + 11 处 fork 侧适配，见第 5 节注记）；上一次 2026-10-12 合入 99277921（41 个提交，**109 文件**） |
+| 本地版本 | `v4.0.12`（随 merge 对齐上游 v4.0.12；fork 发布序列见第 5 节） |
+| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-15（`<merge>`） |
+| 测试规模 | 最近验证于 2026-10-15：Rust **3843** 单元通过（`cargo test --lib`，10 ignored；集成测试由 CI nextest 覆盖）+ 前端 vitest **2869**（220 文件）；`cargo fmt --check` / `clippy -D warnings` / `pnpm typecheck` / `format:check` / whats-new 结构测试全绿 |
 
 ## 2. 修改总览（按主题）
 
@@ -483,6 +483,15 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   UI/外部生成的 deeplink 导入被解析阶段拒绝——用户从分享链接导入配置直接失败，
   且错误提示不说明原因。放行后走与 Claude 相同的 settings 形态合并（Direct 模式）。
 - ⚠️ 新增的公开入口能力，上游白名单若收紧会静默丢失该入口。
+- **`apiFormat` 只放行 `anthropic`（2026-10-15 起）**：上游在 v4.0.12 引入
+  `apiFormat`，校验走 `ApiFormat::native_value`，该 match 只列了 `Claude` 没列
+  `ClaudeDesktop`，于是 `app=claude-desktop&apiFormat=anthropic` 被拒而 `app=claude`
+  能过。fork 已在 `native_value` 的 Anthropic 分支补上 `ClaudeDesktop`：Claude Desktop
+  直连阶段一（`claude_desktop_config::validate_direct_provider`）本来就只接受原生
+  Anthropic Messages，声明 `anthropic` 是合法的，声明其他格式仍应在解析阶段被拒。
+  注意 `build_provider_from_request` 里写 `meta.api_format` 的那段没有加 `ClaudeDesktop`
+  ——该字段对 Claude Desktop 的路由判定无用（前端按 `claudeDesktopMode` 判断，见
+  `providerCapabilities.ts`），写进去只会让卡片多一个无效标记。
 
 ### 4.12 Hermes 表单字段删除语义（hermes_config.rs `HERMES_UI_OWNED_KEYS`）
 
@@ -939,6 +948,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 | `v4.0.7` | 2026-10-11 | 合入上游 v4.0.2–v4.0.7（`1f786dad`，123 提交）：what's-new 应用内更新摘要机制（v4.0.2 起）、GitHub Copilot 托管账号（v4.0.5）、provider 搜索 / Skills 批量更新 / 配额着色 / classic sub-agent tools / 流式收尾修复（#7986，v4.0.6）、quotaDisplay / 会话压缩 rollout / stale-client / workspace 切换修复（#8054，v4.0.7）等六个版本的完整内容；fork 侧新增 sha2 0.11 适配（4.29）。**发布一次成功**：tag `v4.0.7` 指向 fork 提交 `e091fdd6`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。发布前曾遇仓库 Actions 被禁用（用户网页端恢复，见同步注记） |
 | `v4.0.8` | 2026-10-11 | 合入上游 v4.0.8（`df40d53c`，8 提交，35 文件）：Codex 桌面版自带命令行的模型列表回退（macOS 上 ChatGPT.app 优先于改名前的 Codex.app）、官方模型列表不可用时的分类原因提示与恢复、获取模型列表带上供应商配置的请求头（#7759/#7760）、「设置 → 数据」新增「打开日志」、深色模式文字调暗；fork 侧修正分类器转发 `max_tokens` 下限（修静默失效）并为回注块加作用域限定（4.2）。**发布一次成功**：tag `v4.0.8` 指向 fork 提交 `38acc5a1`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。**同日重发**：tag 改指 fork 提交 `ae14e1a9`（并入 4.30 探针修复与 4.31 内置浏览器 / 官方插件市场），14 资产原地覆盖、仍为 Latest，版本号与安装包命名不变 |
 | `v4.0.9` | 2026-10-12 | 合入上游 v4.0.9（`99277921`，41 提交，109 文件 +7 187 / −1 456）：供应商表单整体重构（说明移入 help tips、模型选择对话框、默认模型=列表第一行、Codex 子代理模型、full URL 移入高级）、Codex 新线程/自动化 Chat 上游 400 与 xAI 422 修复、Claude OpenAI 格式上游改发 Bearer、聚合模式按成员合并兼容开关、冷启动语言校正（#8023）、本机「连接地址」（#7878）、macOS 本地网络权限、7 家新预设（SoruxGPT/IKunCode/RunToken/BotCF/YYLX/TokenFlux/OpenModel）；fork 侧 8 处适配（见同步注记）。**发布一次成功**：tag `v4.0.9` 指向 fork 提交 `707a6a15`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
+| `v4.0.12` | 2026-10-15 | 合入上游 v4.0.12（`51ac86f1`，95 提交，211 文件 +31 317 / −3 318）：Apps 页可安装/更新/**卸载**编码客户端（多安装诊断 + 手动指令 + Node 版本预检）、自定义供应商图标「My Icons」库与深链 `iconUrl`、新增 **Local 预设组**（Ollama / LM Studio / llama.cpp / vLLM，本机地址绕开代理）、14 家云平台预设、会话日志扫描改为后台 10 分钟 / 用量页按所选间隔、土耳其语界面与不支持语言回落英文、深链 `apiFormat` 与 Pi 供应商导入、Grok Build 当前布局卸载；fork 侧 11 处适配（见同步注记）。**发布**：tag `v4.0.12` 指向 fork 提交 `<doc>`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -1510,6 +1520,63 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > Frontend 5m1s、macos-latest 9m4s），CodeQL run `38263676351` success。latest.json 的
 > `platforms` 仍为空（无签名，见 6.2）。
 
+> 2026-10-15 同步（v4.0.12）：合入上游 `51ac86f1`（95 提交 / 211 文件，+31 317 / −3 318），
+> merge 提交 `<merge>`。本轮覆盖上游 v4.0.10–v4.0.12 三个版本：Apps 页工具**卸载**（多安装
+> 诊断、手动指令、Node 版本预检、Grok Build 当前布局）、自定义供应商图标（「My Icons」库、
+> 深链 `iconUrl`）、**Local 预设组**（Ollama / LM Studio / llama.cpp / vLLM）与 14 家云平台
+> 预设、会话日志扫描改为后台 10 分钟 + 用量页按所选间隔（统计不再自行轮询）、土耳其语界面与
+> 不支持系统语言回落英文、深链 `apiFormat` / Pi 供应商导入 / `iconUrl` 与站点集成指南、
+> 供应商搜索位置与 Apps 页布局。
+>
+> **冲突 12 处全手工解**：`Cargo.toml`（2 块，保留 fork 的依赖代际 + 补上游新增 `png` 与
+> tokio `net` feature）、`commands/misc.rs`（保留 fork 的 `#[serial_test::serial]`，并入上游
+> 两个新测试）、`deeplink/parser.rs`（白名单并集：`claude-desktop` + `pi` + `mcode`，错误
+> 文案同步）、`deeplink/tests.rs`（**3 块共约 1 000 行交错冲突**：双方在同一位置各自追加测试，
+> 按标记重建为「fork 的 claude-desktop 用例 + 上游的 codex/grok/pi 用例」两段）、
+> `proxy/http_client.rs`（3 块，见下）、`proxy/forwarder.rs`、`presetGroups.ts`（并集含
+> `local`）、`usage/UsageDashboard.tsx`（保留 fork 的 Suspense/懒加载外壳，取上游
+> `refreshIntervalMs={0}`）、`i18n/index.ts`（2 块，保留 fork 懒加载结构 + 补 `tr`）、
+> `i18n/locales/zh-TW.json`、`tests/components/AppsPage.test.tsx`（import 并集）、
+> `deplink.html`（delete/modify：fork 已在 `.gitignore` 里忽略它，维持不跟踪）。
+>
+> **fork 侧适配 11 处**（合并正确性所必需）：
+> ① `DeepLinkImportDialog.tsx` 的 `useRef<Promise<string|undefined>>()` 补初始值——上游按
+> `@types/react` 18 写的无参 `useRef` 在 fork 的 19 下必挂（TS2554/TS2322）；
+> ② `tests/i18n/turkishDetection.test.ts` 改为显式 `await initI18n()`（上游假定 import 即
+> 完成初始化，fork 是懒加载）；
+> ③ `tests/i18n/syncLanguageFromSettings.test.ts` 的土耳其用例补 `vi.waitFor`；
+> ④ `tests/hooks/useSettingsForm.test.tsx` 的土耳其用例补 `vi.waitFor`；
+> ⑤ `deeplink/tests.rs` 的「覆盖全部 AppType」两处列表补 `Pi` / `Mcode`（`Mcode` 只进白名单
+> 那个测试：`parse_and_merge_config` 按设计没有 mcode 分支），链接补 `model`（`pi` 缺 model
+> 会被应用级校验拒掉）；
+> ⑥ `deeplink/provider.rs`：`ApiFormat::native_value` 补 `AppType::ClaudeDesktop`（上游只列了
+> `Claude`，导致 `app=claude-desktop&apiFormat=anthropic` 被拒而 `app=claude` 能过）+ 新测试
+> `test_claude_desktop_link_accepts_anthropic_api_format_only`；
+> ⑦ `proxy/http_client.rs`：新增 `get_forward_for_url` / `direct_forward_client`，把 fork 的
+> 「转发禁止跟随重定向」与上游的「本机地址绕开代理」合并成一条语义（`forwarder.rs` 改用），
+> `build_client_with_redirects` 与上游 `base_builder` 合并保留；
+> ⑧ `zh-TW.json`：冲突区取上游新增键，24 个重复键保留 fork 既有用语（与 `zh.json` 一致），
+> `toolActionInProgress` / `toolActionInProgressDetail` 取上游新文案（含「解除安装」，与
+> `zh.json` 同步）；四个语言包重新无重复键；
+> ⑨ prettier 重排 `presetGroups.ts` / `lib/api/deeplink.ts` / `utils/customIcon.ts`
+> （后两个是上游新文件，在 fork 的 prettier 下不合格式）；
+> ⑩ `commands/tool_uninstall.rs`：上游测试里两处 `&[x.clone()]` 在 1.95 的
+> `clippy::cloned_ref_to_slice_refs` 下不过 `-D warnings`（上游 CI 该处应为红），改用
+> `std::slice::from_ref`；
+> ⑪ 文档纠正：`user-manual/{en,ja,zh}/5-faq/5.3-deeplink.md` 与本次新并入的
+> `guides/deeplink-site-integration-guide-{en,ja,zh}.md` 原写「Claude Desktop 供应商不支持
+> 深链导入」，与 fork 实际行为（4.11）矛盾，改为「支持，但只接受 `apiFormat=anthropic` 或不写」。
+>
+> 分歧点核对：8 维并行审计（proxy / i18n / 前端表单 / deeplink / 依赖兼容 / 发布链路 /
+> 测试集成 / 运行时服务）+ 逐项对抗验证（29 个 agent、1 239 次工具调用），13 项发现里 11 项被
+> 驳（多为「上游自身的既有状态」或「测试覆盖偏好」），2 项确认且均已处置（⑥ 与 ⑪）；
+> `.github/workflows/` 相对三方（HEAD / upstream / merge-base）**无差异**（上游本轮未改
+> 工作流，release.yml 仍为 fork 版本，whats-new-check 在位），`src-tauri/Cargo.lock` 随
+> 新增 `png` 更新。验证全绿：Rust **3843**（`cargo test --lib`，10 ignored）、vitest
+> **2869**（220 文件）、`cargo fmt --check` / `clippy --all-targets -- -D warnings` /
+> `pnpm typecheck` / `format:check`。本机 `cargo test --lib` 曾出现 1 个自绑定端口的偶发
+> 失败（`proxy::server::tests::*`，单独重跑必过，见 6.3 相关记录），复跑为 0 失败。
+
 ## 6. 维护约定
 
 - **上游同步**：`git fetch upstream --no-tags && git merge upstream/main`，merge 后跑
@@ -1524,7 +1591,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 
 ### 6.1 发布纪律（tag 必须指向 fork 提交）
 
-fork 与上游**共用 tag 名**（`v3.20.x`），两边指向不同提交。因此：
+fork 与上游**共用 tag 名**（`v4.0.x`），两边指向不同提交。因此：
 
 - **绝不推送上游标签**。上游标签一旦进入本仓库并被 `git push --tags` 推上去，
   该 tag 上跑的 Release 会用**上游的 `release.yml`**——它硬校验
@@ -1545,9 +1612,9 @@ fork 与上游**共用 tag 名**（`v3.20.x`），两边指向不同提交。因
 - 发布前必须核对 tag 指向并显式重建（轻量标签，与 `v3.20.0`–`v3.20.2` 一致）：
 
   ```bash
-  git tag -f v3.20.x <fork-main-commit>     # 必须是 fork 提交，不是上游提交
-  git push -f origin v3.20.x                # 推送 tag 触发 Release
-  git log -1 --oneline v3.20.x              # 复核：提交信息应为 fork 的提交
+  git tag -f v4.0.x <fork-main-commit>      # 必须是 fork 提交，不是上游提交
+  git push -f origin v4.0.x                 # 推送 tag 触发 Release
+  git log -1 --oneline v4.0.x               # 复核：提交信息应为 fork 的提交
   ```
 
 - 发布前确认 `package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json`
@@ -1567,7 +1634,7 @@ endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 for
 ```
 
 `platforms` 为空 → 更新器找不到任何平台的更新，**自动更新静默失效**。
-已确认 v3.20.2、v3.20.3 与 v4.0.1 / v4.0.7 / v4.0.8（含同日重发）均为空，属既有问题
+已确认 v3.20.2、v3.20.3 与 v4.0.1 / v4.0.7 / v4.0.8（含同日重发）/ v4.0.9 均为空，属既有问题
 （非本次回归）。**推论**：重发同一版本号不会给已安装的用户任何更新提示，修正只能靠重新
 下载安装包覆盖安装。
 

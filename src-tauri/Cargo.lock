@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "cc-switch"
-version = "4.0.9"
+version = "4.0.12"
 dependencies = [
  "anyhow",
  "arboard",
@@ -747,6 +747,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "once_cell",
+ "png 0.18.1",
  "regex",
  "reqwest 0.12.28",
  "rquickjs",

@@ -19,13 +19,14 @@ type Translate = (key: string) => unknown;
  * （很多行为依赖它）。
  */
 export type PresetGroup =
-  "login" | "vendor" | "thirdparty" | "cloud" | "plugin";
+  "login" | "vendor" | "thirdparty" | "cloud" | "local" | "plugin";
 
 export const PRESET_GROUP_ORDER: PresetGroup[] = [
   "login",
   "vendor",
   "thirdparty",
   "cloud",
+  "local",
   "plugin",
 ];
 
@@ -46,6 +47,8 @@ export function presetGroup(preset: AnyPreset): PresetGroup {
       return "vendor";
     case "cloud_provider":
       return "cloud";
+    case "local":
+      return "local";
     case "omo":
     case "omo-slim":
       return "plugin";
@@ -358,7 +361,7 @@ export function presetRowGroup(row: PresetRowItem): PresetGroup {
 }
 
 /**
- * 「全部」按左侧分类分段（账号登录 → 模型厂商 → 第三方平台 → 云服务商 → 插件配置），
+ * 「全部」按左侧分类分段（账号登录 → 模型厂商 → 第三方平台 → 云服务商 → 本地 → 插件配置），
  * 段内保持传入的顺序（已按名称排）；空段不出现。
  */
 export function sectionPresetRows<T extends { row: PresetRowItem }>(

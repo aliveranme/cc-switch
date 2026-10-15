@@ -1,17 +1,18 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
-type Language = "zh" | "zh-TW" | "en" | "ja";
+type Language = "zh" | "zh-TW" | "en" | "ja" | "tr";
 
 const DEFAULT_LANGUAGE: Language = "zh";
 const FALLBACK_LANGUAGE: Language = "en";
 
-// Each locale is 150-200 kB of JSON. Importing all four eagerly put 672 kB of
-// translations into the main chunk, almost all of it for languages the user
-// will never switch to. They are fetched per language instead.
+// Each locale is 150-200 kB of JSON. Importing all of them eagerly put most of
+// that into the main chunk, almost all of it for languages the user will never
+// switch to. They are fetched per language instead.
 const localeLoaders: Record<Language, () => Promise<{ default: object }>> = {
   en: () => import("./locales/en.json"),
   ja: () => import("./locales/ja.json"),
+  tr: () => import("./locales/tr.json"),
   zh: () => import("./locales/zh.json"),
   "zh-TW": () => import("./locales/zh-TW.json"),
 };
@@ -26,7 +27,11 @@ async function loadLanguage(lng: Language): Promise<void> {
 }
 
 const isLanguage = (value: unknown): value is Language =>
-  value === "zh" || value === "zh-TW" || value === "en" || value === "ja";
+  value === "zh" ||
+  value === "zh-TW" ||
+  value === "en" ||
+  value === "ja" ||
+  value === "tr";
 
 const getInitialLanguage = (): Language => {
   if (typeof window !== "undefined") {
@@ -67,11 +72,16 @@ const getInitialLanguage = (): Language => {
     return "ja";
   }
 
+  if (navigatorLang?.startsWith("tr")) {
+    return "tr";
+  }
+
   if (navigatorLang?.startsWith("en")) {
     return "en";
   }
 
-  return DEFAULT_LANGUAGE;
+  // 认得出系统语言、但界面没有这种语言（德、法、韩…）时用英文：英文大多数人能读，简中几乎不能
+  return navigatorLang ? "en" : DEFAULT_LANGUAGE;
 };
 
 /**

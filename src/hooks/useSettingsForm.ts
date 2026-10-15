@@ -4,7 +4,7 @@ import { useSettingsQuery } from "@/lib/query";
 import { ensureLanguage } from "@/i18n";
 import type { Settings } from "@/types";
 
-type Language = "zh" | "zh-TW" | "en" | "ja";
+type Language = "zh" | "zh-TW" | "en" | "ja" | "tr";
 
 export type SettingsFormState = Omit<Settings, "language"> & {
   language: Language;
@@ -27,7 +27,7 @@ const normalizeLanguage = (lang?: string | null): Language => {
     return "zh-TW";
   }
 
-  if (normalized === "en" || normalized === "ja") {
+  if (normalized === "en" || normalized === "ja" || normalized === "tr") {
     return normalized;
   }
 
@@ -42,7 +42,10 @@ const isSupportedLanguage = (lang?: string | null): boolean => {
   if (!lang) return false;
   const normalized = lang.toLowerCase().replace(/_/g, "-");
   return (
-    normalized === "en" || normalized === "ja" || normalized.startsWith("zh")
+    normalized === "en" ||
+    normalized === "ja" ||
+    normalized === "tr" ||
+    normalized.startsWith("zh")
   );
 };
 

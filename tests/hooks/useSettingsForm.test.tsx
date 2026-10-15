@@ -58,6 +58,18 @@ describe("useSettingsForm Hook", () => {
     await waitFor(() => expect(changeLanguageSpy).toHaveBeenCalledWith("en"));
   });
 
+  it("preserves Turkish from server settings", async () => {
+    useSettingsQueryMock.mockReturnValue({
+      data: { language: "tr" },
+      isLoading: false,
+    });
+    const { result } = renderHook(() => useSettingsForm());
+    await waitFor(() => expect(result.current.settings?.language).toBe("tr"));
+    expect(result.current.initialLanguage).toBe("tr");
+    // fork：ensureLanguage 先按需拉取语言包再切换，断言要等异步加载完成
+    await waitFor(() => expect(changeLanguageSpy).toHaveBeenCalledWith("tr"));
+  });
+
   it("should support japanese language preference from server data", async () => {
     useSettingsQueryMock.mockReturnValue({
       data: {
