@@ -1687,12 +1687,19 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 其余 4.1 / 4.4 / 4.7 / 4.10 / 4.11 / 4.12 / 4.14 / 4.17 / 4.21 / 4.22 / 4.23 / 4.25 / 4.27 / 4.30
 > 的对应实现与钉桩测试**逐行未被上游触及**。
 
+> 另修一处测试环境缺口：`proxy/server.rs` 的 5 个自绑定端口的集成用例都用裸
+> `reqwest::Client::new()`，在开着 Windows 系统代理的机器上连 127.0.0.1 也会走代理，
+> 代理返回 503 / 掐断连接（os error 10053），`send ... request` 直接 panic——本机必挂、
+> CI runner 无系统代理所以上游从未遇到。已抽出 `test_client()`（`no_proxy()`）替换这
+> 5 处，同类问题在 `proxy/error.rs` 的上游新测试上也一并处理（见上）。
+
 > **文档一致性修正（本轮附带）**：`useMoneyFormat` 把 `useSettingsQuery` 引入 12 个组件后，
 > 任何新写的「渲染 Sidebar / SessionReader 子组件」的测试必须用 `tests/utils/testQueryClient.ts` 的
 > `renderWithQueryClient`（裸 `render` 会在无 QueryClientProvider 时抛错）；`6aeaeb17` 把
 > `codexStackClassicSubagents` 改名为 `codexStackClassicTools` 且默认值 false→true，后端
 > `settings.rs` 已对齐并有旧键忽略 + 缺省 true 的迁移测试。
 
+> merge 提交 `f5751462`。
 > 验证全绿：Rust **3950**（`cargo test --lib`，11 ignored）、vitest **3020**（231 文件）、
 > `cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `pnpm format:check` /
 > `pnpm build:renderer`。⚠️ 本机两处环境性假失败已定位并处置：`describe_reqwest_error`（Windows
