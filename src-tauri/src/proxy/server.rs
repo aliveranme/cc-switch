@@ -461,6 +461,18 @@ impl ProxyServer {
 
 #[cfg(test)]
 mod tests {
+    /// 访问本机测试代理用的 client。**必须关掉系统代理**：reqwest 默认会读
+    /// Windows 的 WinINET 设置，机器上开着代理（常见于 localhost:7890 一类的
+    /// 全局客户端）时，连 127.0.0.1 也会被交给代理，代理返回 503 或直接掐断
+    /// 连接（os error 10053），这些用例就会以完全无关的原因失败。CI runner
+    /// 没有系统代理，所以上游从未遇到。
+    fn test_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("build test client")
+    }
+
     use super::*;
     use crate::provider::{Provider, ProviderMeta};
     use crate::AppError;
@@ -488,7 +500,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = test_client();
         for path in [
             "/responses",
             "/v1/responses",
@@ -569,7 +581,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = test_client();
 
         let cases = [
             (
@@ -745,7 +757,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = test_client();
         let aliases = [
             "/images/generations",
             "/v1/images/generations",
@@ -955,7 +967,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = test_client();
         let aliases = [
             "/images/edits",
             "/v1/images/edits",
@@ -1180,7 +1192,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = test_client();
         let aliases = [
             "/alpha/search",
             "/v1/alpha/search",

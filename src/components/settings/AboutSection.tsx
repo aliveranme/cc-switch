@@ -153,7 +153,9 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
     if (hasUpdate) {
       if (isPortable) {
         try {
-          await settingsApi.checkUpdates();
+          await settingsApi.openPortableUpdateDownload(
+            updateInfo?.availableVersion ?? "",
+          );
         } catch (error) {
           console.error("[AboutSection] Portable update failed", error);
         }
@@ -199,7 +201,14 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
         closeButton: true,
       });
     }
-  }, [checkUpdate, hasUpdate, isPortable, resetDismiss, t]);
+  }, [
+    checkUpdate,
+    hasUpdate,
+    isPortable,
+    resetDismiss,
+    t,
+    updateInfo?.availableVersion,
+  ]);
 
   const displayVersion = version ?? t("common.unknown");
 
@@ -268,6 +277,9 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
           </p>
           {updateInfo.notes && (
             <p className="line-clamp-3 text-fg-2">{updateInfo.notes}</p>
+          )}
+          {isPortable && (
+            <p className="text-fg-2">{t("settings.portableUpdateHint")}</p>
           )}
         </div>
       )}

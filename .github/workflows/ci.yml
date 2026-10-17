@@ -224,11 +224,15 @@ jobs:
         shell: bash
         run: mkdir -p dist
 
+      # fork 保留的步骤顺序：Setup WSL2 必须在编译前置步骤（Restore Rust deps /
+      # Create frontend dist placeholder）之后，故上游在 job 顶部新增的同名步骤
+      # 不采纳，只把它新增的 `additional-packages` 并到本步骤。
       - name: Setup WSL2
         uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364 # v7
         with:
           distribution: Ubuntu-24.04
           wsl-version: 2
+          additional-packages: python3
 
       - name: Prepare WSL2-backed test environment
         shell: pwsh
@@ -292,3 +296,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+
+      - name: Run Hermes live WAL reads inside WSL2
+        env:
+          CC_SWITCH_WSL_DISTRO: Ubuntu-24.04
+        shell: pwsh
+        run: |
+          $testName = "session_manager::providers::hermes::tests::wsl2_live_wal_readonly_reference"
+          $testList = & $env:CC_SWITCH_TEST_EXE --list --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($testList -notcontains "${testName}: test") { throw "Hermes WSL test not discovered" }
+          & $env:CC_SWITCH_TEST_EXE $testName --ignored --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

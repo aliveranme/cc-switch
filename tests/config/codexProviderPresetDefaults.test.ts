@@ -34,11 +34,15 @@ describe("Codex provider defaults", () => {
     expect(contextWindow).toBe(1_000_000);
     expect(compactLimit).toBe(900_000);
     expect(compactLimit).toBeLessThan(contextWindow!);
+    // 上游 v4.0.14（be0a9cf0）把所有预设里的 GPT 窗口按 272K 封顶：
+    // 中转站的 GPT 多从 ChatGPT 订阅分发，按订阅窗口卡，写大只会让客户端
+    // 不压缩直到上游拒收。TOML 的 model_context_window 上游自己仍是 1M，
+    // fork 跟随；只有 modelCatalog（fork 侧 4.24 保留的字段）按新上限写。
     expect(preset?.modelCatalog).toEqual([
       {
         model: "gpt-5.5",
         displayName: "GPT-5.5",
-        contextWindow: 1_000_000,
+        contextWindow: 272_000,
         supportsParallelToolCalls: undefined,
         inputModalities: undefined,
         baseInstructions: undefined,

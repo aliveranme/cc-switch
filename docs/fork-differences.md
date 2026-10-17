@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | 51ac86f1（2026-10-14，**95 个提交**；明细见第 5 节；上一基线 99277921，2026-10-12） |
-| 本地领先 | **450** 个提交（`git rev-list --count upstream/main..main`，统计于 `41ff634c`，2026-10-15；含本次同步的 11 处 fork 侧适配修复。该数随每次提交增长，此处的锚点是提交号而非「当前」） |
-| 本次 merge | 2026-10-15 合入上游 51ac86f1（95 个提交，**211 文件 +31 317 / −3 318**，12 处冲突全手工解 + 11 处 fork 侧适配，见第 5 节注记）；上一次 2026-10-12 合入 99277921（41 个提交，**109 文件**） |
-| 本地版本 | `v4.0.12`（随 merge 对齐上游 v4.0.12；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-15（`3e202e23`） |
-| 测试规模 | 最近验证于 2026-10-15：Rust **3843** 单元通过（`cargo test --lib`，10 ignored；集成测试由 CI nextest 覆盖）+ 前端 vitest **2869**（220 文件）；`cargo fmt --check` / `clippy -D warnings` / `pnpm typecheck` / `format:check` / whats-new 结构测试全绿 |
+| 上游基线 | 73f37c4b（2026-10-16，**92 个提交**；明细见第 5 节；上一基线 51ac86f1，2026-10-14） |
+| 本地领先 | **453** 个提交（`git rev-list --count upstream/main..main`，统计于 `73f37c4b` 的 merge 前，2026-10-17；含本次同步的 5 处 fork 侧适配修复。该数随每次提交增长，此处的锚点是提交号而非「当前」） |
+| 本次 merge | 2026-10-17 合入上游 73f37c4b（92 个提交，**493 文件 +26 677 / −22 422**，8 处冲突全手工解 + 5 处 fork 侧适配，见第 5 节注记）；上一次 2026-10-15 合入 51ac86f1（95 个提交，**211 文件**） |
+| 本地版本 | `v4.0.14`（随 merge 对齐上游 v4.0.14；fork 发布序列见第 5 节） |
+| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-17（见第 5 节） |
+| 测试规模 | 最近验证于 2026-10-17：Rust **3950** 单元通过（`cargo test --lib`，11 ignored；集成测试由 CI nextest 覆盖）+ 前端 vitest **3020**（231 文件）；`cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `format:check` / whats-new 结构测试全绿 |
 
 ## 2. 修改总览（按主题）
 
@@ -375,6 +375,12 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   chmod"窗口期，且 FAT/exFAT 等不支持权限位的挂载上也不存在宽松存在期）。
 - ⚠️ 同步时注意：上游若引入新的配置写路径，必须走 `atomic_write`/`harden_secret_file`，
   否则密钥文件会退回 0644。
+- **2026-10-17 同步**：上游把 `settings.rs` 的保存整体重写为「临时文件 + rename」并新增
+  `atomic_write_private`（备份恢复用 `SETTINGS_BACKUP_PENDING`）。该入口内部就是
+  `atomic_write_with_unix_mode(..., Some(0o600))`，fork 的 unix 语义**完全保持**，故取上游写法、
+  删掉 fork 手写的 `mode(0o600)` 分支与冗余的 `harden_secret_file` 收尾。**同时补一处**：
+  `backup_settings_file` 用 `fs::copy` 复制原文件，历史 0644 的 `settings.json` 会把宽松权限
+  一并带进备份（备份里可能有同步密码），已在其后补 `crate::config::harden_secret_file(&dest)`。
 - **v3.19.2 同步**：`atomic_write` 的 Windows 替换方式合入上游 `ReplaceFileW`
   （原 remove+rename 有"目标文件短暂不存在"窗口，`ReplaceFileW` 原子替换保留 ACL 并处理
   共享冲突）；fork 的 unix 权限语义完整保留——create_new 循环在 unix 上 open 时即 `mode(0o600)`
@@ -710,8 +716,16 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
     手写 `@utility slide-in-from-top-\[48\%\]` 也不行——v4 拒绝带转义字符的 utility 名。
 - **合并核对清单**：每次同步后比对上游 `tailwind.config.cjs` 的 `theme.extend` 与
   `plugins`，新增项逐条搬进 `src/index.css`，并跑 `pnpm build:renderer` 后 grep 产物 CSS
-  确认新用到的工具类真的生成了（v4 对未定义名字是静默无效）。本轮已验证 53 个 v7 令牌
-  工具类全部出现在产物 CSS 中。
+  确认新用到的工具类真的生成了（v4 对未定义名字是静默无效）。2026-10-05 已验证 53 个 v7
+  令牌工具类；**2026-10-17 复核：上游本轮未改 `tailwind.config.cjs`**，逐项比对
+  `theme.extend`（colors 96 / fontSize 8 / borderRadius 7 / boxShadow 6 / animation 7 /
+  fontFamily 2）与 fork 的 `@theme`，缺失 0 项。另单独验证了 `theme.extend.opacity = { 45 }`
+  ——v4 的 `opacity-<number>` 是数值类工具，产物 CSS 里确有
+  `.opacity-45{opacity:.45}`（8 个文件在用），无需补 `--opacity-45` 令牌。
+  上游本轮对 `src/index.css` 的唯一改动是给 `[data-tauri-drag-region]` 加 `.is-mac` 前缀
+  （`09237ebd` Windows 上避免原生 CSS 拖拽触发 WebView2 `UpdateDraggableRegions`），配套
+  `src/main.tsx` 的 `body.classList.add("is-mac")` 与 `src/lib/platform.ts` 一并合入，与原样
+  采纳，与 `@theme` 无关。
 
 ### 4.27 Gemini MCP 超时：fork 未配置时不写 `timeout`（金标快照分歧）
 
@@ -1585,6 +1599,106 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > （Latest，发布于 `2026-10-15T07:27:27Z`）。同轮 CI run `38695616048` **一次全绿**
 > （17m52s，六个作业），CodeQL run `38695615706` success（13m0s）。
 > `latest.json` 仍为 `{"version":"4.0.12",...,"platforms":{}}`（无签名，见 6.2）。
+
+> 2026-10-17 同步（v4.0.14）：合入上游 `73f37c4b`（92 提交 / 493 文件，+26 677 / −22 422），
+> merge 提交 `<merge>`。本轮覆盖上游 v4.0.13 与 v4.0.14 两个版本。上游主线是**用量统计的自定义化**
+> （显示币种与汇率、侧栏「今日」显示内容可选、请求日志列可选、记住上次视图）、**Claude Desktop 的
+> 聚合（stack）模式落地**（后端 `b93bf12d` + 模式面板 `19a3e8d4`/`3e9eede4`/`e5508224`，Desktop
+> 正式进入设备级直连/路由模式并支持聚合）、**Codex 的 Auto Review 模型与聚合子代理模型**
+> （`e70e844c`/`6aeaeb17`，`codexStackClassicSubagents` → `codexStackClassicTools` 且默认值 false→true）、
+> **Codex↔Gemini 的 thought signature 往返**（`f2906db6`/`d1856448` 的 `extra_content`，本轮最大单点
+> 修复面）、**终端目录记忆**（`8c2c89e0` 的「打开终端」对话框）、以及**预设侧的 GPT 窗口封顶**
+> （`be0a9cf0`：所有 GPT 模型窗口一律按 272K 封顶，新增 `GPT_CONTEXT_WINDOW_CAP`/`isGptModelId`/
+> `capGptContextWindow`，并用测试守住全部预设来源）。
+
+> **冲突 8 处全手工解**：
+> `ci.yml`（上游把 Setup WSL2 从 job 中段挪到 `Setup Rust` 之后并加了 `additional-packages: python3`，
+> fork 的既有约定是 Setup WSL2 必须在编译前置步骤之后——保留 fork 顺序，只并 `additional-packages`，
+> 并接受上游新增的 Hermes WAL 测试步骤）；`claude_desktop_config.rs`（2 块：`restore_official_at_paths`
+> 取上游新增的 `db`/`op`/`target` 四参签名 + fork 的「补进去的官方插件市场不动」文档注释；
+> 测试区取上游新增的 4 个 native 路由用例 + 保留 fork 的 `#[serial]` 标记）；
+> `streaming.rs` 与 `streaming_codex_chat.rs`（见下「语义采纳」）；
+> `settings.rs`（取上游 `atomic_write_private`，见 4.5）；`claudeDesktopProviderPresets.ts`（2 块 Haiku
+> 1M 判定，见下）；`providerConfigUtils.ts`（4 块，见下）；`ClaudeFormFields.test.tsx`（上游新 Haiku 1M
+> 用例与 fork 的 4 个缓存开关用例并存）。
+
+> **语义采纳（fork 主动让出的旧行为）**：
+> - **`[DONE]` 边界改用 `return`**（`streaming.rs` / `streaming_codex_chat.rs`）。上游 v4.0.14 新增
+>   `done_preserves_terminal_result_against_late_input`，对整段输出做逐字节比对，断言 message_stop /
+>   response.completed 之后**不得再有任何事件**（含同一 chunk 内的迟到数据、迟到 error、迟到传输错误）。
+>   fork 原先的「`break` + 外层 `has_sent_message_stop`/`done_seen` 守卫」在本函数内等价，但为了让上游
+>   三条新测试原样通过，直接采纳 `return`；fork 的「终态必达」（4.20）不受影响——它只作用于
+>   **EOF 截断**（无 finish_reason / 无 [DONE]）路径。`has_sent_message_stop` 声明仍保留（外层 chunk 守卫、
+>   重复 [DONE] 防御与 EOF 收尾三处仍在读它），只是 [DONE] 分支不再赋值；`done_seen` 则整体删除
+>   （`return` 已覆盖其全部取值范围）。
+> - **Haiku 档的 1M 判定**（`claudeDesktopProviderPresets.ts`）。fork 自 `8c674cfc` 起在
+>   `passthroughRoutes`/`mappedRoutes`/`brandedRoutes` 三个工厂里都写死「Haiku 档 supports1m = false」，
+>   理由是 claude-haiku-4-5 只有 200K。上游 v4.0.14 `3d46e06c` 推翻了这个假设的前提：**Haiku 档指向
+>   第三方模型时**，Claude Code 2.1.296 对 `ANTHROPIC_DEFAULT_HAIKU_MODEL` 的 `[1M]` 后缀与其他档位
+>   同等处理（无后缀的非 claude- 模型一律按 200K 卡）。上游改用精确判定 `supports1m && !isClaudeHaiku4(model)`，
+>   只对真正的 claude-haiku-4.x 关掉 1M。**fork 三个工厂全部对齐到上游写法**——只改两处（冲突区）会
+>   让走 `brandedRoutes` 的第三方预设（TokenFactory、Modelflare 等）的 Haiku 档静默退回 200K。
+> - **`settings.rs` 写入改走 `atomic_write_private`**。上游 `8a06838d`/`97daccb6` 把 save 重写为
+>   「临时文件 + rename」并引入备份恢复（`SETTINGS_BACKUP_PENDING`）；fork 原先手写的 unix `mode(0o600)`
+>   +`harden_secret_file` 已被 `config::atomic_write_private` → `atomic_write_with_unix_mode(..., Some(0o600))`
+>   完全覆盖（4.5 语义不变），故取上游写法。**补一处**：`backup_settings_file` 的 `fs::copy` 会把历史上
+>   0644 的 settings.json 权限一并复制进备份（而备份里可能有同步密码），已在其后补
+>   `crate::config::harden_secret_file(&dest)`。
+> - **表名规范化 + 多行字符串守卫**（`providerConfigUtils.ts`）。上游 `#8271` 新增
+>   `normalizeTomlTableName`（`[model_providers."custom"]` ≡ `[model_providers.custom]`）与
+>   `getTomlMultilineStringLines`（说明文字里的表头示例不算真表头）；fork 的
+>   `TOML_SECTION_BOUNDARY_PATTERN`（识别 `[[array]]` 段边界）是上游没有的能力。**两者合并**：
+>   定位目标段用上游的规范化比较，段体终止仍用 fork 的 boundary，所有判断处同时带
+>   `stringLines[index]` 守卫。**任一单侧写法都会丢功能**——只取上游则 `[[array]]` 不再切断归属，
+>   只取 fork 则多行字符串里的示例会被当成真表头。
+
+> **fork 侧适配 5 处**（合并正确性所必需）：
+> ① `streaming.rs` 复原上游删掉的 `has_sent_message_stop` 声明（fork 三处仍在读），并删除 [DONE]
+> 分支上的死赋值；② `streaming_codex_chat.rs` 删除已无读取点的 `done_seen`；
+> ③ `claude_desktop_config.rs` 的 `restore_official_at_paths` 调用点与新签名对齐；
+> ④ `codex_chat_history.rs` 两处测试补 `session_id` 实参（上游把 `record_response`/`enrich_request`
+> 改成双参，与 fork 的 `StoreKey` 会话隔离同批落地；`record_response` 的键表已含上游新增的
+> `extra_content`）；⑤ `proxy/error.rs` 的上游新测试 `describe_reqwest_error_keeps_cause_and_drops_url`
+> 在**开着 Windows 系统代理**的机器上假失败——reqwest 的 system-proxy 支持会把 `127.0.0.1` 也交给
+> 代理（本机 xray `127.0.0.1:7890` 返回 503 而非连接拒绝）。该用例验证的是去掉 URL 后展开原因链，
+> 与代理无关，改用 `reqwest::Client::builder().no_proxy()`；CI runner 无代理，不影响上游。
+
+> **预设数据修正 1 处**：E-FlowCode 的 `modelCatalog` 里 `gpt-5.5` 窗口 fork 原写 `1000000`，违反上游
+> `be0a9cf0` 新增的「GPT 一律按 272K 封顶」不变量（`tests/config/presetModelMetadata.test.ts`
+> 会枚举全部预设来源并断言）——改为 `272000`，金标快照
+> `ProviderForm.presetRows.golden.test.tsx.snap` 与 `codexProviderPresetDefaults.test.ts` 同步更新。
+> 注意 **TOML 层的 `model_context_window = 1000000` 不动**：上游自己的预设也仍是 1M，封顶只作用于
+> `resolveModelMetadata` 返回的元数据与预设 catalog。
+
+> 分歧点核对：**§4 全部条目逐条复核**（后端 8 维 + 前端 8 维，两路只读审计 + Lead 逐项验证）。
+> 结论：上游本轮**没有直接改写任何 §4 分歧实现**，但引入了若干「结构性依赖」，已逐条处置：
+> 4.2 分类器（上游无 `classifier.rs`，`handlers.rs` 本轮只有 3 个与分类器无关的 hunk，fork 的
+> 分流骨架完整保留）；4.3 content_filter（上游 `2a7080f1` 新增
+> `response_incomplete_reason_from_finish_reason`，fork 的 Codex 方向语义由它实现，已在
+> `transform_codex_chat.rs` 定义 + `streaming_codex_chat.rs` 两处调用）；4.5 atomic_write（见上）；
+> 4.9 会话用量（上游 `ad9f0f20` 给 upsert 加了 `pricing_cache` 第 5 参，fork 的 dedup 守卫与单调推
+> 进未受影响）；4.16 品牌图标（上游本轮未新增品牌图标，`GithubGlyph` 两处完好）；4.19/4.13 模板
+> （仍为「已转出」状态）；4.26 Tailwind（上游只给 `[data-tauri-drag-region]` 加 `.is-mac` 前缀并配套
+> `body.is-mac`，未动 `tailwind.config.cjs`，`@theme` 无需搬迁；另实测 `opacity-45` 等数值类工具在
+> Tailwind v4 下由 `pnpm build:renderer` 正常产出，无需补令牌）；4.29 sha2（`format!("{:x}")` 全库
+> 0 命中，`session_usage_pi.rs` 的 `hex::encode` 保留）；4.31 Desktop profile（`build_gateway_profile`
+> 被 direct/route/聚合三条路径共用，fork 的 14 键与官方插件市场补齐全覆盖；
+> `restore_official_at_paths` 仍不清 `allowedPluginMarketplaces`）。
+> 其余 4.1 / 4.4 / 4.7 / 4.10 / 4.11 / 4.12 / 4.14 / 4.17 / 4.21 / 4.22 / 4.23 / 4.25 / 4.27 / 4.30
+> 的对应实现与钉桩测试**逐行未被上游触及**。
+
+> **文档一致性修正（本轮附带）**：`useMoneyFormat` 把 `useSettingsQuery` 引入 12 个组件后，
+> 任何新写的「渲染 Sidebar / SessionReader 子组件」的测试必须用 `tests/utils/testQueryClient.ts` 的
+> `renderWithQueryClient`（裸 `render` 会在无 QueryClientProvider 时抛错）；`6aeaeb17` 把
+> `codexStackClassicSubagents` 改名为 `codexStackClassicTools` 且默认值 false→true，后端
+> `settings.rs` 已对齐并有旧键忽略 + 缺省 true 的迁移测试。
+
+> 验证全绿：Rust **3950**（`cargo test --lib`，11 ignored）、vitest **3020**（231 文件）、
+> `cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `pnpm format:check` /
+> `pnpm build:renderer`。⚠️ 本机两处环境性假失败已定位并处置：`describe_reqwest_error`（Windows
+> 系统代理，见上）与 `proxy::server::tests::*` 两个自绑定端口的用例（并发下偶发，单跑必过，同
+> v4.0.12 轮记录）；vitest 首轮的 `IconPicker` / `App.test` 两个超时同样在单文件跑时全绿（6.4 的
+> 并发边界，非回归）。
 
 ## 6. 维护约定
 
