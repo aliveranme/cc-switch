@@ -1699,13 +1699,26 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > `codexStackClassicSubagents` 改名为 `codexStackClassicTools` 且默认值 false→true，后端
 > `settings.rs` 已对齐并有旧键忽略 + 缺省 true 的迁移测试。
 
-> merge 提交 `f5751462`。
+> merge 提交 `f5751462`（`docs(fork)` 补记 `63445e1f`）。
 > 验证全绿：Rust **3950**（`cargo test --lib`，11 ignored）、vitest **3020**（231 文件）、
 > `cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `pnpm format:check` /
-> `pnpm build:renderer`。⚠️ 本机两处环境性假失败已定位并处置：`describe_reqwest_error`（Windows
-> 系统代理，见上）与 `proxy::server::tests::*` 两个自绑定端口的用例（并发下偶发，单跑必过，同
-> v4.0.12 轮记录）；vitest 首轮的 `IconPicker` / `App.test` 两个超时同样在单文件跑时全绿（6.4 的
-> 并发边界，非回归）。
+> `pnpm build:renderer`。⚠️ 本机的假失败已定位并**根治**（不再只是记一笔）：`describe_reqwest_error`
+> 与 `proxy::server::tests::*` 的根因相同——机器上开着 Windows 系统代理（xray `127.0.0.1:7890`，
+> WinINET `ProxyEnable=1`），reqwest 的 system-proxy 支持会把 `127.0.0.1` 的请求也交给代理（503
+> 或 os error 10053）。已抽出 `test_client()`（`no_proxy()`）替换 `server.rs` 的 5 处裸
+> `Client::new()`，并给 `error.rs` 的上游新测试加 `no_proxy()`；此后**不设 `NO_PROXY` 也全绿**。
+> CI runner 无系统代理，不受影响。vitest 首轮的 `IconPicker` / `App.test` 超时是 6.4 记录的并发
+> 边界（单文件跑全绿、多轮复跑未再复现），非回归。
+
+> **发布（2026-10-17）**：tag `v4.0.14` → fork 提交 `63445e1f`（显式 `git tag -f` 并复核
+> `git rev-list --count 73f37c4b..v4.0.14` = 455，确认指 fork 提交而非上游；本地与远端此前均无该
+> tag，无上游标签泄漏，符合 6.1），Release run `39044596355` 全绿——Resolve Version 5s 与
+> whats-new-check 27s 先行通过，五平台构建 11m47s–26m19s（macos-14 最慢，带 arm64 runner 容量
+> 排队提示）、Publish GitHub Release 25s、Assemble latest.json 8s、Sync to R2 3s，**14 个资产**、
+> 正式版（非 prerelease / 非 draft，创建于 `2026-10-17T15:19:38Z`）。同轮 CI run `39044564090`
+> **一次全绿**：Detect 8s、Backend ubuntu 5m50s、Backend Windows+WSL2 9m7s、Frontend 4m15s、
+> Backend macos 13m46s、Backend windows-latest 约 21m（WSL2 job 含本轮新并入的 Hermes WAL 步骤
+> 并通过）。`latest.json` 仍为 `{"version":"4.0.14",...,"platforms":{}}`（无签名，见 6.2）。
 
 ## 6. 维护约定
 
