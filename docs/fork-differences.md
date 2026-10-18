@@ -8,12 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 上游基线 | 73f37c4b（2026-10-16，**92 个提交**；明细见第 5 节；上一基线 51ac86f1，2026-10-14） |
-| 本地领先 | **453** 个提交（`git rev-list --count upstream/main..main`，统计于 `73f37c4b` 的 merge 前，2026-10-17；含本次同步的 5 处 fork 侧适配修复。该数随每次提交增长，此处的锚点是提交号而非「当前」） |
-| 本次 merge | 2026-10-17 合入上游 73f37c4b（92 个提交，**493 文件 +26 677 / −22 422**，8 处冲突全手工解 + 5 处 fork 侧适配，见第 5 节注记）；上一次 2026-10-15 合入 51ac86f1（95 个提交，**211 文件**） |
-| 本地版本 | `v4.0.14`（随 merge 对齐上游 v4.0.14；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-17（见第 5 节） |
-| 测试规模 | 最近验证于 2026-10-17：Rust **3950** 单元通过（`cargo test --lib`，11 ignored；集成测试由 CI nextest 覆盖）+ 前端 vitest **3020**（231 文件）；`cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `format:check` / whats-new 结构测试全绿 |
+| 上游基线 | 77c6dc79（2026-10-18，**8 个提交**；明细见第 5 节；上一基线 73f37c4b，2026-10-16） |
+| 本地领先 | **456** 个提交（`git rev-list --count 73f37c4b..HEAD`，统计于 `77c6dc79` 的 merge 前，2026-10-18） |
+| 本次 merge | 2026-10-18 合入上游 77c6dc79（8 个提交，**52 文件 +4 757 / −298**，2 处冲突全手工解 + 3 处 fork 侧适配，见第 5 节注记）；上一次 2026-10-17 合入 73f37c4b（92 个提交，**493 文件**） |
+| 本地版本 | `v4.0.15`（随 merge 对齐上游 v4.0.15；fork 发布序列见第 5 节） |
+| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-18（见第 5 节） |
+| 测试规模 | 最近验证于 2026-10-18：Rust **3956** 单元通过（`cargo test --lib`，11 ignored；集成测试由 CI nextest 覆盖）+ 前端 vitest **3043**（233 文件）；`cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `format:check` / whats-new 结构测试全绿 |
 
 ## 2. 修改总览（按主题）
 
@@ -963,6 +963,8 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 | `v4.0.8` | 2026-10-11 | 合入上游 v4.0.8（`df40d53c`，8 提交，35 文件）：Codex 桌面版自带命令行的模型列表回退（macOS 上 ChatGPT.app 优先于改名前的 Codex.app）、官方模型列表不可用时的分类原因提示与恢复、获取模型列表带上供应商配置的请求头（#7759/#7760）、「设置 → 数据」新增「打开日志」、深色模式文字调暗；fork 侧修正分类器转发 `max_tokens` 下限（修静默失效）并为回注块加作用域限定（4.2）。**发布一次成功**：tag `v4.0.8` 指向 fork 提交 `38acc5a1`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。**同日重发**：tag 改指 fork 提交 `ae14e1a9`（并入 4.30 探针修复与 4.31 内置浏览器 / 官方插件市场），14 资产原地覆盖、仍为 Latest，版本号与安装包命名不变 |
 | `v4.0.9` | 2026-10-12 | 合入上游 v4.0.9（`99277921`，41 提交，109 文件 +7 187 / −1 456）：供应商表单整体重构（说明移入 help tips、模型选择对话框、默认模型=列表第一行、Codex 子代理模型、full URL 移入高级）、Codex 新线程/自动化 Chat 上游 400 与 xAI 422 修复、Claude OpenAI 格式上游改发 Bearer、聚合模式按成员合并兼容开关、冷启动语言校正（#8023）、本机「连接地址」（#7878）、macOS 本地网络权限、7 家新预设（SoruxGPT/IKunCode/RunToken/BotCF/YYLX/TokenFlux/OpenModel）；fork 侧 8 处适配（见同步注记）。**发布一次成功**：tag `v4.0.9` 指向 fork 提交 `707a6a15`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
 | `v4.0.12` | 2026-10-15 | 合入上游 v4.0.12（`51ac86f1`，95 提交，211 文件 +31 317 / −3 318）：Apps 页可安装/更新/**卸载**编码客户端（多安装诊断 + 手动指令 + Node 版本预检）、自定义供应商图标「My Icons」库与深链 `iconUrl`、新增 **Local 预设组**（Ollama / LM Studio / llama.cpp / vLLM，本机地址绕开代理）、14 家云平台预设、会话日志扫描改为后台 10 分钟 / 用量页按所选间隔、土耳其语界面与不支持语言回落英文、深链 `apiFormat` 与 Pi 供应商导入、Grok Build 当前布局卸载；fork 侧 11 处适配（见同步注记）。**发布一次成功**：tag `v4.0.12` 指向 fork 提交 `9c5bedf5`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
+| `v4.0.14` | 2026-10-17 | 合入上游 v4.0.13–v4.0.14（`73f37c4b`，92 提交，493 文件 +26 677 / −22 422）：用量统计自定义（币种与汇率、侧栏「今日」显示项、请求日志列、视图记忆、柱状/面积趋势图切换）、Claude Desktop 聚合（stack）模式、Codex Auto Review 模型与聚合子代理模型、Codex↔Gemini thought signature 往返、终端目录记忆、GPT 窗口 272K 封顶；fork 侧 5 处适配（见同步注记）。**发布一次成功**：tag `v4.0.14` 指向 fork 提交 `63445e1f`，14 资产、正式版（Latest） |
+| `v4.0.15` | 2026-10-18 | 合入上游 v4.0.15（`77c6dc79`，8 提交，52 文件 +4 757 / −298）：托盘菜单替换为玻璃快捷面板（`tray_panel.rs` + `src/tray-panel/*`，含配置切换与用量标签页）、趋势图样式迁入用量显示设置并对齐网格布局、新增 EveryAPI 与 AllTokens 赞助商预设、土耳其语文案润色；fork 侧 3 处适配（见同步注记）。同步推送 tag `v4.0.15` 发布 |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -1719,6 +1721,26 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > **一次全绿**：Detect 8s、Backend ubuntu 5m50s、Backend Windows+WSL2 9m7s、Frontend 4m15s、
 > Backend macos 13m46s、Backend windows-latest 约 21m（WSL2 job 含本轮新并入的 Hermes WAL 步骤
 > 并通过）。`latest.json` 仍为 `{"version":"4.0.14",...,"platforms":{}}`（无签名，见 6.2）。
+
+> 2026-10-18 同步（v4.0.15）：合入上游 `77c6dc79`（8 提交 / 52 文件，+4 757 / −298）：
+> `77c6dc79` #8432 托盘菜单替换为玻璃快捷面板（`tray_panel.rs` + `src/tray-panel/*`）、
+> `73cdfbb7` #8481 土耳其语 UI 措辞改进、`79e754ab`/`8e42cb75` v4.0.15 发版与三语 release notes
+> 及 `src/whats-new/4.0.15.json`、`0a5a2ed6`/`5a3330c5` 新增 AllTokens 与 EveryAPI 赞助商预设、
+> `61fee943`/`17960423` 趋势图样式迁入用量显示设置并改为对齐网格布局。
+> 冲突 2 处全手工解：`src-tauri/Cargo.toml`（保留 fork 依赖版本并为 `tauri` 增加 `macos-private-api`
+> feature；macOS 目标依赖移除已无引用的顶层 `objc2`/`objc2-app-kit`，直接采用上游 `objc2-06` /
+> `objc2-foundation-03` / `objc2-app-kit-03` 最小特性集，避免同表同名 crate 冲突）与
+> `src-tauri/Cargo.lock`（重新解析同步）。
+> fork 侧适配 3 处：① `src/tray-panel/TrayPanel.tsx` 的 `SubPanel.searchRef` 放宽为
+> `React.RefObject<HTMLInputElement | null>`（适配 React 19，见 2.4）；
+> ② `src/tray-panel/UsageTab.tsx` 按 prettier 3.9 格式化；
+> ③ `tests/components/TrayPanel.test.tsx` 按钮可访问名匹配改为 `/Claude Code\s*default · Direct/`
+> （兼容 `dom-accessibility-api` 0.6 下无样式内联 `<span>` 拼接无空格）。
+> 分歧点核对：第 4 节全部分歧实现与第 3 节 fork 专属文件均未被上游触及。
+> 验证全绿：Rust `cargo test --lib` **3956 passed / 0 failed**（11 ignored）、前端
+> `pnpm vitest run --maxWorkers=8` **233 文件 / 3043 用例**全绿、`cargo fmt --check` /
+> `cargo clippy --all-targets -- -D warnings` / `pnpm typecheck` / `pnpm format:check` /
+> `pnpm build:renderer` 全绿。同步推送 `origin/main` 与 `v4.0.15` 标签触发 Release。
 
 ## 6. 维护约定
 
