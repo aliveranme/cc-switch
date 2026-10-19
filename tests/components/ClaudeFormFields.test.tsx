@@ -234,7 +234,7 @@ describe("ClaudeFormFields", () => {
     );
   });
 
-  // ── fork：缓存链路开关（meta 回填 + 高级配置自动展开）──
+  // ── fork：缓存链路开关（meta 回填 + 高级配置自动展开 + stack/classic 对齐）──
 
   it("配置会话亲和 Header 时自动展开高级配置并回填其值", () => {
     renderCopilotForm({ sessionAffinityHeader: "x-session-affinity" });
@@ -244,16 +244,22 @@ describe("ClaudeFormFields", () => {
     );
   });
 
-  it("保留 cache_control 断点开关随 meta 回填勾选状态", () => {
-    renderCopilotForm({ preserveCacheControl: true });
+  it("保留 cache_control 断点开关在 openai_chat 格式下随 meta 回填勾选状态", () => {
+    renderCopilotForm({
+      apiFormat: "openai_chat",
+      preserveCacheControl: true,
+    });
 
     expect(
       screen.getByRole("checkbox", { name: "保留 cache_control 断点" }),
     ).toBeChecked();
   });
 
-  it("中途 system 策略为 preserve 时回填对应选项", () => {
-    renderCopilotForm({ midConversationSystemPolicy: "preserve" });
+  it("中途 system 策略在 openai_chat 格式下为 preserve 时回填对应选项", () => {
+    renderCopilotForm({
+      apiFormat: "openai_chat",
+      midConversationSystemPolicy: "preserve",
+    });
 
     expect(screen.getByText("保留 system 角色")).toBeInTheDocument();
   });
@@ -262,5 +268,55 @@ describe("ClaudeFormFields", () => {
     renderCopilotForm({ classifierSeverityBlockValue: "100" });
 
     expect(screen.getByLabelText("分类器 severity 拦截值")).toHaveValue("100");
+  });
+
+  it.each(["anthropic", "openai_responses", "gemini_native"] as const)(
+    "非 openai_chat 格式 (%s) 下隐藏 OpenAI Chat 专属的 3 个缓存开关，但保留会话亲和与分类器拦截值",
+    (apiFormat) => {
+      renderCopilotForm({
+        isCopilotPreset: false,
+        usesOAuth: false,
+        category: "third_party",
+        apiFormat,
+        sessionAffinityHeader: "x-session-affinity",
+        classifierSeverityBlockValue: "100",
+      });
+
+      expect(screen.getByLabelText("会话亲和 Header")).toHaveValue(
+        "x-session-affinity",
+      );
+      expect(screen.getByLabelText("分类器 severity 拦截值")).toHaveValue(
+        "100",
+      );
+      expect(
+        screen.queryByRole("checkbox", { name: "保留 cache_control 断点" }),
+      ).toBeNull();
+      expect(screen.queryByText("中途 system 消息处理")).toBeNull();
+      expect(screen.queryByText("提示词缓存路由")).toBeNull();
+    },
+  );
+
+  it("stack 视图的高级选项同步挂载会话亲和、分类器拦截值及 openai_chat 专属缓存开关", () => {
+    renderCopilotForm({
+      isCopilotPreset: false,
+      usesOAuth: false,
+      category: "third_party",
+      variant: "stack",
+      apiFormat: "openai_chat",
+      sessionAffinityHeader: "x-cf-session",
+      preserveCacheControl: true,
+      midConversationSystemPolicy: "preserve",
+      classifierSeverityBlockValue: "100",
+    });
+
+    expect(screen.getByLabelText("会话亲和 Header")).toHaveValue(
+      "x-cf-session",
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "保留 cache_control 断点" }),
+    ).toBeChecked();
+    expect(screen.getByText("保留 system 角色")).toBeInTheDocument();
+    expect(screen.getByLabelText("分类器 severity 拦截值")).toHaveValue("100");
+    expect(screen.getByText("提示词缓存路由")).toBeInTheDocument();
   });
 });

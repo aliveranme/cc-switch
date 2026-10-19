@@ -673,6 +673,9 @@ export function CodexFormFields({
   const hasRequestOverrides = Boolean(
     localProxyHeadersOverride.trim() || localProxyBodyOverride.trim(),
   );
+  const hasForkAdvancedValue =
+    Boolean(sessionAffinityHeader?.trim()) ||
+    (codexNativeResponsesTemplate ?? "full") !== "full";
   const hasAnyAdvancedValue =
     isCopilotPreset ||
     !!customUserAgent ||
@@ -681,6 +684,7 @@ export function CodexFormFields({
     supportsThinking ||
     supportsEffort ||
     promptCacheRouting !== "auto" ||
+    hasForkAdvancedValue ||
     !!maxOutputTokens ||
     isFullUrl;
   const [advancedExpanded, setAdvancedExpanded] = useState(
@@ -698,11 +702,32 @@ export function CodexFormFields({
     }
   }, [hasAnyAdvancedValue, isXaiOauthPreset]);
 
-  // Stack 布局的高级区（思考能力、Anthropic 专有项、User-Agent、请求覆盖）：填了 UA 或请求
-  // 覆盖才展开，其余多是预设自带的。
+  // Stack 布局的高级区（思考能力、Anthropic 专有项、User-Agent、请求覆盖、fork 缓存/目录模板项）：
+  // 填了非默认高级值时自动展开，其余多是预设自带的。
   const [stackAdvancedExpanded, setStackAdvancedExpanded] = useState(
-    isFullUrl || !!customUserAgent || hasRequestOverrides,
+    isFullUrl ||
+      !!customUserAgent ||
+      hasRequestOverrides ||
+      hasForkAdvancedValue ||
+      promptCacheRouting !== "auto",
   );
+  useEffect(() => {
+    if (
+      isFullUrl ||
+      !!customUserAgent ||
+      hasRequestOverrides ||
+      hasForkAdvancedValue ||
+      promptCacheRouting !== "auto"
+    ) {
+      setStackAdvancedExpanded(true);
+    }
+  }, [
+    isFullUrl,
+    customUserAgent,
+    hasRequestOverrides,
+    hasForkAdvancedValue,
+    promptCacheRouting,
+  ]);
 
   // 显示用的顺序。挪动默认那一行不算修改：没动过列表时保存仍是原来的顺序。
   const orderCatalogModels = (models: CodexCatalogModel[]) =>
@@ -1448,6 +1473,73 @@ export function CodexFormFields({
     </div>
   );
 
+  const sessionAffinityHeaderField = (
+    <div className="space-y-1">
+      <FormLabel htmlFor="codex-session-affinity-header">
+        {t("providerForm.sessionAffinityHeaderLabel", {
+          defaultValue: "会话亲和 Header",
+        })}
+      </FormLabel>
+      <Input
+        id="codex-session-affinity-header"
+        value={sessionAffinityHeader}
+        onChange={(event) => onSessionAffinityHeaderChange(event.target.value)}
+        placeholder="x-session-affinity"
+      />
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {t("providerForm.sessionAffinityHeaderHint", {
+          defaultValue:
+            "多实例网关需按会话固定路由到同一实例才能命中前缀缓存（Cloudflare Workers AI 为 x-session-affinity）。仅在客户端提供了会话 ID 时注入；留空关闭。",
+        })}
+      </p>
+    </div>
+  );
+
+  const nativeResponsesTemplateField = (
+    <div className="space-y-2">
+      <FormLabel htmlFor="codex-native-responses-template">
+        {t("codexConfig.nativeResponsesTemplateLabel", {
+          defaultValue: "NativeResponses 目录模板",
+        })}
+      </FormLabel>
+      <Select
+        value={codexNativeResponsesTemplate}
+        onValueChange={(value) =>
+          onCodexNativeResponsesTemplateChange(
+            value as CodexNativeResponsesTemplate,
+          )
+        }
+      >
+        <SelectTrigger
+          id="codex-native-responses-template"
+          aria-label={t("codexConfig.nativeResponsesTemplateLabel", {
+            defaultValue: "NativeResponses 目录模板",
+          })}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="full">
+            {t("codexConfig.nativeResponsesTemplateFull", {
+              defaultValue: "完整（推荐）",
+            })}
+          </SelectItem>
+          <SelectItem value="neutral">
+            {t("codexConfig.nativeResponsesTemplateNeutral", {
+              defaultValue: "中性（兼容优先）",
+            })}
+          </SelectItem>
+        </SelectContent>
+      </Select>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {t("codexConfig.nativeResponsesTemplateHint", {
+          defaultValue:
+            "原生 Responses 网关的模型目录模板。完整模板带 freeform apply_patch、web_search 与 low…ultra 六档思考等级；拒绝自定义工具的网关（MiMo、LongCat 等）收到会 400，请改用中性模板。仅影响直连原生 Responses 的供应商。",
+        })}
+      </p>
+    </div>
+  );
+
   const reasoningFields = (
     <>
       <div className="space-y-2">
@@ -1459,6 +1551,7 @@ export function CodexFormFields({
             defaultValue:
               "自动：只对确认兼容的上游发送 prompt_cache_key。开启：用于其他兼容网关。关闭：避免严格网关因未知字段返回 400。",
           }),
+          "codex-prompt-cache-routing",
         )}
         <Select
           value={promptCacheRouting}
@@ -1466,7 +1559,12 @@ export function CodexFormFields({
             onPromptCacheRoutingChange(value as PromptCacheRoutingMode)
           }
         >
-          <SelectTrigger>
+          <SelectTrigger
+            id="codex-prompt-cache-routing"
+            aria-label={t("codexConfig.promptCacheRoutingLabel", {
+              defaultValue: "提示词缓存路由",
+            })}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1942,10 +2040,14 @@ export function CodexFormFields({
   if (variant === "stack") {
     const showFormatFields = shouldShowSpeedTest && !isXaiOauthPreset;
     const showReasoning = isChatFormat && canEditReasoning;
-    // Copilot 不显示 UA 和请求覆盖，Responses 格式下高级区就空了。
+    const showNativeResponsesTemplate =
+      !isXaiOauthPreset && !isChatFormat && !isAnthropicFormat;
+    const showSessionAffinityHeader = !isXaiOauthPreset;
     const hasStackAdvancedContent =
       showFullUrlToggle ||
       (showFormatFields && isAnthropicFormat) ||
+      showNativeResponsesTemplate ||
+      showSessionAffinityHeader ||
       showReasoning ||
       userAgentAndOverrides !== null;
     return (
@@ -2038,12 +2140,27 @@ export function CodexFormFields({
                 isAnthropicFormat &&
                 impersonateClaudeCodeToggle}
               {showFormatFields && isAnthropicFormat && maxOutputTokensField}
+              {(showNativeResponsesTemplate || showSessionAffinityHeader) && (
+                <div
+                  className={cn(
+                    "space-y-3",
+                    (showFullUrlToggle ||
+                      (showFormatFields && isAnthropicFormat)) &&
+                      "border-t border-border pt-3",
+                  )}
+                >
+                  {showNativeResponsesTemplate && nativeResponsesTemplateField}
+                  {showSessionAffinityHeader && sessionAffinityHeaderField}
+                </div>
+              )}
               {showReasoning && (
                 <div
                   className={cn(
                     "space-y-3",
-                    showFormatFields &&
-                      isAnthropicFormat &&
+                    (showFullUrlToggle ||
+                      (showFormatFields && isAnthropicFormat) ||
+                      showNativeResponsesTemplate ||
+                      showSessionAffinityHeader) &&
                       "border-t border-border pt-3",
                   )}
                 >
@@ -2056,6 +2173,8 @@ export function CodexFormFields({
                     "space-y-3",
                     (showFullUrlToggle ||
                       (showFormatFields && isAnthropicFormat) ||
+                      showNativeResponsesTemplate ||
+                      showSessionAffinityHeader ||
                       showReasoning) &&
                       "border-t border-border pt-3",
                   )}
@@ -2287,180 +2406,30 @@ export function CodexFormFields({
               </div>
             )}
 
+            {!isXaiOauthPreset && (
+              <div
+                className={cn(
+                  "space-y-3",
+                  (shouldShowSpeedTest || isCopilotPreset) &&
+                    "border-t border-border pt-3",
+                )}
+              >
+                {!isChatFormat &&
+                  !isAnthropicFormat &&
+                  nativeResponsesTemplateField}
+                {sessionAffinityHeaderField}
+              </div>
+            )}
+
             {isChatFormat && canEditReasoning && (
               <div
                 className={cn(
                   "space-y-3",
-                  shouldShowSpeedTest && "border-t border-border pt-3",
+                  (shouldShowSpeedTest || !isXaiOauthPreset) &&
+                    "border-t border-border pt-3",
                 )}
               >
-                <div className="space-y-2">
-                  <FormLabel>
-                    {t("codexConfig.promptCacheRoutingLabel", {
-                      defaultValue: "提示词缓存路由",
-                    })}
-                  </FormLabel>
-                  <Select
-                    value={promptCacheRouting}
-                    onValueChange={(value) =>
-                      onPromptCacheRoutingChange(
-                        value as PromptCacheRoutingMode,
-                      )
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auto">
-                        {t("codexConfig.promptCacheRoutingAuto", {
-                          defaultValue: "自动（推荐）",
-                        })}
-                      </SelectItem>
-                      <SelectItem value="enabled">
-                        {t("codexConfig.promptCacheRoutingEnabled", {
-                          defaultValue: "开启",
-                        })}
-                      </SelectItem>
-                      <SelectItem value="disabled">
-                        {t("codexConfig.promptCacheRoutingDisabled", {
-                          defaultValue: "关闭",
-                        })}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    {t("codexConfig.promptCacheRoutingHint", {
-                      defaultValue:
-                        "自动模式仅对已确认兼容的上游发送 prompt_cache_key；开启可用于其他兼容网关，关闭可避免严格网关因未知字段返回 400。只使用客户端提供的稳定会话 ID。",
-                    })}
-                  </p>
-                </div>
-
-                <div className="space-y-1">
-                  <FormLabel htmlFor="codex-session-affinity-header">
-                    {t("providerForm.sessionAffinityHeaderLabel", {
-                      defaultValue: "会话亲和 Header",
-                    })}
-                  </FormLabel>
-                  <Input
-                    id="codex-session-affinity-header"
-                    value={sessionAffinityHeader}
-                    onChange={(event) =>
-                      onSessionAffinityHeaderChange(event.target.value)
-                    }
-                    placeholder="x-session-affinity"
-                  />
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    {t("providerForm.sessionAffinityHeaderHint", {
-                      defaultValue:
-                        "多实例网关需按会话固定路由到同一实例才能命中前缀缓存（Cloudflare Workers AI 为 x-session-affinity）。仅在客户端提供了会话 ID 时注入；留空关闭。",
-                    })}
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <FormLabel>
-                    {t("codexConfig.nativeResponsesTemplateLabel", {
-                      defaultValue: "NativeResponses 目录模板",
-                    })}
-                  </FormLabel>
-                  <Select
-                    value={codexNativeResponsesTemplate}
-                    onValueChange={(value) =>
-                      onCodexNativeResponsesTemplateChange(
-                        value as CodexNativeResponsesTemplate,
-                      )
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="full">
-                        {t("codexConfig.nativeResponsesTemplateFull", {
-                          defaultValue: "完整（推荐）",
-                        })}
-                      </SelectItem>
-                      <SelectItem value="neutral">
-                        {t("codexConfig.nativeResponsesTemplateNeutral", {
-                          defaultValue: "中性（兼容优先）",
-                        })}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    {t("codexConfig.nativeResponsesTemplateHint", {
-                      defaultValue:
-                        "原生 Responses 网关的模型目录模板。完整模板带 freeform apply_patch、web_search 与 low…ultra 六档思考等级；拒绝自定义工具的网关（MiMo、LongCat 等）收到会 400，请改用中性模板。仅影响直连原生 Responses 的供应商。",
-                    })}
-                  </p>
-                </div>
-
-                <div className="space-y-1">
-                  <FormLabel>
-                    {t("codexConfig.reasoningGroupTitle", {
-                      defaultValue: "思考能力",
-                    })}
-                  </FormLabel>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    {t("codexConfig.reasoningSectionHint", {
-                      defaultValue:
-                        "预设供应商已自动配置；自定义供应商会按名称/地址自动推断。仅当自动识别不准时才需手动覆盖。",
-                    })}
-                  </p>
-                </div>
-
-                <div className="flex items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <FormLabel>
-                      {t("codexConfig.reasoningModeToggle", {
-                        defaultValue: "支持思考模式",
-                      })}
-                    </FormLabel>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      {t("codexConfig.reasoningModeHint", {
-                        defaultValue:
-                          "上游 Chat Completions 接口支持开启或关闭 thinking 时启用。Kimi、GLM、Qwen 等通常属于这一类。",
-                      })}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={supportsThinking}
-                    onCheckedChange={handleReasoningThinkingChange}
-                    aria-label={t("codexConfig.reasoningModeToggle", {
-                      defaultValue: "支持思考模式",
-                    })}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between gap-4 border-t border-border-default pt-3">
-                  <div className="space-y-1">
-                    <FormLabel>
-                      {t("codexConfig.reasoningEffortToggle", {
-                        defaultValue: "支持思考等级",
-                      })}
-                    </FormLabel>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      {isGrokBuild
-                        ? t("grokBuild.reasoningEffortHint", {
-                            defaultValue:
-                              "上游支持 low/high/max 等思考深度控制时启用。启用后会自动启用思考模式，并把请求中的 reasoning effort 转成上游 Chat 参数。",
-                          })
-                        : t("codexConfig.reasoningEffortHint", {
-                            defaultValue:
-                              "上游支持 low/high/max 等思考深度控制时启用。启用后会自动启用思考模式，并把 Codex 的 reasoning.effort 转成上游 Chat 参数。",
-                          })}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={supportsEffort}
-                    onCheckedChange={handleReasoningEffortChange}
-                    aria-label={t("codexConfig.reasoningEffortToggle", {
-                      defaultValue: "支持思考等级",
-                    })}
-                  />
-                </div>
+                {reasoningFields}
               </div>
             )}
 
@@ -2468,7 +2437,9 @@ export function CodexFormFields({
               <div
                 className={cn(
                   "space-y-3",
-                  (shouldShowSpeedTest || (isChatFormat && canEditReasoning)) &&
+                  (shouldShowSpeedTest ||
+                    !isXaiOauthPreset ||
+                    (isChatFormat && canEditReasoning)) &&
                     "border-t border-border pt-3",
                 )}
               >

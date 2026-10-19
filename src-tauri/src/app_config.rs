@@ -447,6 +447,11 @@ impl AppType {
     /// - `Claude` / `ClaudeDesktop`: the backup IS the takeover signal (these rely on
     ///   the backup even during the short activation window before `enabled` is committed).
     /// - everything else (additive apps): only when the proxy is actively managing.
+    ///
+    /// NOTE: Retained for documentation & regression matrix tests. Since the 2026-10-03
+    /// `live::engine` / `mode::controller` architecture migration, active proxy mode is
+    /// managed explicitly by `mode::controller::state`.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn takeover_active(&self, has_backup: bool, live_taken_over: bool) -> bool {
         match self {
             AppType::Codex | AppType::Gemini => live_taken_over,

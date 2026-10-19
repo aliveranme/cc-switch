@@ -106,6 +106,37 @@ fn anthropic_document_to_responses_part(block: &Value) -> Option<Value> {
                 "filename":filename
             }))
         }
+        Some("text") => {
+            let data = source.get("data").and_then(Value::as_str)?;
+            if data.is_empty() {
+                return None;
+            }
+            Some(json!({"type": "input_text", "text": data}))
+        }
+        Some("content") => {
+            let text = match source.get("content") {
+                Some(Value::String(s)) if !s.is_empty() => s.clone(),
+                Some(Value::Array(items)) => {
+                    let joined: Vec<&str> = items
+                        .iter()
+                        .filter_map(|item| {
+                            if item.get("type").and_then(Value::as_str) == Some("text") {
+                                item.get("text").and_then(Value::as_str)
+                            } else {
+                                None
+                            }
+                        })
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if joined.is_empty() {
+                        return None;
+                    }
+                    joined.join("\n")
+                }
+                _ => return None,
+            };
+            Some(json!({"type": "input_text", "text": text}))
+        }
         _ => None,
     }
 }
@@ -1896,7 +1927,9 @@ pub fn anthropic_to_responses(
         None
     };
     let mut hosted_web_search_names = HashSet::new();
+    let mut surviving_function_names = HashSet::new();
     let mut hosted_web_search_max_uses: Option<u64> = None;
+    let tools_array_provided = body.get("tools").is_some_and(Value::is_array);
     if let Some(tools) = body.get("tools").and_then(|t| t.as_array()) {
         let mut response_tools = Vec::new();
         for tool in tools
@@ -1925,6 +1958,14 @@ pub fn anthropic_to_responses(
                 if forced_hosted_web_search_name.is_some() {
                     continue;
                 }
+                let name = tool
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("");
+                if name.is_empty() {
+                    continue;
+                }
                 let mut response_tool = json!({
                     "type": "function",
                     // Anthropic 工具 schema 允许可选参数（required 是任意子集），而
@@ -1933,7 +1974,7 @@ pub fn anthropic_to_responses(
                     // Claude Code Agent 的可选 isolation 被强制输出即此形态）。
                     // 显式 false 保留客户端 schema 的可选语义。
                     "strict": false,
-                    "name": tool.get("name").and_then(Value::as_str).unwrap_or(""),
+                    "name": name,
                 });
                 // 同 transform.rs：缺失的 description 省略而非输出 null，
                 // 否则严格上游会拒绝整个请求。
@@ -1943,6 +1984,7 @@ pub fn anthropic_to_responses(
                 response_tool["parameters"] = super::transform::clean_schema(
                     tool.get("input_schema").cloned().unwrap_or(json!({})),
                 );
+                surviving_function_names.insert(name.to_string());
                 response_tools.push(response_tool);
             }
         }
@@ -1984,19 +2026,33 @@ pub fn anthropic_to_responses(
     }
 
     if let Some(v) = body.get("tool_choice") {
-        result["tool_choice"] =
-            map_tool_choice_to_responses(v, &hosted_web_search_names, is_codex_oauth);
-        if is_codex_oauth {
-            if let Some(disable_parallel) =
-                v.get("disable_parallel_tool_use").and_then(Value::as_bool)
-            {
-                result["parallel_tool_calls"] = json!(!disable_parallel);
+        let all_tools_filtered_out =
+            tools_array_provided && result.get("tools").is_none() && !is_codex_oauth;
+        if !all_tools_filtered_out {
+            let mut mapped_choice =
+                map_tool_choice_to_responses(v, &hosted_web_search_names, is_codex_oauth);
+            if tools_array_provided && v.get("type").and_then(Value::as_str) == Some("tool") {
+                if let Some(target_name) = v.get("name").and_then(Value::as_str) {
+                    if !hosted_web_search_names.contains(target_name)
+                        && !surviving_function_names.contains(target_name)
+                    {
+                        mapped_choice = json!("auto");
+                    }
+                }
             }
-        } else if v.get("disable_parallel_tool_use").and_then(Value::as_bool) == Some(true) {
-            // Non-OAuth: preserve explicit serial-execution constraint.
-            // Anthropic `disable_parallel_tool_use: true` maps to Responses
-            // `parallel_tool_calls: false`.
-            result["parallel_tool_calls"] = json!(false);
+            result["tool_choice"] = mapped_choice;
+            if is_codex_oauth {
+                if let Some(disable_parallel) =
+                    v.get("disable_parallel_tool_use").and_then(Value::as_bool)
+                {
+                    result["parallel_tool_calls"] = json!(!disable_parallel);
+                }
+            } else if v.get("disable_parallel_tool_use").and_then(Value::as_bool) == Some(true) {
+                // Non-OAuth: preserve explicit serial-execution constraint.
+                // Anthropic `disable_parallel_tool_use: true` maps to Responses
+                // `parallel_tool_calls: false`.
+                result["parallel_tool_calls"] = json!(false);
+            }
         }
     }
 
@@ -2285,13 +2341,19 @@ pub(crate) fn build_anthropic_usage_from_responses(usage: Option<&Value>) -> Val
         result["cache_creation_input_tokens"] = json!(cache_write);
     }
 
-    // Step 2: Direct Anthropic-style fields override (authoritative if present)
-    // These preserve cache tokens even if input/output_tokens are missing
+    // Step 2: Direct Anthropic-style fields override (authoritative if non-zero, or when nested details were absent)
+    // These preserve cache tokens even if input/output_tokens are missing, while preventing
+    // gateway stub 0 fields from clobbering real nested cached_tokens / cache_write_tokens.
     if let Some(v) = u.get("cache_read_input_tokens") {
-        result["cache_read_input_tokens"] = v.clone();
+        if v.as_u64().is_some_and(|n| n > 0) || result.get("cache_read_input_tokens").is_none() {
+            result["cache_read_input_tokens"] = v.clone();
+        }
     }
     if let Some(v) = u.get("cache_creation_input_tokens") {
-        result["cache_creation_input_tokens"] = v.clone();
+        if v.as_u64().is_some_and(|n| n > 0) || result.get("cache_creation_input_tokens").is_none()
+        {
+            result["cache_creation_input_tokens"] = v.clone();
+        }
     }
     if let Some(v) = u.get("cache_creation") {
         result["cache_creation"] = v.clone();
@@ -2312,6 +2374,17 @@ pub(crate) fn build_anthropic_usage_from_responses(usage: Option<&Value>) -> Val
         .unwrap_or(0);
     if cached > 0 || cache_creation > 0 {
         result["input_tokens"] = json!(input.saturating_sub(cached).saturating_sub(cache_creation));
+    }
+
+    let reasoning_tokens = u
+        .pointer("/output_tokens_details/reasoning_tokens")
+        .or_else(|| u.pointer("/completion_tokens_details/reasoning_tokens"))
+        .and_then(Value::as_u64)
+        .filter(|&v| v > 0);
+    if let Some(rt) = reasoning_tokens {
+        result["output_tokens_details"] = json!({
+            "thinking_tokens": rt
+        });
     }
 
     result
@@ -2758,6 +2831,41 @@ pub(crate) fn responses_to_anthropic_with_web_search_options(
                         "Function call arguments for '{name}' must be a JSON object"
                     )));
                 }
+                let input = sanitize_anthropic_tool_use_input(name, input);
+
+                content.push(json!({
+                    "type": "tool_use",
+                    "id": call_id,
+                    "name": name,
+                    "input": input
+                }));
+                has_tool_use = true;
+            }
+
+            "custom_tool_call" => {
+                let call_id = item
+                    .get("call_id")
+                    .or_else(|| item.get("id"))
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("");
+                let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let raw_input = item.get("input").or_else(|| item.get("arguments"));
+                let input = match raw_input {
+                    Some(Value::Object(_)) => raw_input.cloned().unwrap_or_else(|| json!({})),
+                    Some(Value::String(s)) => {
+                        let trimmed = s.trim();
+                        if trimmed.is_empty() {
+                            json!({})
+                        } else if let Ok(v @ Value::Object(_)) =
+                            serde_json::from_str::<Value>(trimmed)
+                        {
+                            v
+                        } else {
+                            json!({ "input": s })
+                        }
+                    }
+                    _ => json!({}),
+                };
                 let input = sanitize_anthropic_tool_use_input(name, input);
 
                 content.push(json!({
@@ -5716,5 +5824,98 @@ mod tests {
         assert_eq!(result["output_tokens"], json!(0));
         assert_eq!(result["cache_read_input_tokens"], json!(60));
         assert_eq!(result["cache_creation_input_tokens"], json!(20));
+    }
+
+    #[test]
+    fn test_build_usage_preserves_nested_cache_against_stub_zero_and_maps_reasoning() {
+        let result = build_anthropic_usage_from_responses(Some(&json!({
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "input_tokens_details": {
+                "cached_tokens": 70,
+                "cache_write_tokens": 10
+            },
+            "output_tokens_details": {
+                "reasoning_tokens": 25
+            },
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+        })));
+        assert_eq!(result["input_tokens"], json!(20));
+        assert_eq!(result["cache_read_input_tokens"], json!(70));
+        assert_eq!(result["cache_creation_input_tokens"], json!(10));
+        assert_eq!(
+            result["output_tokens_details"]["thinking_tokens"],
+            json!(25)
+        );
+    }
+
+    #[test]
+    fn test_anthropic_to_responses_document_text_and_dangling_tool_choice() {
+        let input = json!({
+            "model": "gpt-5",
+            "max_tokens": 1024,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "text",
+                            "data": "inline doc text"
+                        }
+                    },
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "content",
+                            "content": [{"type": "text", "text": "block doc text"}]
+                        }
+                    }
+                ]
+            }],
+            "tools": [
+                {"type": "BatchTool", "name": "BatchTool"},
+                {"name": "valid_tool", "input_schema": {"type": "object"}}
+            ],
+            "tool_choice": {"type": "tool", "name": "BatchTool"}
+        });
+        let result = anthropic_to_responses(input, None, false, false).unwrap();
+        let content = result["input"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "input_text");
+        assert_eq!(content[0]["text"], "inline doc text");
+        assert_eq!(content[1]["type"], "input_text");
+        assert_eq!(content[1]["text"], "block doc text");
+        assert_eq!(result["tool_choice"], json!("auto"));
+    }
+
+    #[test]
+    fn test_responses_to_anthropic_maps_custom_tool_call() {
+        let resp = json!({
+            "id": "resp_custom",
+            "model": "gpt-5",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "custom_tool_call",
+                    "call_id": "call_patch_1",
+                    "name": "apply_patch",
+                    "input": "*** Begin Patch\n*** End Patch"
+                }
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        });
+        let anthropic = responses_to_anthropic(resp).unwrap();
+        assert_eq!(anthropic["stop_reason"], "tool_use");
+        assert_eq!(
+            anthropic["content"][0],
+            json!({
+                "type": "tool_use",
+                "id": "call_patch_1",
+                "name": "apply_patch",
+                "input": {"input": "*** Begin Patch\n*** End Patch"}
+            })
+        );
     }
 }

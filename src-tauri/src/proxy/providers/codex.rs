@@ -469,6 +469,34 @@ pub fn resolve_codex_catalog_tool_profile(
     CodexCatalogToolProfile::from_api_format(api_format)
 }
 
+/// Resolve the Codex responses template for a provider.
+///
+/// Falls back to `CodexResponsesTemplate::Full` when unspecified or unrecognized,
+/// preserving full capability (gpt-5.6-sol template: freeform apply_patch, web_search,
+/// 6 reasoning tiers) for deepseek/openrouter relays, while allowing explicit opt-in to
+/// `CodexResponsesTemplate::Neutral` via `meta.codex_native_responses_template`.
+pub fn resolve_codex_responses_template(
+    provider: &Provider,
+) -> crate::codex_config::CodexResponsesTemplate {
+    use crate::codex_config::CodexResponsesTemplate;
+    let template_meta = provider
+        .meta
+        .as_ref()
+        .and_then(|m| m.codex_native_responses_template.as_deref())
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("codexNativeResponsesTemplate")
+                .or_else(|| {
+                    provider
+                        .settings_config
+                        .get("codex_native_responses_template")
+                })
+                .and_then(|v| v.as_str())
+        });
+    CodexResponsesTemplate::from_meta_value(template_meta)
+}
+
 /// Extract the real upstream model configured for a Codex provider.
 pub fn codex_provider_upstream_model(provider: &Provider) -> Option<String> {
     provider
@@ -2501,5 +2529,44 @@ wire_api = "responses"
 "#
         }));
         assert!(!provider_needs_responses_namespace_flatten(&other));
+    }
+
+    #[test]
+    fn test_resolve_codex_responses_template() {
+        use crate::codex_config::CodexResponsesTemplate;
+
+        let mut provider = create_provider(json!({ "auth": {}, "config": "" }));
+        assert_eq!(
+            resolve_codex_responses_template(&provider),
+            CodexResponsesTemplate::Full
+        );
+
+        provider.meta = Some(crate::provider::ProviderMeta {
+            codex_native_responses_template: Some("neutral".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(
+            resolve_codex_responses_template(&provider),
+            CodexResponsesTemplate::Neutral
+        );
+
+        provider.meta = Some(crate::provider::ProviderMeta {
+            codex_native_responses_template: Some("full".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(
+            resolve_codex_responses_template(&provider),
+            CodexResponsesTemplate::Full
+        );
+
+        let provider_settings_fallback = create_provider(json!({
+            "auth": {},
+            "config": "",
+            "codexNativeResponsesTemplate": "neutral"
+        }));
+        assert_eq!(
+            resolve_codex_responses_template(&provider_settings_fallback),
+            CodexResponsesTemplate::Neutral
+        );
     }
 }

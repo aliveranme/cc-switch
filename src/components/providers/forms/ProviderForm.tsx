@@ -2230,12 +2230,18 @@ function ProviderFormFull({
     if (value === "custom") {
       setActivePreset(null);
       form.reset(defaultValues);
+      setPromptCacheRouting("auto");
+      setSessionAffinityHeader("");
+      setPreserveCacheControl(false);
+      setMidConversationSystemPolicy("rewrite_user");
+      setClassifierSeverityBlockValue("");
+      setCodexNativeResponsesTemplate("full");
+      setLocalIsFullUrl(false);
 
       if (appId === "codex") {
         const template = getCodexCustomTemplate();
         resetCodexConfig(template.auth, template.config);
         setCodexChatReasoning({});
-        setPromptCacheRouting("auto");
         setCodexCopilotApiFormat("auto");
         setLocalCodexApiFormat(
           codexApiFormatFromWireApi(extractCodexWireApi(template.config)) ??
@@ -2266,6 +2272,24 @@ function ProviderFormFull({
       return;
     }
 
+    const presetMeta =
+      (entry.preset as { meta?: Partial<ProviderMeta> } & Partial<ProviderMeta>)
+        .meta ?? (entry.preset as Partial<ProviderMeta>);
+    setPromptCacheRouting(presetMeta.promptCacheRouting ?? "auto");
+    setSessionAffinityHeader(presetMeta.sessionAffinityHeader ?? "");
+    setPreserveCacheControl(presetMeta.preserveCacheControl ?? false);
+    setMidConversationSystemPolicy(
+      presetMeta.midConversationSystemPolicy ?? "rewrite_user",
+    );
+    setClassifierSeverityBlockValue(
+      presetMeta.classifierSeverityBlockValue !== undefined
+        ? String(presetMeta.classifierSeverityBlockValue)
+        : "",
+    );
+    setCodexNativeResponsesTemplate(
+      presetMeta.codexNativeResponsesTemplate ?? "full",
+    );
+
     setActivePreset({
       id: value,
       category: entry.preset.category,
@@ -2280,7 +2304,9 @@ function ProviderFormFull({
 
       resetCodexConfig(auth, config, preset.modelCatalog ?? []);
       setCodexChatReasoning(preset.codexChatReasoning ?? {});
-      setPromptCacheRouting(preset.promptCacheRouting ?? "auto");
+      setPromptCacheRouting(
+        preset.promptCacheRouting ?? presetMeta.promptCacheRouting ?? "auto",
+      );
       setCodexCopilotApiFormat("auto");
       setLocalCodexApiFormat(
         preset.apiFormat ??

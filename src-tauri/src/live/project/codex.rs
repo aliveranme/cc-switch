@@ -377,6 +377,13 @@ fn custom_route(
     if non_empty_str(table.get("name")).is_none() {
         table.insert("name", toml_edit::value(fallback_name));
     }
+    if let Some(wire_api) = table.get("wire_api").and_then(Item::as_str) {
+        if wire_api.eq_ignore_ascii_case("chat")
+            || wire_api.eq_ignore_ascii_case("chat_completions")
+        {
+            table.insert("wire_api", toml_edit::value("responses"));
+        }
+    }
     let key = row_key(doc, Some(&table), input);
     let auth = match declared_auth(&table) {
         Some(declared) => declared,
@@ -1224,6 +1231,24 @@ mod tests {
                 project(&model_only).unwrap().route,
                 Route::Default
             ));
+        }
+    }
+
+    #[test]
+    fn custom_route_normalizes_chat_wire_api_to_responses() {
+        for wire in ["chat", "chat_completions", "CHAT", "CHAT_COMPLETIONS"] {
+            let config = format!(
+                "model_provider = \"my_custom\"\nmodel = \"m\"\n\n[model_providers.my_custom]\nname = \"Custom\"\nbase_url = \"https://relay.example/v1\"\nwire_api = \"{wire}\"\n"
+            );
+            let target = row(json!({ "OPENAI_API_KEY": "sk-key" }), &config);
+            let projection = project(&target).expect("project succeeds");
+            let (table, auth) = custom(&projection);
+            assert_eq!(auth, RouteAuth::Bearer);
+            assert_eq!(
+                table.get("wire_api").and_then(Item::as_str),
+                Some("responses"),
+                "wire_api {wire} should be normalized to responses for Codex 0.148+ compatibility"
+            );
         }
     }
 }

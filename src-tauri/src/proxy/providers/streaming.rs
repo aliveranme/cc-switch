@@ -1043,16 +1043,40 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                     "[Claude/OpenRouter] 上游对流式请求返回了非 SSE 响应，转换器零产出；\
                      发送 error 事件避免客户端静默挂起"
                 );
+                let parsed = serde_json::from_str::<Value>(buffer.trim()).ok();
+                let upstream_error = parsed
+                    .as_ref()
+                    .and_then(|v| v.get("error"))
+                    .filter(|e| !e.is_null());
+                let error_type = upstream_error
+                    .and_then(|e| e.get("type").or_else(|| e.get("code")))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or("api_error");
+                let error_message = upstream_error
+                    .and_then(|e| {
+                        e.as_str().or_else(|| {
+                            e.get("message")
+                                .or_else(|| e.get("detail"))
+                                .and_then(Value::as_str)
+                        })
+                    })
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or(
+                        "Upstream returned a non-streaming response to a streaming request; \
+                                    the proxy could not convert it to Anthropic SSE.",
+                    );
                 let error_event = json!({
                     "type": "error",
                     "error": {
-                        "type": "api_error",
-                        "message": "Upstream returned a non-streaming response to a streaming request; \
-                                    the proxy could not convert it to Anthropic SSE.",
+                        "type": error_type,
+                        "message": error_message,
                     }
                 });
-                let sse_data = format!("event: error\ndata: {}\n\n",
-                    serde_json::to_string(&error_event).unwrap_or_default());
+                let sse_data = format!(
+                    "event: error\ndata: {}\n\n",
+                    serde_json::to_string(&error_event).unwrap_or_default()
+                );
                 yield Ok(Bytes::from(sse_data));
             }
         }
@@ -1079,15 +1103,19 @@ fn extract_cache_read_tokens(usage: &Usage) -> Option<u32> {
 }
 
 /// Extract cache-write tokens from direct compatibility fields or OpenAI details.
+/// 每环同样要求「存在且非 0」优先，避免显式桩 0 短路 nested cache_write_tokens。
 fn extract_cache_write_tokens(usage: &Usage) -> Option<u32> {
-    if let Some(value) = usage.cache_creation_input_tokens {
-        return Some(value);
-    }
     usage
-        .prompt_tokens_details
-        .as_ref()
-        .map(|details| details.cache_write_tokens)
-        .filter(|value| *value > 0)
+        .cache_creation_input_tokens
+        .filter(|&value| value > 0)
+        .or_else(|| {
+            usage
+                .prompt_tokens_details
+                .as_ref()
+                .map(|details| details.cache_write_tokens)
+                .filter(|&value| value > 0)
+        })
+        .or(usage.cache_creation_input_tokens)
 }
 
 /// 映射停止原因
@@ -2679,5 +2707,32 @@ mod tests {
         )
         .await
         .expect("a terminal response must not await another upstream chunk");
+    }
+
+    #[tokio::test]
+    async fn test_non_sse_error_envelope_preserves_upstream_error_message() {
+        let input = r#"{"error":{"type":"rate_limit_error","message":"Quota exceeded for model"}}"#;
+        let events = collect_anthropic_events(input).await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "error");
+        assert_eq!(events[0]["error"]["type"], "rate_limit_error");
+        assert_eq!(events[0]["error"]["message"], "Quota exceeded for model");
+    }
+
+    #[test]
+    fn test_extract_cache_write_tokens_ignores_stub_zero_in_favor_of_nested_write_tokens() {
+        let usage = Usage {
+            prompt_tokens: 500,
+            completion_tokens: 20,
+            prompt_tokens_details: Some(PromptTokensDetails {
+                cached_tokens: 0,
+                cache_write_tokens: 180,
+            }),
+            completion_tokens_details: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: Some(0),
+            prompt_cache_hit_tokens: None,
+        };
+        assert_eq!(extract_cache_write_tokens(&usage), Some(180));
     }
 }

@@ -182,3 +182,125 @@ describe("CodexFormFields model fetch identity", () => {
     expect(screen.queryByRole("button", { name: "Select model" })).toBeNull();
   });
 });
+
+function renderCustomCodexForm(overrides: Partial<CodexFormFieldsProps> = {}) {
+  const props: CodexFormFieldsProps = {
+    codexApiKey: "sk-test",
+    onApiKeyChange: vi.fn(),
+    category: "third_party",
+    shouldShowApiKeyLink: false,
+    websiteUrl: "",
+    codexBaseUrl: "https://api.example.com",
+    onBaseUrlChange: vi.fn(),
+    isFullUrl: false,
+    onFullUrlChange: vi.fn(),
+    isEndpointModalOpen: false,
+    onEndpointModalToggle: vi.fn(),
+    autoSelect: false,
+    onAutoSelectChange: vi.fn(),
+    codexModel: "",
+    onModelChange: vi.fn(),
+    apiFormat: "openai_responses",
+    onApiFormatChange: vi.fn(),
+    anthropicAuthField: "ANTHROPIC_AUTH_TOKEN",
+    onAnthropicAuthFieldChange: vi.fn(),
+    impersonateClaudeCode: false,
+    onImpersonateClaudeCodeChange: vi.fn(),
+    maxOutputTokens: "",
+    onMaxOutputTokensChange: vi.fn(),
+    codexChatReasoning: {},
+    onCodexChatReasoningChange: vi.fn(),
+    promptCacheRouting: "auto",
+    onPromptCacheRoutingChange: vi.fn(),
+    sessionAffinityHeader: "",
+    onSessionAffinityHeaderChange: vi.fn(),
+    codexNativeResponsesTemplate: "full",
+    onCodexNativeResponsesTemplateChange: vi.fn(),
+    speedTestEndpoints: [],
+    customUserAgent: "",
+    onCustomUserAgentChange: vi.fn(),
+    localProxyHeadersOverride: "",
+    onLocalProxyHeadersOverrideChange: vi.fn(),
+    localProxyBodyOverride: "",
+    onLocalProxyBodyOverrideChange: vi.fn(),
+    shouldShowSpeedTest: true,
+    ...overrides,
+  };
+
+  return render(
+    <FormShell>
+      <CodexFormFields {...props} />
+    </FormShell>,
+  );
+}
+
+describe("CodexFormFields fork advanced fields", () => {
+  it("auto-expands advanced options when sessionAffinityHeader is set and shows NativeResponses template in openai_responses mode", () => {
+    renderCustomCodexForm({
+      apiFormat: "openai_responses",
+      sessionAffinityHeader: "x-session-affinity",
+    });
+
+    expect(screen.getByLabelText("会话亲和 Header")).toHaveValue(
+      "x-session-affinity",
+    );
+    expect(
+      screen.getByLabelText("NativeResponses 目录模板"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("思考能力")).toBeNull();
+  });
+
+  it("auto-expands advanced options when codexNativeResponsesTemplate is neutral", () => {
+    renderCustomCodexForm({
+      apiFormat: "openai_responses",
+      codexNativeResponsesTemplate: "neutral",
+    });
+
+    expect(
+      screen.getByLabelText("NativeResponses 目录模板"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("中性（兼容优先）")).toBeInTheDocument();
+  });
+
+  it("hides NativeResponses template in openai_chat mode while keeping sessionAffinityHeader and reasoning fields", () => {
+    renderCustomCodexForm({
+      apiFormat: "openai_chat",
+      sessionAffinityHeader: "x-session-affinity",
+    });
+
+    expect(screen.getByLabelText("会话亲和 Header")).toHaveValue(
+      "x-session-affinity",
+    );
+    expect(screen.queryByLabelText("NativeResponses 目录模板")).toBeNull();
+    expect(screen.getByText("思考能力")).toBeInTheDocument();
+  });
+
+  it("exposes NativeResponses template and sessionAffinityHeader in stack variant", () => {
+    const { unmount } = renderCustomCodexForm({
+      variant: "stack",
+      apiFormat: "openai_responses",
+      sessionAffinityHeader: "x-stack-affinity",
+      codexNativeResponsesTemplate: "neutral",
+    });
+
+    expect(screen.getByLabelText("会话亲和 Header")).toHaveValue(
+      "x-stack-affinity",
+    );
+    expect(
+      screen.getByLabelText("NativeResponses 目录模板"),
+    ).toBeInTheDocument();
+    unmount();
+
+    renderCustomCodexForm({
+      variant: "stack",
+      apiFormat: "openai_chat",
+      sessionAffinityHeader: "x-stack-chat",
+    });
+
+    expect(screen.getByLabelText("会话亲和 Header")).toHaveValue(
+      "x-stack-chat",
+    );
+    expect(screen.queryByLabelText("NativeResponses 目录模板")).toBeNull();
+    expect(screen.getByText("思考能力")).toBeInTheDocument();
+  });
+});

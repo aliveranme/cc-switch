@@ -460,10 +460,10 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 
 ### 4.10 接管（takeover）判定策略（app_config.rs / services/proxy.rs / live.rs）
 
-> **状态（2026-10-03）**：已由上游新架构取代——`mode::controller` 用显式 mode 状态
+> **状态（2026-10-03，2026-10-19 复核）**：已由上游新架构取代——`mode::controller` 用显式 mode 状态
 > （`mode/state`/`mode/current`）与 `reject_unsupported_official` 决定写入路径，不再依赖
-> “backup 存在即接管” 的启发式；`AppType::takeover_active` 已无生产调用点（仅剩
-> `app_config.rs` 的单测与 `takeover_active_policy_matrix`），待后续清理。原文保留供参考。
+> “backup 存在即接管” 的启发式；`AppType::takeover_active` 已标为 `#[cfg(any(test, feature = "test-hooks"))]`
+> 仅供单测与策略矩阵参考，不再暴露于生产构建。原文保留供参考。
 
 - **上游**：`get_takeover_status` 简单布尔，无 per-app 语义。
 - **fork**：统一收敛到 `AppType::takeover_active(has_backup, live_taken_over)`：
@@ -513,9 +513,9 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 
 ### 4.13 NativeResponses 模板保留完整能力（gpt-5.6-sol vs 上游中性模板）
 
-> **状态（2026-10-03）**：随 4.19 一并转出——`CodexResponsesTemplate` 与模板选择参数链已随旧
-> live 写入路径删除；`gpt5_6_sol_template.json` 仍入库但当前无生产引用
-> （上游新引擎默认使用 `codex_native_responses_template.json`）。原文保留供回植参考。
+> **状态（2026-10-19 重新接通）**：已于 2026-10-19 重新在 `live::project::codex` 新架构上接通——
+> `codex_config::CodexResponsesTemplate::{Full, Neutral}` + `load_codex_native_responses_template(template)`，
+> 默认使用 `gpt5_6_sol_template.json`（Full 模板），第三方网关如需兼容性可切 `neutral`（见 4.19）。
 
 - **上游**（40cac1a6）：NativeResponses 用中性模板 `codex_native_responses_template.json`
   （无 apply_patch、web_search，仅 none/high 两档 reasoning），因 MiMo 等网关拒绝
@@ -634,18 +634,17 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 
 ### 4.19 NativeResponses 目录模板可配（meta `codexNativeResponsesTemplate`）
 
-> **状态（2026-10-03）**：**转出**——`CodexResponsesTemplate::{Full,Neutral}`、
-> `load_codex_native_responses_template(template)`、`resolve_codex_responses_template` 与
-> `prepare_codex_live_config_text_with_optional_catalog` 随旧路径删除；provider meta
-> 字段 `codexNativeResponsesTemplate` 保留在 `provider.rs`（未读，兼容旧数据）。
-> 如需在 `mode`/`live` 新引擎上恢复该开关，应在目录构建处挂钩（见第 5 节待办）。原文保留供回植参考。
+> **状态（2026-10-19 重新接通）**：已于 2026-10-19 回植并重新在 `live::project::codex` 架构下接通：
+> `CodexResponsesTemplate::{Full,Neutral}`、`load_codex_native_responses_template(template)`、
+> `resolve_codex_responses_template(provider)`（在 `proxy/providers/codex.rs`，与 `resolve_codex_catalog_tool_profile` 并列）
+> 经 `codex_direct.rs` 的 `plan_codex_model_catalog_with_template` 与 `CodexCatalogRow.responses_template`
+> 显式传递给目录构建层。前端 `CodexFormFields` 同步修复门控并在原生 Responses 视图下暴露选择器。
 
 - **默认**：`full`（gpt-5.6-sol 全量模板，即 4.13 的 fork 行为）。
-- **`neutral`**：上游中性模板——该文件（`codex_native_responses_template.json`）本次**恢复入库**；无 freeform `apply_patch` / `web_search`，仅 none/high 两档 reasoning。
+- **`neutral`**：上游中性模板（`codex_native_responses_template.json`）；无 freeform `apply_patch` / `web_search`，仅 none/high 两档 reasoning。
 - **原因**：4.13 把 MiMo/LongCat 等“拒绝 `type=="custom"` 工具”的网关推给 ProxyChat 路径规避；给出开关后这类网关可继续走原生 Responses，代价是能力降级（用户自选）。
-- **实现**：`codex_config::CodexResponsesTemplate::{Full,Neutral}` + `load_codex_native_responses_template(template)`；`resolve_codex_responses_template(provider)`（在 `proxy/providers/codex.rs`，与 `resolve_codex_catalog_tool_profile` 并列）经 `prepare_codex_live_config_text_with_optional_catalog` / `write_codex_provider_live_with_catalog` 的**显式参数**下传（4 个 live 写入点传 provider 选定值；无 Provider 在手的逐字恢复路径用默认 `Full`）。ProxyChat profile 不受影响（走独立模板路径）。
-- **对应测试**：`codex_responses_template_from_meta_value_maps_neutral_only`、`neutral_template_drops_freeform_tools_and_reasoning_tiers`、`native_catalog_uses_selected_responses_template`。
-- ⚠️ 同步注意：上游若给 `prepare_codex_config_text_with_model_catalog` 加新调用点，必须一并传 template 参数，否则静默回退 `Full`（3 参数包装已标 `#[allow(dead_code)]`，不再供生产使用）。
+- **实现**：`codex_config::CodexResponsesTemplate::{Full,Neutral}` + `load_codex_native_responses_template(template)`；`resolve_codex_responses_template(provider)`（在 `proxy/providers/codex.rs`）在 `codex_direct.rs` 直连和 Stack 聚合目录中下传；单测中无 Provider 在手的逐字恢复路径用默认 `Full`。
+- **对应测试**：`codex_responses_template_from_meta_value_maps_neutral_only`、`neutral_template_drops_freeform_tools_and_reasoning_tiers`、`native_catalog_uses_selected_responses_template`、`test_resolve_codex_responses_template`。
 
 ### 4.20 截断流终态：fork 补 `end_turn` vs 上游「不发任何终止事件」
 
@@ -938,6 +937,46 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   `…_recognize_an_official_repo_written_as_a_git_url` / `…_stay_within_the_schema_limit`、
   `git_urls_are_reduced_to_owner_and_repo`、
   `claude_desktop_apply_writes_the_official_marketplaces`。
+
+### 4.32 协议转换、分类器与架构规范性深度加固（2026-10-19）
+
+针对本 fork 的四向协议转换桥（Anthropic Messages ↔ OpenAI Chat Completions ↔ OpenAI Responses ↔ Google Gemini `generateContent`）、安全分类器与前端表单交互做全链路深度审计，按最新各端官方 API 规范修复边界缺陷：
+
+1. **OpenAI Responses `AllowedRequestTools` 扩展**（`codex_chat_history.rs`）：
+   - 支持带命名空间的工具名匹配（如 `custom.apply_patch` 匹配 `apply_patch`）。
+   - 官方 Responses API 深度集成 `tool_search` 机制：当请求允许 `tool_search` 时，自动放行 `tool_search_output` 内容块；当客户端通过 `input[].additional_tools` 动态补充运行时工具时，解析器自动将补充的工具名收录进允许工具白名单，彻底解决多工具协同与动态插件执行时的工具白名单误拒。
+
+2. **Google Gemini Native 转换双向加固**（`transform_gemini.rs` & `streaming_gemini.rs`）：
+   - **服务端内置工具过滤**：过滤非 custom / 无 input_schema 且非标准名字的服务端工具（如 `BatchTool`），防止 Gemini 网关因未知类型拒收 400。
+   - **`tool_choice` 悬空降级**：若用户指定 `tool_choice: { type: "tool", name: "..." }` 但目标函数被过滤，自动降级为 `AUTO`，避免上游 400。
+   - **思考块往返**：响应中 `part.thought == true` 的思维链部件正确映射为 Anthropic `thinking` 块（流式下发送 `thinking_delta`），不污染普通 `text`。
+   - **文档源支持**：支持 Anthropic document source 的 `text` 与 `content` 字符串变体（转为 `inlineData` / `text`），与既有 `base64` 并存。
+   - **Token 三线守恒**：输入 token 统计计入 `toolUsePromptTokenCount`；输出 token 统计计入 `output_tokens_details.thinking_tokens`，实现用量精准记账。
+
+3. **OpenAI Chat 转换双向加固**（`transform.rs`、`streaming.rs`、`transform_codex_chat.rs`）：
+   - **工具过滤与降级**：`anthropic_to_openai` 过滤无名或非标准 custom 工具；若 `tool_choice` 所指工具被过滤，平滑降级为 `auto`。
+   - **文档多源格式**：`anthropic_document_to_chat_message` 支持 `text` / `content` 直接内联文本，避免误判缺失。
+   - **缓存写入桩 0 穿透**：当网关在 `prompt_tokens_details.cache_write_tokens` 返回硬编码桩值 `0` 时，支持穿透并回落提取 `cache_creation_input_tokens` 真实值，防止中转网关用量置零。
+   - **错误响应保真**：对非 SSE 的上游 JSON 错误体，完整保留上游返回的真实 `message`、`code`、`type` 与 `param`，拒绝伪造全零成功。
+
+4. **OpenAI Responses 转换双向加固**（`transform_responses.rs` & `streaming_responses.rs`）：
+   - **文档源扩展**：`anthropic_document_to_responses_part` 支持 `text` / `content` 文档块。
+   - **思维链用量映射**：将 Responses 的 `completion_tokens_details.reasoning_tokens` 映射到 Anthropic 的 `output_tokens_details.thinking_tokens`。
+   - **`custom_tool_call` 完整支持**：针对原生 Responses gateway 的 `custom_tool_call`（如 freeform patch 工具），在非流式与 SSE 流式两端均完整支持其解析、流式增量拼接与向 Anthropic tool_use 的转换。
+
+5. **安全分类器与信封解包加固**（`classifier.rs`、`handlers.rs`、`proxy/providers/mod.rs`）：
+   - **信封解包鲁棒性**：`unwrap_chat_completion_envelope` 容忍并正确处理包含 null 或非数组的非法 `choices` 字段，避免 panic。
+   - **流式解包接入**：在 `handlers.rs::chat_sse_to_response_value` 中接入解包，解决包装中转在流式汇聚时的结构兼容性。
+   - **分类器决策标签净化**：提取 `<block>` 之前先剥离模型可能输出的 `<thinking>` / `<think>` 思考块，防止思维链内的举例标签干扰分类判定；循环剥离分类标签直到不动点，避免残留标签泄露给客户端。
+
+6. **Codex 项目级路由 `wire_api` 纠偏**（`live/project/codex.rs`）：
+   - 针对部分存量配置或自定义提供商中出现的非法 `wire_api = "chat"` / `"chat_completions"`，在写入 `config.toml` 的 custom 路由时自动归一化为 `"responses"`，彻底解决 Codex 0.148+ 因 wire_api 校验导致的启动崩溃。
+
+7. **前端表单与状态对齐**：
+   - `GrokBuildProviderForm`：在 `handleSubmit` 中补齐 `sessionAffinityHeader` 提交；并在 `handlePresetChange` 切换预设时重置全部高级字段状态。
+   - `ProviderForm`：切换预设时完整重置本 fork 新增的 5 个高级配置项（`sessionAffinityHeader`、`preserveCacheControl`、`midConversationSystemPolicy`、`classifierSeverityBlockValue`、`codexNativeResponsesTemplate`）。
+   - `CodexFormFields`：修复 `codexNativeResponsesTemplate` 选择器的门控逻辑（从错误的 `isChatFormat` 移到原生的 `!isChatFormat` 模式下）；将 `sessionAffinityHeader` 门控放宽至全格式可用；使 `hasAnyAdvancedValue` 正确感知 fork 字段并展开面板。
+   - `ClaudeFormFields`：在 stack 视图与 classic 视图之间完整对齐本 fork 5 个高级字段的挂载与交互体验。
 
 ## 5. 本地发布序列
 

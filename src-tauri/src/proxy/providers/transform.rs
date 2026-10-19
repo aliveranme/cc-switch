@@ -500,14 +500,22 @@ pub fn anthropic_to_openai_with_options(
         }
     }
 
-    // 转换 tools (过滤 BatchTool)
+    // 转换 tools (过滤 BatchTool 与缺名工具)
+    let mut surviving_tool_names = std::collections::HashSet::new();
     if let Some(tools) = body.get("tools").and_then(|t| t.as_array()) {
         let openai_tools: Vec<Value> = tools
             .iter()
-            .filter(|t| t.get("type").and_then(|v| v.as_str()) != Some("BatchTool"))
+            .filter(|t| {
+                t.get("type").and_then(|v| v.as_str()) != Some("BatchTool")
+                    && t.get("name")
+                        .and_then(|n| n.as_str())
+                        .is_some_and(|n| !n.trim().is_empty())
+            })
             .map(|t| {
+                let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                surviving_tool_names.insert(name);
                 let mut function = json!({
-                    "name": t.get("name").and_then(|n| n.as_str()).unwrap_or(""),
+                    "name": name,
                 });
                 // 缺失的 description 省略而非输出 null：hosted 工具（web_search 等）
                 // 与未填描述的自定义/MCP 工具都不带该字段，严格上游收到 null 会
@@ -533,14 +541,24 @@ pub fn anthropic_to_openai_with_options(
     }
 
     if let Some(v) = body.get("tool_choice") {
+        let has_input_tools = body.get("tools").is_some_and(|t| t.is_array());
         // tools 全部被过滤（如只剩 BatchTool）时不输出 tool_choice——严格
         // OpenAI 兼容上游对"有 tool_choice 无 tools"会 400（与 Codex→Chat
         // 路径的兜底对称，见 transform_codex_chat.rs）。
-        if result.get("tools").is_none() && body.get("tools").is_some_and(|t| t.is_array()) {
+        if result.get("tools").is_none() && has_input_tools {
             log::debug!("[Claude/OpenRouter] tools 全部被过滤（如 BatchTool），省略 tool_choice");
             return Ok(result);
         }
-        result["tool_choice"] = map_tool_choice_to_chat(v);
+        let target_filtered = has_input_tools
+            && v.get("type").and_then(Value::as_str) == Some("tool")
+            && v.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| !surviving_tool_names.contains(name));
+        result["tool_choice"] = if target_filtered {
+            json!("auto")
+        } else {
+            map_tool_choice_to_chat(v)
+        };
         // Anthropic 用 tool_choice.disable_parallel_tool_use 表达串行工具调用；
         // OpenAI Chat 用顶层 parallel_tool_calls。此前只映射了 tool_choice 本身，
         // 丢掉了这个约束。反向(codex_anthropic)已处理，这里补齐对称。
@@ -937,12 +955,46 @@ fn chat_file_part_from_anthropic_document(block: &Value) -> Option<Value> {
                 }
             }))
         }
+        Some("text") => {
+            let data = source.get("data").and_then(Value::as_str)?;
+            if data.is_empty() {
+                return None;
+            }
+            Some(json!({
+                "type": "text",
+                "text": data
+            }))
+        }
+        Some("content") => {
+            let text = match source.get("content") {
+                Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+                Some(Value::Array(items)) => {
+                    let joined: Vec<&str> = items
+                        .iter()
+                        .filter_map(|item| {
+                            if item.get("type").and_then(Value::as_str) == Some("text") {
+                                item.get("text").and_then(Value::as_str)
+                            } else {
+                                item.as_str()
+                            }
+                        })
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    (!joined.is_empty()).then(|| joined.join("\n"))
+                }
+                _ => None,
+            }?;
+            Some(json!({
+                "type": "text",
+                "text": text
+            }))
+        }
         _ => {
-            // 非 base64 源（url / content 等）：Chat file part 无承载位，丢弃。
+            // 非 base64/text/content 源（如 url）：Chat file part 无承载位，丢弃。
             // 与 Responses 路径（transform_responses.rs 同场景 warn）对齐留痕，
             // 否则用户附带的文件在模型侧静默消失、无从排查。
             log::warn!(
-                "[Claude/OpenRouter] Anthropic document 块使用非 base64 源（type={:?}），Chat 方向无承载字段，已丢弃（filename={}）",
+                "[Claude/OpenRouter] Anthropic document 块使用非内嵌源（type={:?}），Chat 方向无承载字段，已丢弃（filename={}）",
                 source.get("type").and_then(Value::as_str),
                 filename,
             );
@@ -1173,15 +1225,9 @@ pub fn openai_to_anthropic(body: Value) -> Result<Value, ProxyError> {
         .or_else(|| provided_nonzero(usage.pointer("/prompt_tokens_details/cached_tokens")))
         .or_else(|| provided_nonzero(usage.get("prompt_cache_hit_tokens")))
         .unwrap_or(0);
-    let cache_creation = usage
-        .get("cache_creation_input_tokens")
-        .and_then(|v| v.as_u64())
-        .or_else(|| {
-            usage
-                .pointer("/prompt_tokens_details/cache_write_tokens")
-                .or_else(|| usage.pointer("/input_tokens_details/cache_write_tokens"))
-                .and_then(|v| v.as_u64())
-        })
+    let cache_creation = provided_nonzero(usage.get("cache_creation_input_tokens"))
+        .or_else(|| provided_nonzero(usage.pointer("/prompt_tokens_details/cache_write_tokens")))
+        .or_else(|| provided_nonzero(usage.pointer("/input_tokens_details/cache_write_tokens")))
         .unwrap_or(0);
     let input_tokens = usage
         .get("prompt_tokens")
@@ -3302,5 +3348,80 @@ mod tests {
             strip_volatile_cch("cc_version=1; cch=a1b2c3; cc_entrypoint=cli;"),
             "cc_version=1;cc_entrypoint=cli;"
         );
+    }
+
+    #[test]
+    fn test_anthropic_to_openai_supports_text_and_content_document_blocks_and_downgrades_filtered_tool_choice(
+    ) {
+        let input = json!({
+            "model": "gpt-4o",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "title": "notes.txt",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "Plain text doc"
+                        }
+                    },
+                    {
+                        "type": "document",
+                        "title": "blocks.txt",
+                        "source": {
+                            "type": "content",
+                            "content": [
+                                {"type": "text", "text": "Chunk 1"},
+                                {"type": "text", "text": "Chunk 2"}
+                            ]
+                        }
+                    }
+                ]
+            }],
+            "tools": [
+                {"type": "BatchTool", "name": "BatchTool"},
+                {"name": "read_file", "input_schema": {"type": "object"}}
+            ],
+            "tool_choice": {"type": "tool", "name": "BatchTool"}
+        });
+
+        let result = anthropic_to_openai(input).unwrap();
+        let parts = result["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(
+            parts,
+            &vec![
+                json!({"type": "text", "text": "Plain text doc"}),
+                json!({"type": "text", "text": "Chunk 1\nChunk 2"})
+            ]
+        );
+        assert_eq!(result["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(result["tool_choice"], json!("auto"));
+    }
+
+    #[test]
+    fn test_openai_to_anthropic_stub_zero_cache_creation_falls_through_to_cache_write_tokens() {
+        let input = json!({
+            "id": "chatcmpl-stub-write",
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 500,
+                "completion_tokens": 10,
+                "cache_creation_input_tokens": 0,
+                "prompt_tokens_details": {
+                    "cache_write_tokens": 200
+                }
+            }
+        });
+
+        let result = openai_to_anthropic(input).unwrap();
+        assert_eq!(result["usage"]["cache_creation_input_tokens"], 200);
+        assert_eq!(result["usage"]["input_tokens"], 300);
     }
 }

@@ -2421,6 +2421,7 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
         let mut tool_name_by_index: HashMap<u32, String> = HashMap::new();
         let mut tool_args_by_index: HashMap<u32, String> = HashMap::new();
         let mut tool_had_delta: HashSet<u32> = HashSet::new();
+        let mut custom_tool_indices: HashSet<u32> = HashSet::new();
         let mut last_tool_index: Option<u32> = None;
         let mut web_search_index_by_item_id: HashMap<String, u32> = HashMap::new();
         let mut web_search_id_by_index: HashMap<u32, String> = HashMap::new();
@@ -2550,6 +2551,7 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
                             "response.output_text.delta"
                                 | "response.refusal.delta"
                                 | "response.function_call_arguments.delta"
+                                | "response.custom_tool_call_input.delta"
                                 | "response.reasoning_summary_text.delta"
                                 | "response.reasoning_text.delta"
                                 | "response.reasoning.delta"
@@ -2876,7 +2878,7 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
                                             }
                                         }
                                     }
-                                    if item_type == "function_call" {
+                                    if item_type == "function_call" || item_type == "custom_tool_call" {
                                         has_tool_use = true;
                                         has_substantive_output = true;
                                         if let Some(index) = current_text_index.take() {
@@ -2911,7 +2913,11 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
                                             has_sent_message_start = true;
                                         }
 
-                                        let call_id = item.get("call_id").and_then(|i| i.as_str()).unwrap_or("");
+                                        let call_id = item
+                                            .get("call_id")
+                                            .or_else(|| item.get("id"))
+                                            .and_then(|i| i.as_str())
+                                            .unwrap_or("");
                                         let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("");
                                         let index = if let Some(k) = tool_item_key_from_added(&data, item) {
                                             if let Some(existing) = index_by_key.get(&k).copied() {
@@ -2935,6 +2941,9 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
                                             tool_index_by_item_id.insert(item_id.to_string(), index);
                                         }
                                         tool_name_by_index.insert(index, name.to_string());
+                                        if item_type == "custom_tool_call" {
+                                            custom_tool_indices.insert(index);
+                                        }
                                         last_tool_index = Some(index);
 
                                         if open_indices.contains(&index) {
@@ -3155,9 +3164,10 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
                             }
 
                             // ================================================
-                            // response.function_call_arguments.delta → content_block_delta (input_json_delta)
+                            // response.function_call_arguments.delta / response.custom_tool_call_input.delta → content_block_delta (input_json_delta)
                             // ================================================
-                            "response.function_call_arguments.delta" => {
+                            "response.function_call_arguments.delta"
+                            | "response.custom_tool_call_input.delta" => {
                                 if let Some(delta) = data.get("delta").and_then(|d| d.as_str()) {
                                     has_tool_use = true;
                                     let item_id = data.get("item_id").and_then(|v| v.as_str());
@@ -3184,6 +3194,9 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
                                         tool_name_by_index.insert(index, name.to_string());
                                     } else {
                                         tool_name_by_index.entry(index).or_default();
+                                    }
+                                    if event_name == "response.custom_tool_call_input.delta" {
+                                        custom_tool_indices.insert(index);
                                     }
                                     last_tool_index = Some(index);
 
@@ -3216,7 +3229,9 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
                                         .push_str(delta);
                                     tool_had_delta.insert(index);
 
-                                    if tool_name_by_index.get(&index).map(String::as_str) == Some("Read") {
+                                    if tool_name_by_index.get(&index).map(String::as_str) == Some("Read")
+                                        || custom_tool_indices.contains(&index)
+                                    {
                                         continue;
                                     }
 
@@ -3235,9 +3250,10 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
                             }
 
                             // ================================================
-                            // response.function_call_arguments.done → content_block_stop
+                            // response.function_call_arguments.done / response.custom_tool_call_input.done → content_block_stop
                             // ================================================
-                            "response.function_call_arguments.done" => {
+                            "response.function_call_arguments.done"
+                            | "response.custom_tool_call_input.done" => {
                                 has_tool_use = true;
                                 let item_id = data.get("item_id").and_then(|v| v.as_str());
                                 let index = if let Some(id) = item_id {
@@ -3254,7 +3270,56 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
                                     if !open_indices.remove(&index) {
                                         continue;
                                     }
-                                    if tool_name_by_index.get(&index).map(String::as_str) == Some("Read") {
+                                    let is_custom = event_name == "response.custom_tool_call_input.done"
+                                        || custom_tool_indices.remove(&index);
+                                    if is_custom {
+                                        let raw = data
+                                            .get("input")
+                                            .or_else(|| data.get("arguments"))
+                                            .or_else(|| data.pointer("/item/input"))
+                                            .or_else(|| data.pointer("/item/arguments"))
+                                            .and_then(|v| v.as_str())
+                                            .map(str::to_string)
+                                            .unwrap_or_else(|| {
+                                                tool_args_by_index
+                                                    .get(&index)
+                                                    .cloned()
+                                                    .unwrap_or_default()
+                                            });
+                                        let trimmed = raw.trim();
+                                        let normalized = if trimmed.is_empty() {
+                                            String::new()
+                                        } else if matches!(
+                                            serde_json::from_str::<Value>(trimmed),
+                                            Ok(Value::Object(_))
+                                        ) {
+                                            raw
+                                        } else {
+                                            json!({ "input": raw }).to_string()
+                                        };
+                                        let final_json = if tool_name_by_index
+                                            .get(&index)
+                                            .map(String::as_str)
+                                            == Some("Read")
+                                        {
+                                            sanitize_anthropic_tool_use_input_json("Read", &normalized)
+                                        } else {
+                                            normalized
+                                        };
+                                        if !final_json.is_empty() {
+                                            let event = json!({
+                                                "type": "content_block_delta",
+                                                "index": index,
+                                                "delta": {
+                                                    "type": "input_json_delta",
+                                                    "partial_json": final_json
+                                                }
+                                            });
+                                            let sse = format!("event: content_block_delta\ndata: {}\n\n",
+                                                serde_json::to_string(&event).unwrap_or_default());
+                                            yield Ok(Bytes::from(sse));
+                                        }
+                                    } else if tool_name_by_index.get(&index).map(String::as_str) == Some("Read") {
                                         let raw = data
                                             .get("arguments")
                                             .or_else(|| data.pointer("/item/arguments"))
@@ -4111,7 +4176,7 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
                                     preserve_web_search_citations = true;
                                 }
                                 match item_type {
-                                    Some("function_call") => {
+                                    Some("function_call" | "custom_tool_call") => {
                                         has_tool_use = true;
                                         let item_id = item
                                             .get("id")
@@ -4125,13 +4190,16 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
                                             })
                                             .or(last_tool_index);
                                         if let Some(index) = index.filter(|value| open_indices.contains(value)) {
+                                            let is_custom = item_type == Some("custom_tool_call")
+                                                || custom_tool_indices.remove(&index);
                                             let name = tool_name_by_index
                                                 .get(&index)
                                                 .map(String::as_str)
                                                 .unwrap_or("");
-                                            if !tool_had_delta.contains(&index) || name == "Read" {
+                                            if is_custom || !tool_had_delta.contains(&index) || name == "Read" {
                                                 let raw = item
-                                                    .get("arguments")
+                                                    .get("input")
+                                                    .or_else(|| item.get("arguments"))
                                                     .and_then(Value::as_str)
                                                     .filter(|value| !value.is_empty())
                                                     .map(str::to_string)
@@ -4141,10 +4209,25 @@ fn create_anthropic_sse_stream_from_responses_raw<E: std::error::Error + Send + 
                                                             .cloned()
                                                             .unwrap_or_default()
                                                     });
-                                                let arguments = if name == "Read" {
-                                                    sanitize_anthropic_tool_use_input_json(name, &raw)
+                                                let normalized = if is_custom {
+                                                    let trimmed = raw.trim();
+                                                    if trimmed.is_empty() {
+                                                        String::new()
+                                                    } else if matches!(
+                                                        serde_json::from_str::<Value>(trimmed),
+                                                        Ok(Value::Object(_))
+                                                    ) {
+                                                        raw
+                                                    } else {
+                                                        json!({ "input": raw }).to_string()
+                                                    }
                                                 } else {
                                                     raw
+                                                };
+                                                let arguments = if name == "Read" {
+                                                    sanitize_anthropic_tool_use_input_json(name, &normalized)
+                                                } else {
+                                                    normalized
                                                 };
                                                 if !arguments.is_empty() {
                                                     let event = json!({
@@ -7400,5 +7483,29 @@ mod tests {
             1,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn custom_tool_call_streams_normalized_json_object_and_tool_use_stop_reason() {
+        let sse = concat!(
+            "event: response.created\n",
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_custom\",\"model\":\"gpt-5\"}}\n\n",
+            "event: response.output_item.added\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"item_1\",\"type\":\"custom_tool_call\",\"call_id\":\"call_patch_1\",\"name\":\"apply_patch\"}}\n\n",
+            "event: response.custom_tool_call_input.delta\n",
+            "data: {\"type\":\"response.custom_tool_call_input.delta\",\"item_id\":\"item_1\",\"delta\":\"*** Begin Patch\\n\"}\n\n",
+            "event: response.custom_tool_call_input.delta\n",
+            "data: {\"type\":\"response.custom_tool_call_input.delta\",\"item_id\":\"item_1\",\"delta\":\"*** End Patch\"}\n\n",
+            "event: response.custom_tool_call_input.done\n",
+            "data: {\"type\":\"response.custom_tool_call_input.done\",\"item_id\":\"item_1\",\"input\":\"*** Begin Patch\\n*** End Patch\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}}\n\n"
+        );
+        let output = convert_stream_text(sse.to_string()).await;
+        assert!(output.contains("\"type\":\"tool_use\""));
+        assert!(output.contains("\"id\":\"call_patch_1\""));
+        assert!(output.contains("\"name\":\"apply_patch\""));
+        assert!(output.contains("\\\"input\\\":\\\"*** Begin Patch\\\\n*** End Patch\\\""));
+        assert!(output.contains("\"stop_reason\":\"tool_use\""));
     }
 }

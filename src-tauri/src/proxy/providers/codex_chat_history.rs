@@ -125,22 +125,7 @@ impl CodexChatHistoryStore {
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
         // A-M1：恢复前校验当前请求的工具定义（需在 input 可变借用前提取）
-        let request_tool_names: HashSet<String> = body
-            .get("tools")
-            .and_then(|value| value.as_array())
-            .map(|tools| {
-                tools
-                    .iter()
-                    .filter_map(|tool| {
-                        tool.get("name")
-                            .or_else(|| tool.get("function").and_then(|f| f.get("name")))
-                            .and_then(|value| value.as_str())
-                    })
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
-        let tools_are_known = !request_tool_names.is_empty();
+        let allowed_tools = AllowedRequestTools::from_request(body);
 
         let Some(input) = body.get_mut("input") else {
             return 0;
@@ -191,13 +176,7 @@ impl CodexChatHistoryStore {
 
         let restore_group: Vec<(String, Value)> = restore_group
             .into_iter()
-            .filter(|(_, item)| {
-                !tools_are_known
-                    || item
-                        .get("name")
-                        .and_then(|value| value.as_str())
-                        .is_some_and(|name| request_tool_names.contains(name))
-            })
+            .filter(|(_, item)| allowed_tools.allows_call_item(item))
             .collect();
         let restore_group_ids = restore_group
             .iter()
@@ -235,7 +214,11 @@ impl CodexChatHistoryStore {
                         if !seen_call_ids.contains(&call_id)
                             && !restore_group_ids.contains(&call_id)
                         {
-                            if let Some(cached) = lookup.call(&call_id).cloned() {
+                            if let Some(cached) = lookup
+                                .call(&call_id)
+                                .filter(|cached| allowed_tools.allows_call_item(cached))
+                                .cloned()
+                            {
                                 seen_call_ids.insert(call_id);
                                 new_items.push(cached);
                                 restored += 1;
@@ -582,6 +565,145 @@ fn enrich_call_item_from_cache(item: &mut Value, cached: &Value) -> bool {
         }
     }
     changed
+}
+
+#[derive(Debug, Default)]
+struct AllowedRequestTools {
+    names: HashSet<String>,
+    namespaced: HashSet<(String, String)>,
+    has_tool_search: bool,
+}
+
+impl AllowedRequestTools {
+    fn from_request(body: &Value) -> Self {
+        let mut allowed = Self::default();
+        if let Some(tools) = body.get("tools").and_then(Value::as_array) {
+            for tool in tools {
+                allowed.add_tool(tool);
+            }
+        }
+        if let Some(input) = body.get("input") {
+            allowed.collect_input_declared_tools(input);
+        }
+        allowed
+    }
+
+    fn add_tool(&mut self, tool: &Value) {
+        match tool {
+            Value::String(name) => {
+                let trimmed = name.trim();
+                if !trimmed.is_empty() {
+                    self.names.insert(trimmed.to_string());
+                }
+            }
+            Value::Object(_) => {
+                match tool.get("type").and_then(Value::as_str) {
+                    Some("tool_search") => {
+                        self.has_tool_search = true;
+                        return;
+                    }
+                    Some("namespace") => {
+                        let ns = tool
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty());
+                        if let Some(children) = tool
+                            .get("tools")
+                            .or_else(|| tool.get("children"))
+                            .and_then(Value::as_array)
+                        {
+                            for child in children {
+                                if let Some(child_name) = Self::extract_tool_name(child) {
+                                    self.names.insert(child_name.to_string());
+                                    if let Some(ns) = ns {
+                                        self.namespaced
+                                            .insert((ns.to_string(), child_name.to_string()));
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(ns) = ns {
+                            self.names.insert(ns.to_string());
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
+                if let Some(name) = Self::extract_tool_name(tool) {
+                    self.names.insert(name.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_input_declared_tools(&mut self, value: &Value) {
+        match value {
+            Value::Array(items) => {
+                for item in items {
+                    self.collect_input_declared_tools(item);
+                }
+            }
+            Value::Object(obj) => {
+                if matches!(
+                    obj.get("type").and_then(Value::as_str),
+                    Some("tool_search_output" | "additional_tools")
+                ) {
+                    if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
+                        for tool in tools {
+                            self.add_tool(tool);
+                        }
+                    }
+                }
+                for child in obj.values() {
+                    self.collect_input_declared_tools(child);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn extract_tool_name(tool: &Value) -> Option<&str> {
+        tool.get("name")
+            .or_else(|| tool.get("function").and_then(|f| f.get("name")))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    fn tools_are_known(&self) -> bool {
+        !self.names.is_empty() || !self.namespaced.is_empty() || self.has_tool_search
+    }
+
+    fn allows_call_item(&self, item: &Value) -> bool {
+        if !self.tools_are_known() {
+            return true;
+        }
+        if item.get("type").and_then(Value::as_str) == Some("tool_search_call") {
+            return self.has_tool_search;
+        }
+        let Some(name) = item
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            return false;
+        };
+        if let Some(ns) = item
+            .get("namespace")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return self
+                .namespaced
+                .contains(&(ns.to_string(), name.to_string()))
+                || self.names.contains(name);
+        }
+        self.names.contains(name)
+    }
 }
 
 #[cfg(test)]
@@ -1188,5 +1310,124 @@ mod tests {
             0,
             "裸值 session 不得命中 codex_ 前缀键（防串话回归）"
         );
+    }
+
+    #[tokio::test]
+    async fn single_call_fallback_respects_allowed_tools_and_never_splits_parallel_turn() {
+        let history = CodexChatHistoryStore::default();
+        history
+            .record_response(
+                &json!({
+                    "id": "resp_parallel",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_keep",
+                            "name": "keep_tool",
+                            "arguments": "{}",
+                            "reasoning_content": "Parallel reasoning."
+                        },
+                        {
+                            "type": "function_call",
+                            "call_id": "call_removed",
+                            "name": "removed_tool",
+                            "arguments": "{}",
+                            "reasoning_content": "Parallel reasoning."
+                        }
+                    ]
+                }),
+                "codex_sess",
+            )
+            .await;
+
+        let mut request = json!({
+            "previous_response_id": "resp_parallel",
+            "tools": [
+                { "type": "function", "name": "keep_tool", "parameters": { "type": "object" } }
+            ],
+            "input": [
+                { "type": "function_call_output", "call_id": "call_keep", "output": "ok-1" },
+                { "type": "function_call_output", "call_id": "call_removed", "output": "ok-2" }
+            ]
+        });
+
+        assert_eq!(history.enrich_request("codex_sess", &mut request).await, 1);
+        let input = request["input"].as_array().unwrap();
+        assert_eq!(input.len(), 3, "被移除的工具不得通过单条 fallback 绕过注入");
+        assert_eq!(input[0]["type"], "function_call");
+        assert_eq!(input[0]["call_id"], "call_keep");
+        assert_eq!(input[1]["type"], "function_call_output");
+        assert_eq!(input[1]["call_id"], "call_keep");
+        assert_eq!(input[2]["type"], "function_call_output");
+        assert_eq!(input[2]["call_id"], "call_removed");
+    }
+
+    #[tokio::test]
+    async fn restores_namespace_tool_search_and_input_declared_tools_when_tools_present() {
+        let history = CodexChatHistoryStore::default();
+        history
+            .record_response(
+                &json!({
+                    "id": "resp_ext",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_ns",
+                            "name": "list_issues",
+                            "namespace": "github",
+                            "arguments": "{}",
+                            "reasoning_content": "Use namespace tool."
+                        },
+                        {
+                            "type": "tool_search_call",
+                            "call_id": "call_search",
+                            "status": "completed",
+                            "execution": "client",
+                            "arguments": {"query": "github"},
+                            "reasoning_content": "Use tool search."
+                        },
+                        {
+                            "type": "function_call",
+                            "call_id": "call_dyn",
+                            "name": "dynamic_exec",
+                            "arguments": "{}",
+                            "reasoning_content": "Use dynamic tool."
+                        }
+                    ]
+                }),
+                "codex_sess",
+            )
+            .await;
+
+        let mut request = json!({
+            "previous_response_id": "resp_ext",
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "github",
+                    "tools": [
+                        { "type": "function", "name": "list_issues", "parameters": { "type": "object" } }
+                    ]
+                },
+                { "type": "tool_search" }
+            ],
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "tools": [
+                        { "type": "function", "name": "dynamic_exec", "parameters": { "type": "object" } }
+                    ]
+                },
+                { "type": "function_call_output", "call_id": "call_ns", "output": "[]" },
+                { "type": "tool_search_output", "call_id": "call_search", "tools": [] },
+                { "type": "function_call_output", "call_id": "call_dyn", "output": "done" }
+            ]
+        });
+
+        assert_eq!(history.enrich_request("codex_sess", &mut request).await, 3);
+        let input = request["input"].as_array().unwrap();
+        assert_eq!(input[1]["call_id"], "call_ns");
+        assert_eq!(input[2]["call_id"], "call_search");
+        assert_eq!(input[3]["call_id"], "call_dyn");
     }
 }

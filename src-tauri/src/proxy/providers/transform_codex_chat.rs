@@ -2362,15 +2362,9 @@ pub(crate) fn chat_usage_to_responses_usage(usage: Option<&Value>) -> Value {
         // 并防御未文档化镜像将来消失；上游发任一标准字段时行为零变化。
         .or_else(|| provided_nonzero(usage.get("prompt_cache_hit_tokens")))
         .unwrap_or(0);
-    let cache_write = usage
-        .pointer("/prompt_tokens_details/cache_write_tokens")
-        .or_else(|| usage.pointer("/input_tokens_details/cache_write_tokens"))
-        .and_then(|v| v.as_u64())
-        .or_else(|| {
-            usage
-                .get("cache_creation_input_tokens")
-                .and_then(|v| v.as_u64())
-        })
+    let cache_write = provided_nonzero(usage.pointer("/prompt_tokens_details/cache_write_tokens"))
+        .or_else(|| provided_nonzero(usage.pointer("/input_tokens_details/cache_write_tokens")))
+        .or_else(|| provided_nonzero(usage.get("cache_creation_input_tokens")))
         .unwrap_or(0);
     if cached > 0 || cache_write > 0 {
         result["input_tokens_details"] = json!({
@@ -6741,5 +6735,19 @@ mod tests {
         let rendered = serde_json::to_string(&result["messages"]).unwrap();
         assert!(rendered.contains(codex_compaction::OPAQUE_COMPACTION_NOTE));
         assert!(!rendered.contains("gAAAAB-openai-blob"));
+    }
+
+    #[test]
+    fn chat_usage_stub_zero_cache_write_tokens_falls_through_to_direct_cache_creation() {
+        let usage = chat_usage_to_responses_usage(Some(&json!({
+            "prompt_tokens": 300,
+            "completion_tokens": 20,
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0
+            },
+            "cache_creation_input_tokens": 120
+        })));
+        assert_eq!(usage["input_tokens_details"]["cache_write_tokens"], 120);
     }
 }

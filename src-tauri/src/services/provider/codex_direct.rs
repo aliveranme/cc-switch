@@ -27,7 +27,7 @@ use crate::codex_config::{
     codex_disables_web_search, codex_live_auth_is_managed_chatgpt_login,
     codex_managed_oauth_marker_bytes, extract_codex_auth_api_key, get_codex_auth_path,
     get_codex_config_path, get_codex_managed_oauth_live_auth_marker_path,
-    get_codex_model_catalog_path, plan_codex_model_catalog, CodexAuthStoreMode,
+    get_codex_model_catalog_path, plan_codex_model_catalog_with_template, CodexAuthStoreMode,
 };
 use crate::config::sorted_json_bytes;
 use crate::database::Database;
@@ -678,10 +678,11 @@ pub(crate) fn plan(
             Some(catalog)
         }
         (None, Some(provider), Some(projection)) => {
-            plan_codex_model_catalog(
+            plan_codex_model_catalog_with_template(
                 &provider.settings_config,
                 &projection.catalog_input_text(),
                 crate::proxy::providers::resolve_codex_catalog_tool_profile(provider),
+                crate::proxy::providers::resolve_codex_responses_template(provider),
             )?
             .catalog
         }
@@ -829,6 +830,9 @@ pub(crate) fn stack_subagent_choices(
             settings: &member.provider.settings_config,
             config_text: &config_text,
             profile: crate::proxy::providers::resolve_codex_catalog_tool_profile(&member.provider),
+            responses_template: crate::proxy::providers::resolve_codex_responses_template(
+                &member.provider,
+            ),
         };
         let Ok(entries) = codex_stack_third_party_rows(&row) else {
             continue;
@@ -906,6 +910,7 @@ fn stack_catalog(
             settings: &route.settings_config,
             config_text: &route_text,
             profile: crate::proxy::providers::resolve_codex_catalog_tool_profile(route),
+            responses_template: crate::proxy::providers::resolve_codex_responses_template(route),
         })
     };
 
@@ -918,6 +923,7 @@ fn stack_catalog(
                 member,
                 projection.catalog_input_text(),
                 crate::proxy::providers::resolve_codex_catalog_tool_profile(&member.provider),
+                crate::proxy::providers::resolve_codex_responses_template(&member.provider),
             )),
             Err(error) => {
                 log::warn!(
@@ -930,15 +936,18 @@ fn stack_catalog(
         .collect();
     let members: Vec<CodexStackCatalogMember<'_>> = inputs
         .iter()
-        .map(|(member, config_text, profile)| CodexStackCatalogMember {
-            key: &member.key,
-            provider_name: &member.provider.name,
-            row: CodexCatalogRow {
-                settings: &member.provider.settings_config,
-                config_text,
-                profile: *profile,
+        .map(
+            |(member, config_text, profile, template)| CodexStackCatalogMember {
+                key: &member.key,
+                provider_name: &member.provider.name,
+                row: CodexCatalogRow {
+                    settings: &member.provider.settings_config,
+                    config_text,
+                    profile: *profile,
+                    responses_template: *template,
+                },
             },
-        })
+        )
         .collect();
     plan_codex_stack_catalog(
         route_row,

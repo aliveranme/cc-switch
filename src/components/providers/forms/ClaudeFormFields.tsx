@@ -284,6 +284,15 @@ export function ClaudeFormFields({
   const hasRequestOverrides = Boolean(
     localProxyHeadersOverride.trim() || localProxyBodyOverride.trim(),
   );
+  const isOpenAiChatFormat = apiFormat === "openai_chat";
+  const hasForkAdvancedValue = Boolean(
+    sessionAffinityHeader.trim() ||
+    classifierSeverityBlockValue.trim() !== "" ||
+    (isOpenAiChatFormat &&
+      (promptCacheRouting !== "auto" ||
+        preserveCacheControl ||
+        midConversationSystemPolicy !== "rewrite_user")),
+  );
   const hasAnyAdvancedValue = !!(
     claudeModel ||
     defaultHaikuModel ||
@@ -295,11 +304,7 @@ export function ClaudeFormFields({
     apiKeyField !== "ANTHROPIC_AUTH_TOKEN" ||
     isFullUrl ||
     customUserAgent ||
-    sessionAffinityHeader ||
-    promptCacheRouting !== "auto" ||
-    preserveCacheControl ||
-    midConversationSystemPolicy !== "rewrite_user" ||
-    classifierSeverityBlockValue.trim() !== "" ||
+    hasForkAdvancedValue ||
     hasRequestOverrides
   );
   const [advancedExpanded, setAdvancedExpanded] = useState(
@@ -315,10 +320,23 @@ export function ClaudeFormFields({
     }
   }, [hasAnyAdvancedValue, isXaiOauthPreset]);
 
-  // Stack 布局的高级区只有完整 URL、User-Agent 和请求覆盖，开了或填了才展开。
+  // Stack 布局的高级区包含完整 URL、User-Agent、请求覆盖与 fork 缓存/分类器项，开了或填了才展开。
   const [stackAdvancedExpanded, setStackAdvancedExpanded] = useState(
-    isFullUrl || !!customUserAgent || hasRequestOverrides,
+    isFullUrl ||
+      !!customUserAgent ||
+      hasRequestOverrides ||
+      hasForkAdvancedValue,
   );
+  useEffect(() => {
+    if (
+      isFullUrl ||
+      !!customUserAgent ||
+      hasRequestOverrides ||
+      hasForkAdvancedValue
+    ) {
+      setStackAdvancedExpanded(true);
+    }
+  }, [isFullUrl, customUserAgent, hasRequestOverrides, hasForkAdvancedValue]);
 
   // Copilot 可用模型列表
   const [copilotModels, setCopilotModels] = useState<CopilotModel[]>([]);
@@ -1014,6 +1032,171 @@ export function ClaudeFormFields({
     </>
   );
 
+  // fork：缓存链路开关（Claude → OpenAI Chat 专属项 + 全格式通用的会话亲和与分类器拦截值）
+  const cacheAndClassifierFields = (
+    <div className="space-y-3 border-t border-border-default pt-3">
+      {isOpenAiChatFormat && (
+        <div className="space-y-2">
+          <FormLabel htmlFor="claude-prompt-cache-routing">
+            {t("codexConfig.promptCacheRoutingLabel", {
+              defaultValue: "提示词缓存路由",
+            })}
+          </FormLabel>
+          <Select
+            value={promptCacheRouting}
+            onValueChange={(value) =>
+              onPromptCacheRoutingChange(value as PromptCacheRoutingMode)
+            }
+          >
+            <SelectTrigger
+              id="claude-prompt-cache-routing"
+              aria-label={t("codexConfig.promptCacheRoutingLabel", {
+                defaultValue: "提示词缓存路由",
+              })}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">
+                {t("codexConfig.promptCacheRoutingAuto", {
+                  defaultValue: "自动（推荐）",
+                })}
+              </SelectItem>
+              <SelectItem value="enabled">
+                {t("codexConfig.promptCacheRoutingEnabled", {
+                  defaultValue: "开启",
+                })}
+              </SelectItem>
+              <SelectItem value="disabled">
+                {t("codexConfig.promptCacheRoutingDisabled", {
+                  defaultValue: "关闭",
+                })}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t("codexConfig.promptCacheRoutingHint", {
+              defaultValue:
+                "自动模式仅对已确认兼容的上游发送 prompt_cache_key；开启可用于其他兼容网关，关闭可避免严格网关因未知字段返回 400。只使用客户端提供的稳定会话 ID。",
+            })}
+          </p>
+        </div>
+      )}
+
+      <div className="space-y-1">
+        <FormLabel htmlFor="claude-session-affinity-header">
+          {t("providerForm.sessionAffinityHeaderLabel", {
+            defaultValue: "会话亲和 Header",
+          })}
+        </FormLabel>
+        <Input
+          id="claude-session-affinity-header"
+          value={sessionAffinityHeader}
+          onChange={(event) =>
+            onSessionAffinityHeaderChange(event.target.value)
+          }
+          placeholder="x-session-affinity"
+        />
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {t("providerForm.sessionAffinityHeaderHint", {
+            defaultValue:
+              "多实例网关需按会话固定路由到同一实例才能命中前缀缓存（Cloudflare Workers AI 为 x-session-affinity）。仅在客户端提供了会话 ID 时注入；留空关闭。",
+          })}
+        </p>
+      </div>
+
+      {isOpenAiChatFormat && (
+        <>
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={preserveCacheControl}
+                onCheckedChange={(checked) =>
+                  onPreserveCacheControlChange(checked === true)
+                }
+              />
+              {t("providerForm.preserveCacheControlLabel", {
+                defaultValue: "保留 cache_control 断点",
+              })}
+            </label>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {t("providerForm.preserveCacheControlHint", {
+                defaultValue:
+                  "仅对在网关层实现了断点缓存的 OpenAI 兼容上游开启。默认关闭：多数严格后端收到 cache_control 会返回 400。",
+              })}
+            </p>
+          </div>
+
+          <div className="space-y-1">
+            <FormLabel htmlFor="claude-mid-conversation-system-policy">
+              {t("providerForm.midConversationSystemPolicyLabel", {
+                defaultValue: "中途 system 消息处理",
+              })}
+            </FormLabel>
+            <Select
+              value={midConversationSystemPolicy}
+              onValueChange={(value) =>
+                onMidConversationSystemPolicyChange(
+                  value as MidConversationSystemPolicy,
+                )
+              }
+            >
+              <SelectTrigger
+                id="claude-mid-conversation-system-policy"
+                aria-label={t("providerForm.midConversationSystemPolicyLabel", {
+                  defaultValue: "中途 system 消息处理",
+                })}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="rewrite_user">
+                  {t("providerForm.midConversationSystemPolicyRewrite", {
+                    defaultValue: "重写为 user（推荐）",
+                  })}
+                </SelectItem>
+                <SelectItem value="preserve">
+                  {t("providerForm.midConversationSystemPolicyPreserve", {
+                    defaultValue: "保留 system 角色",
+                  })}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {t("providerForm.midConversationSystemPolicyHint", {
+                defaultValue:
+                  "第三方网关会把中途 system 提升回前缀、逐出全部缓存，故默认重写为 user；上游不会提升 system 时可选保留以维持 system 特权语义。",
+              })}
+            </p>
+          </div>
+        </>
+      )}
+
+      <div className="space-y-1">
+        <FormLabel htmlFor="claude-classifier-severity-block">
+          {t("providerForm.classifierSeverityBlockLabel", {
+            defaultValue: "分类器 severity 拦截值",
+          })}
+        </FormLabel>
+        <Input
+          id="claude-classifier-severity-block"
+          inputMode="numeric"
+          value={classifierSeverityBlockValue}
+          onChange={(event) =>
+            onClassifierSeverityBlockValueChange(event.target.value)
+          }
+          placeholder="1000"
+        />
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {t("providerForm.classifierSeverityBlockHint", {
+            defaultValue:
+              "severity 模式下表达 BLOCK 的数值。默认 1000（大于任意合法阈值）；若客户端对 0-100 做范围校验，改为 100。留空 = 默认。",
+          })}
+        </p>
+      </div>
+    </div>
+  );
+
   if (variant === "stack") {
     // 批量勾选模型用当前预设对应的那份上游列表。
     const stackFetchedModels: FetchedModel[] = isCopilotPreset
@@ -1052,7 +1235,7 @@ export function ClaudeFormFields({
           />
         )}
 
-        {/* 高级区只有 UA 和请求覆盖；Copilot 的转发会跳过这两项，整块不显示 */}
+        {/* 高级区包含 UA、请求覆盖与缓存/分类器项；Copilot 的转发会跳过 UA 和请求覆盖 */}
         {!isCopilotPreset && (
           <Collapsible
             open={stackAdvancedExpanded}
@@ -1081,6 +1264,7 @@ export function ClaudeFormFields({
                 </div>
               )}
               {userAgentAndOverrides}
+              {cacheAndClassifierFields}
             </CollapsibleContent>
           </Collapsible>
         )}
@@ -1360,152 +1544,7 @@ export function ClaudeFormFields({
               </div>
             )}
 
-            {/* fork：缓存链路开关（Claude → OpenAI Chat + 会话亲和） */}
-            <div className="space-y-3 border-t border-border-default pt-3">
-              <div className="space-y-2">
-                <FormLabel>
-                  {t("codexConfig.promptCacheRoutingLabel", {
-                    defaultValue: "提示词缓存路由",
-                  })}
-                </FormLabel>
-                <Select
-                  value={promptCacheRouting}
-                  onValueChange={(value) =>
-                    onPromptCacheRoutingChange(value as PromptCacheRoutingMode)
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="auto">
-                      {t("codexConfig.promptCacheRoutingAuto", {
-                        defaultValue: "自动（推荐）",
-                      })}
-                    </SelectItem>
-                    <SelectItem value="enabled">
-                      {t("codexConfig.promptCacheRoutingEnabled", {
-                        defaultValue: "开启",
-                      })}
-                    </SelectItem>
-                    <SelectItem value="disabled">
-                      {t("codexConfig.promptCacheRoutingDisabled", {
-                        defaultValue: "关闭",
-                      })}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  {t("codexConfig.promptCacheRoutingHint", {
-                    defaultValue:
-                      "自动模式仅对已确认兼容的上游发送 prompt_cache_key；开启可用于其他兼容网关，关闭可避免严格网关因未知字段返回 400。只使用客户端提供的稳定会话 ID。",
-                  })}
-                </p>
-              </div>
-
-              <div className="space-y-1">
-                <FormLabel htmlFor="claude-session-affinity-header">
-                  {t("providerForm.sessionAffinityHeaderLabel", {
-                    defaultValue: "会话亲和 Header",
-                  })}
-                </FormLabel>
-                <Input
-                  id="claude-session-affinity-header"
-                  value={sessionAffinityHeader}
-                  onChange={(event) =>
-                    onSessionAffinityHeaderChange(event.target.value)
-                  }
-                  placeholder="x-session-affinity"
-                />
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  {t("providerForm.sessionAffinityHeaderHint", {
-                    defaultValue:
-                      "多实例网关需按会话固定路由到同一实例才能命中前缀缓存（Cloudflare Workers AI 为 x-session-affinity）。仅在客户端提供了会话 ID 时注入；留空关闭。",
-                  })}
-                </p>
-              </div>
-
-              <div className="space-y-1">
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={preserveCacheControl}
-                    onCheckedChange={(checked) =>
-                      onPreserveCacheControlChange(checked === true)
-                    }
-                  />
-                  {t("providerForm.preserveCacheControlLabel", {
-                    defaultValue: "保留 cache_control 断点",
-                  })}
-                </label>
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  {t("providerForm.preserveCacheControlHint", {
-                    defaultValue:
-                      "仅对在网关层实现了断点缓存的 OpenAI 兼容上游开启。默认关闭：多数严格后端收到 cache_control 会返回 400。",
-                  })}
-                </p>
-              </div>
-
-              <div className="space-y-1">
-                <FormLabel>
-                  {t("providerForm.midConversationSystemPolicyLabel", {
-                    defaultValue: "中途 system 消息处理",
-                  })}
-                </FormLabel>
-                <Select
-                  value={midConversationSystemPolicy}
-                  onValueChange={(value) =>
-                    onMidConversationSystemPolicyChange(
-                      value as MidConversationSystemPolicy,
-                    )
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="rewrite_user">
-                      {t("providerForm.midConversationSystemPolicyRewrite", {
-                        defaultValue: "重写为 user（推荐）",
-                      })}
-                    </SelectItem>
-                    <SelectItem value="preserve">
-                      {t("providerForm.midConversationSystemPolicyPreserve", {
-                        defaultValue: "保留 system 角色",
-                      })}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  {t("providerForm.midConversationSystemPolicyHint", {
-                    defaultValue:
-                      "第三方网关会把中途 system 提升回前缀、逐出全部缓存，故默认重写为 user；上游不会提升 system 时可选保留以维持 system 特权语义。",
-                  })}
-                </p>
-              </div>
-
-              <div className="space-y-1">
-                <FormLabel htmlFor="claude-classifier-severity-block">
-                  {t("providerForm.classifierSeverityBlockLabel", {
-                    defaultValue: "分类器 severity 拦截值",
-                  })}
-                </FormLabel>
-                <Input
-                  id="claude-classifier-severity-block"
-                  inputMode="numeric"
-                  value={classifierSeverityBlockValue}
-                  onChange={(event) =>
-                    onClassifierSeverityBlockValueChange(event.target.value)
-                  }
-                  placeholder="1000"
-                />
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  {t("providerForm.classifierSeverityBlockHint", {
-                    defaultValue:
-                      "severity 模式下表达 BLOCK 的数值。默认 1000（大于任意合法阈值）；若客户端对 0-100 做范围校验，改为 100。留空 = 默认。",
-                  })}
-                </p>
-              </div>
-            </div>
+            {cacheAndClassifierFields}
           </CollapsibleContent>
         </Collapsible>
       )}

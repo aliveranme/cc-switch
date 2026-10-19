@@ -3390,7 +3390,7 @@ fn chat_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
                 return Ok(());
             }
             let chunk: Value = match serde_json::from_str(data_str) {
-                Ok(v) => v,
+                Ok(v) => super::providers::unwrap_chat_completion_envelope(v),
                 Err(_) if !strict => return Ok(()),
                 Err(e) => {
                     return Err(ProxyError::TransformError(format!(
@@ -5001,5 +5001,18 @@ mod stack_tests {
         .await
         .expect("models");
         assert_eq!(body, json!({ "data": [], "has_more": false }));
+    }
+
+    #[test]
+    fn chat_sse_to_response_value_unwraps_enveloped_chunks() {
+        let sse = concat!(
+            "data: {\"success\":true,\"data\":{\"id\":\"chat_env_1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello \"},\"finish_reason\":null}]}}\n\n",
+            "data: {\"success\":true,\"data\":{\"id\":\"chat_env_1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"World\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let resp = chat_sse_to_response_value(sse).expect("unwrapped sse response");
+        assert_eq!(resp["id"], "chat_env_1");
+        assert_eq!(resp["choices"][0]["message"]["content"], "Hello World");
+        assert_eq!(resp["usage"]["completion_tokens"], 2);
     }
 }

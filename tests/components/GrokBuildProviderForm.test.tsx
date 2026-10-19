@@ -324,4 +324,43 @@ context_window = 500000
       screen.getByText("不要超过模型或网关的真实输出上限，否则会返回 400。"),
     ).toBeInTheDocument();
   });
+
+  it("persists sessionAffinityHeader in meta on submit and resets advanced fields when switching presets", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <GrokBuildProviderForm
+        submitLabel="Save"
+        onSubmit={onSubmit}
+        onCancel={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /PatewayAI/ }));
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "secret-key" },
+    });
+    await user.click(screen.getByRole("button", { name: /高级选项/ }));
+    fireEvent.change(screen.getByLabelText("会话亲和 Header"), {
+      target: { value: "  x-session-affinity  " },
+    });
+
+    // 切换预设时应重置残留的会话亲和 Header
+    await user.click(screen.getByRole("button", { name: /88API/ }));
+    expect(screen.getByLabelText("会话亲和 Header")).toHaveValue("");
+
+    // 重新填写并提交，验证 meta.sessionAffinityHeader 写入
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "secret-key-2" },
+    });
+    fireEvent.change(screen.getByLabelText("会话亲和 Header"), {
+      target: { value: "  x-session-affinity  " },
+    });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0].meta.sessionAffinityHeader).toBe(
+      "x-session-affinity",
+    );
+  });
 });

@@ -255,6 +255,23 @@ export function GrokBuildProviderForm({
     setRawConfig((current) => updateGrokBuildConfig(current, next));
   };
 
+  const resetAdvancedState = (
+    nextApiFormat: CodexApiFormat = "openai_responses",
+  ) => {
+    setApiFormat(nextApiFormat);
+    setAnthropicAuthField("ANTHROPIC_AUTH_TOKEN");
+    setImpersonateClaudeCode(false);
+    setMaxOutputTokens("");
+    setCodexChatReasoning({});
+    setPromptCacheRouting("auto");
+    setSessionAffinityHeader("");
+    setCodexNativeResponsesTemplate("full");
+    setIsFullUrl(false);
+    setCustomUserAgent("");
+    setHeadersOverride("");
+    setBodyOverride("");
+  };
+
   const handlePresetChange = (presetId: string) => {
     setSelectedPresetId(presetId);
     if (presetId === "custom") {
@@ -262,6 +279,7 @@ export function GrokBuildProviderForm({
       setIsPartner(false);
       setPartnerPromotionKey(undefined);
       setPresetEndpoints([]);
+      resetAdvancedState("openai_responses");
       return;
     }
 
@@ -275,6 +293,7 @@ export function GrokBuildProviderForm({
       setIsPartner(false);
       setPartnerPromotionKey(undefined);
       setPresetEndpoints([]);
+      resetAdvancedState("openai_responses");
       setRawConfig("");
       clearDraftProjection();
       return;
@@ -306,7 +325,7 @@ export function GrokBuildProviderForm({
     setBaseUrl(presetBaseUrl);
     setApiKey(presetApiKey);
     setUpstreamModel(presetModel);
-    setApiFormat(presetApiFormat);
+    resetAdvancedState(presetApiFormat);
     setPresetEndpoints(preset.endpointCandidates ?? []);
     const presetConfig = buildGrokBuildConfig({
       model: profile,
@@ -425,6 +444,7 @@ export function GrokBuildProviderForm({
       partnerPromotionKey,
       impersonateClaudeCode,
       promptCacheRouting,
+      sessionAffinityHeader: sessionAffinityHeader.trim() || undefined,
       codexChatReasoning,
       customUserAgent: customUserAgent.trim() || undefined,
       localProxyRequestOverrides: requestOverrides.overrides,

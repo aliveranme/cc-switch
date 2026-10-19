@@ -128,7 +128,9 @@ describe("ProviderForm Stack layout (Claude Code)", () => {
     expect(screen.getByDisplayValue("m-s")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Model S")).toBeInTheDocument();
     // 没有 ★：第一行是默认模型，写在「模型列表」后面的「?」里。
-    expect(screen.getByRole("button", { name: "模型列表" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "模型列表" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("providerForm.modelMappingLabel")).toBeNull();
     expect(screen.queryByText("默认兜底模型")).toBeNull();
   });
@@ -136,10 +138,14 @@ describe("ProviderForm Stack layout (Claude Code)", () => {
   it("简化面板的说明收进「?」，高级选项折叠时不挂说明", () => {
     renderForm("claude", vi.fn());
 
-    expect(screen.getByRole("button", { name: "上游格式" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "上游格式" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/一般无需修改/)).toBeNull();
     fireEvent.click(
-      screen.getByRole("button", { name: "providerForm.advancedOptionsToggle" }),
+      screen.getByRole("button", {
+        name: "providerForm.advancedOptionsToggle",
+      }),
     );
     expect(
       screen.getByText("以下两项只在路由、聚合模式下生效。"),
@@ -295,7 +301,9 @@ describe("ProviderForm Stack layout (Codex)", () => {
       ],
     });
 
-    expect(screen.getByRole("button", { name: "模型列表" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "模型列表" }),
+    ).toBeInTheDocument();
     // 有列表时第一行就是默认模型，不再单独显示默认模型框。
     expect(document.getElementById("codexDefaultModel")).toBeNull();
     fireEvent.change(screen.getByDisplayValue("m-1"), {
@@ -389,4 +397,75 @@ describe("ProviderForm Stack layout (Codex)", () => {
     expect(screen.getByText("模型列表")).toBeInTheDocument();
     expect(screen.queryByTestId("codex-config-editor")).toBeNull();
   });
+
+  it("Claude 新增模式下切换预设会重置 fork 高级配置项", () => {
+    settingsState.enableStackMode = false;
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <ProviderForm
+          appId="claude"
+          submitLabel="save-provider"
+          onSubmit={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    // 选 Nvidia（openai_chat 预设），填写 fork 高级字段
+    fireEvent.click(screen.getByRole("button", { name: /Nvidia/ }));
+    fireEvent.change(screen.getByLabelText("会话亲和 Header"), {
+      target: { value: "x-cf-affinity" },
+    });
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "保留 cache_control 断点" }),
+    );
+    fireEvent.change(screen.getByLabelText("分类器 severity 拦截值"), {
+      target: { value: "100" },
+    });
+    expect(screen.getByLabelText("会话亲和 Header")).toHaveValue(
+      "x-cf-affinity",
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "保留 cache_control 断点" }),
+    ).toBeChecked();
+    expect(screen.getByLabelText("分类器 severity 拦截值")).toHaveValue("100");
+
+    // 切换到自定义预设，上述字段应全部重置为默认值
+    fireEvent.click(
+      screen.getByRole("button", { name: "providerPreset.custom" }),
+    );
+    expect(screen.getByLabelText("会话亲和 Header")).toHaveValue("");
+    expect(screen.getByLabelText("分类器 severity 拦截值")).toHaveValue("");
+  }, 15000);
+
+  it("Codex 新增模式下切换预设会重置 fork 高级配置项", () => {
+    settingsState.enableStackMode = false;
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <ProviderForm
+          appId="codex"
+          submitLabel="save-provider"
+          onSubmit={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "providerPreset.custom" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "高级选项",
+      }),
+    );
+    fireEvent.change(screen.getByLabelText("会话亲和 Header"), {
+      target: { value: "x-codex-affinity" },
+    });
+    expect(screen.getByLabelText("会话亲和 Header")).toHaveValue(
+      "x-codex-affinity",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Nvidia/ }));
+    expect(screen.getByLabelText("会话亲和 Header")).toHaveValue("");
+  }, 15000);
 });

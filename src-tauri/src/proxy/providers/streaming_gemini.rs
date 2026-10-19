@@ -32,6 +32,14 @@ fn map_finish_reason(reason: Option<&str>, has_tool_use: bool, blocked: bool) ->
     }
 }
 
+fn extract_thought_text(parts: &[Value]) -> String {
+    parts
+        .iter()
+        .filter(|part| part.get("thought").and_then(|value| value.as_bool()) == Some(true))
+        .filter_map(|part| part.get("text").and_then(|value| value.as_str()))
+        .collect::<String>()
+}
+
 fn extract_visible_text(parts: &[Value]) -> String {
     parts
         .iter()
@@ -252,6 +260,8 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
         let mut message_id: Option<String> = None;
         let mut current_model: Option<String> = None;
         let mut has_sent_message_start = false;
+        let mut accumulated_thinking = String::new();
+        let mut thinking_block_index: Option<u32> = None;
         let mut accumulated_text = String::new();
         let mut text_block_index: Option<u32> = None;
         let mut next_content_index: u32 = 0;
@@ -399,6 +409,52 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                                     &mut tool_call_snapshots,
                                     extract_tool_calls(&rectified_parts, tool_schema_hints.as_ref()),
                                 );
+                                let thought_text = extract_thought_text(&rectified_parts);
+                                if !thought_text.is_empty() {
+                                    let is_cumulative = thought_text.starts_with(&accumulated_thinking);
+                                    let delta = if is_cumulative {
+                                        thought_text[accumulated_thinking.len()..].to_string()
+                                    } else {
+                                        thought_text.clone()
+                                    };
+
+                                    if !delta.is_empty() {
+                                        let index = *thinking_block_index.get_or_insert_with(|| {
+                                            let assigned = next_content_index;
+                                            next_content_index += 1;
+                                            assigned
+                                        });
+
+                                        if !open_indices.contains(&index) {
+                                            let start_event = json!({
+                                                "type": "content_block_start",
+                                                "index": index,
+                                                "content_block": {
+                                                    "type": "thinking",
+                                                    "thinking": ""
+                                                }
+                                            });
+                                            yield Ok(encode_sse("content_block_start", &start_event));
+                                            open_indices.insert(index);
+                                        }
+
+                                        let delta_event = json!({
+                                            "type": "content_block_delta",
+                                            "index": index,
+                                            "delta": {
+                                                "type": "thinking_delta",
+                                                "thinking": delta
+                                            }
+                                        });
+                                        yield Ok(encode_sse("content_block_delta", &delta_event));
+                                        if is_cumulative {
+                                            accumulated_thinking = thought_text;
+                                        } else {
+                                            accumulated_thinking.push_str(&delta);
+                                        }
+                                    }
+                                }
+
                                 let visible_text = extract_visible_text(&rectified_parts);
                                 if !visible_text.is_empty() {
                                     let is_cumulative = visible_text.starts_with(&accumulated_text);
@@ -409,6 +465,16 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                                     };
 
                                     if !delta.is_empty() {
+                                        if let Some(t_index) = thinking_block_index {
+                                            if open_indices.remove(&t_index) {
+                                                let stop_event = json!({
+                                                    "type": "content_block_stop",
+                                                    "index": t_index
+                                                });
+                                                yield Ok(encode_sse("content_block_stop", &stop_event));
+                                            }
+                                        }
+
                                         let index = *text_block_index.get_or_insert_with(|| {
                                             let assigned = next_content_index;
                                             next_content_index += 1;
@@ -510,6 +576,16 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
             });
             yield Ok(encode_sse("error", &error_event));
             return;
+        }
+
+        if let Some(t_index) = thinking_block_index {
+            if open_indices.remove(&t_index) {
+                let stop_event = json!({
+                    "type": "content_block_stop",
+                    "index": t_index
+                });
+                yield Ok(encode_sse("content_block_stop", &stop_event));
+            }
         }
 
         if accumulated_text.is_empty() {
@@ -1206,5 +1282,20 @@ mod tests {
             !output.contains("message_delta") && !output.contains("message_stop"),
             "空流不得伪造成功终态: {output}"
         );
+    }
+
+    #[test]
+    fn converts_thought_parts_to_thinking_block_before_text() {
+        let output = collect_stream_output(vec![
+            "data: {\"responseId\":\"resp_th\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"content\":{\"parts\":[{\"thought\":true,\"text\":\"Let me think\"}]}}],\"usageMetadata\":{\"promptTokenCount\":5,\"totalTokenCount\":8}}\n\n",
+            "data: {\"responseId\":\"resp_th\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"thought\":true,\"text\":\"Let me think...\"},{\"text\":\"Done!\"}]}}],\"usageMetadata\":{\"promptTokenCount\":5,\"thoughtsTokenCount\":4,\"totalTokenCount\":12}}\n\n",
+        ]);
+
+        assert!(output.contains("\"type\":\"thinking\""));
+        assert!(output.contains("\"type\":\"thinking_delta\""));
+        assert!(output.contains("\"thinking\":\"Let me think\""));
+        assert!(output.contains("\"thinking\":\"...\""));
+        assert!(output.contains("\"text\":\"Done!\""));
+        assert!(output.contains("\"thinking_tokens\":4"));
     }
 }

@@ -68,8 +68,8 @@ pub use codex::{
     is_codex_official_provider, is_codex_responses_endpoint,
     provider_needs_responses_late_arguments_repair, provider_needs_responses_namespace_flatten,
     resolve_codex_catalog_tool_profile, resolve_codex_chat_reasoning_config,
-    should_convert_codex_responses_to_anthropic, should_convert_codex_responses_to_chat,
-    strip_codex_hosted_web_search,
+    resolve_codex_responses_template, should_convert_codex_responses_to_anthropic,
+    should_convert_codex_responses_to_chat, strip_codex_hosted_web_search,
 };
 pub use gemini::GeminiAdapter;
 
@@ -303,7 +303,7 @@ pub fn get_adapter_for_provider_type(provider_type: &ProviderType) -> Box<dyn Pr
 /// 判定刻意收紧：仅当顶层没有 `choices`、而 `data.choices` 确实是数组时才解包。裸补全体、
 /// Anthropic 消息体、Responses、Gemini 响应都原样返回，避免误伤。
 pub(crate) fn unwrap_chat_completion_envelope(mut body: serde_json::Value) -> serde_json::Value {
-    let wrapped = body.get("choices").is_none()
+    let wrapped = !body.get("choices").is_some_and(serde_json::Value::is_array)
         && body
             .get("data")
             .and_then(|data| data.get("choices"))
@@ -620,5 +620,24 @@ mod tests {
                 "非补全体不应被改动"
             );
         }
+    }
+
+    #[test]
+    fn test_unwrap_chat_completion_envelope_unwraps_when_top_level_choices_is_null() {
+        let body = json!({
+            "success": true,
+            "choices": null,
+            "data": {
+                "id": "gen_null_top",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "Unwrapped!"}
+                }]
+            }
+        });
+        let unwrapped = unwrap_chat_completion_envelope(body);
+        assert_eq!(unwrapped["id"], "gen_null_top");
+        assert_eq!(unwrapped["choices"][0]["message"]["content"], "Unwrapped!");
     }
 }

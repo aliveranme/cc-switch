@@ -572,8 +572,31 @@ fn extract_response_text(body: &Value) -> Option<String> {
 /// 返回 (verdict, reason_text)：
 /// - `("no", reason)` — 判定为安全
 /// - `("yes", reason)` — 判定为需拦截
+fn strip_thinking_blocks(lower: &str) -> String {
+    let mut current = lower.to_string();
+    for (open, close) in [("<thinking>", "</thinking>"), ("<think>", "</think>")] {
+        while let Some(start) = current.find(open) {
+            let after_open = start + open.len();
+            if let Some(rel_end) = current[after_open..].find(close) {
+                let end = after_open + rel_end + close.len();
+                current.replace_range(start..end, "\n");
+            } else {
+                current.truncate(start);
+                break;
+            }
+        }
+    }
+    current
+}
+
 fn determine_classification_result(text: &str) -> (&str, &str) {
-    let lower = text.to_lowercase();
+    let full_lower = text.to_lowercase();
+    let stripped = strip_thinking_blocks(&full_lower);
+    let lower = if stripped.trim().is_empty() {
+        full_lower
+    } else {
+        stripped
+    };
 
     // 1) 优先匹配独立成行的 <block>yes|no</block> 标签。
     //    上游被要求以该格式输出裁决，标签单独成行（trim 后整行等于标签）。
@@ -857,12 +880,25 @@ pub fn transform_classifier_response_with(
 fn sanitize_upstream_analysis(text: &str) -> String {
     let mut current = text.to_string();
     let mut stripped: Vec<&str> = Vec::new();
-    for tag in ["thinking", "block", "severity", "reason", "category"] {
-        let (next, hit) = strip_classifier_tag(&current, tag);
-        if hit {
-            stripped.push(tag);
+    loop {
+        let mut any_hit_in_round = false;
+        for tag in ["thinking", "block", "severity", "reason", "category"] {
+            loop {
+                let (next, hit) = strip_classifier_tag(&current, tag);
+                current = next;
+                if hit {
+                    any_hit_in_round = true;
+                    if !stripped.contains(&tag) {
+                        stripped.push(tag);
+                    }
+                } else {
+                    break;
+                }
+            }
         }
-        current = next;
+        if !any_hit_in_round {
+            break;
+        }
     }
     if !stripped.is_empty() {
         log::warn!(
@@ -2176,5 +2212,21 @@ mod tests {
             ClassifierOptions::from_provider_meta(Some(&meta)).severity_block_value,
             100
         );
+    }
+
+    #[test]
+    fn test_determine_classification_result_ignores_hypothetical_block_inside_thinking() {
+        let text = "<thinking>\nIf this command deleted system files, the verdict would be:\n<block>yes</block>\nHowever, it only lists a directory.\n</thinking>\n<block>no</block>\nThe action is safe.";
+        let (verdict, _) = determine_classification_result(text);
+        assert_eq!(verdict, "no");
+    }
+
+    #[test]
+    fn test_sanitize_upstream_analysis_strips_nested_tags_to_fixed_point() {
+        let text = "Nested <blo<block>ck>yes</bl</block>ock> and <sev<severity>erity>99</severity>";
+        let sanitized = sanitize_upstream_analysis(text);
+        assert!(!sanitized.to_lowercase().contains("<block>"));
+        assert!(!sanitized.to_lowercase().contains("</block>"));
+        assert!(!sanitized.to_lowercase().contains("<severity>"));
     }
 }

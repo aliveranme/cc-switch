@@ -252,6 +252,30 @@ impl CodexCatalogToolProfile {
     }
 }
 
+/// Native `/responses` 目录使用的模板。
+///
+/// - `Full`（默认）：gpt-5.6-sol 全量模板（保留 `apply_patch_tool_type: "freeform"`、
+///   `web_search_tool_type: "text_and_image"`、`model_messages`、6 档 reasoning 等全量能力）。
+///   面向 DeepSeek、OpenRouter 及大多数支持 freeform apply_patch 的第三方原生网关。
+/// - `Neutral`：中性模板（`codex_native_responses_template.json`，无 freeform custom tool，
+///   仅 none/high 2 档 reasoning）。面向 MiMo/LongCat 等硬性拒收 `type == "custom"` 工具的网关。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CodexResponsesTemplate {
+    #[default]
+    Full,
+    Neutral,
+}
+
+impl CodexResponsesTemplate {
+    pub fn from_meta_value(meta: Option<&str>) -> Self {
+        match meta.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("neutral") => Self::Neutral,
+            _ => Self::Full,
+        }
+    }
+}
+
 /// Reserved built-in provider IDs from OpenAI Codex's config/model-provider
 /// catalog. Keep in sync with Codex `RESERVED_MODEL_PROVIDER_IDS` (0.149:
 /// exactly these five; 0.148 is the same minus `amazon-bedrock-runtime`).
@@ -1318,6 +1342,7 @@ fn codex_catalog_model_entry(
     priority: usize,
     profile: CodexCatalogToolProfile,
     default_context_window: u64,
+    responses_template: CodexResponsesTemplate,
 ) -> Value {
     let mut entry = template.clone();
     let Some(entry_obj) = entry.as_object_mut() else {
@@ -1351,20 +1376,18 @@ fn codex_catalog_model_entry(
         )),
     );
 
-    if !matches!(
-        profile,
-        CodexCatalogToolProfile::ProxyChat | CodexCatalogToolProfile::Copilot
-    ) {
-        // Native `/responses` and Anthropic gateways reject / drop Codex's freeform
-        // `apply_patch` (type=="custom") tool. Strip any key that would make Codex
-        // emit a custom/freeform tool, and rely on shell_type="shell_command" for
-        // edits. Defensive even though the native template is already clean
-        // (guards against template drift / an accidental classic-template clone).
-        //
-        // NOTE: `base_instructions` is NOT stripped — Codex's catalog parser
-        // treats it as a REQUIRED field and refuses to load the file without
-        // it ("missing field `base_instructions`"). The template carries a
-        // neutral identity default; per-vendor official text overrides below.
+    let should_strip_custom_tools = match profile {
+        CodexCatalogToolProfile::Anthropic => true,
+        CodexCatalogToolProfile::NativeResponses => {
+            responses_template == CodexResponsesTemplate::Neutral
+        }
+        CodexCatalogToolProfile::ProxyChat | CodexCatalogToolProfile::Copilot => false,
+    };
+
+    if should_strip_custom_tools {
+        // Native `/responses` (under Neutral template) and Anthropic gateways reject / drop
+        // Codex's freeform `apply_patch` (type=="custom") tool. Strip any key that would
+        // make Codex emit a custom/freeform tool, and rely on shell_type="shell_command" for edits.
         for key in [
             "apply_patch_tool_type",
             "web_search_tool_type",
@@ -1374,7 +1397,12 @@ fn codex_catalog_model_entry(
             entry_obj.remove(key);
         }
         entry_obj.insert("shell_type".to_string(), json!("shell_command"));
+    }
 
+    if !matches!(
+        profile,
+        CodexCatalogToolProfile::ProxyChat | CodexCatalogToolProfile::Copilot
+    ) {
         if let Some(base_instructions) = spec
             .base_instructions
             .as_deref()
@@ -1966,15 +1994,18 @@ fn load_codex_classic_tool_template() -> Value {
     serde_json::from_str(text).expect("bundled classic tool template must be valid JSON")
 }
 
-/// Bundled clean template for native `/responses` providers. Unlike the
-/// classic tool template it carries NO freeform `apply_patch` / `web_search` tool
-/// declarations and no GPT-5 base_instructions, so Codex never emits a
-/// `type=="custom"` tool that native gateways (MiMo/MiniMax/…) reject. Edits
-/// flow through `shell_type="shell_command"` instead. We deliberately do NOT
-/// fall back to the classic tool template here (that would reintroduce its
-/// freeform apply_patch).
-fn load_codex_native_responses_template() -> Value {
-    let text = include_str!("resources/codex_native_responses_template.json");
+/// Bundled template for native `/responses` providers.
+///
+/// `Full` loads `gpt5_6_sol_template.json` (freeform apply_patch, web_search, 6 reasoning tiers);
+/// `Neutral` loads `codex_native_responses_template.json` (no freeform apply_patch, 2 reasoning tiers)
+/// for gateways (MiMo/LongCat/MiniMax/…) that reject `type=="custom"` tools.
+pub(crate) fn load_codex_native_responses_template(template: CodexResponsesTemplate) -> Value {
+    let text = match template {
+        CodexResponsesTemplate::Full => include_str!("resources/gpt5_6_sol_template.json"),
+        CodexResponsesTemplate::Neutral => {
+            include_str!("resources/codex_native_responses_template.json")
+        }
+    };
     serde_json::from_str(text).expect("bundled codex native responses template must be valid JSON")
 }
 
@@ -2163,27 +2194,49 @@ fn codex_model_catalog_from_specs(
         .iter()
         .enumerate()
         .map(|(index, spec)| {
-            codex_catalog_model_entry(template, spec, index, profile, default_context_window)
+            codex_catalog_model_entry(
+                template,
+                spec,
+                index,
+                profile,
+                default_context_window,
+                CodexResponsesTemplate::Neutral,
+            )
         })
         .collect();
 
     json!({ "models": entries })
 }
 
-fn codex_model_catalog_from_settings(
+pub(crate) fn codex_model_catalog_from_settings_with_template(
     settings: &Value,
     config_text: &str,
     profile: CodexCatalogToolProfile,
+    template: CodexResponsesTemplate,
 ) -> Result<Option<Value>, AppError> {
     let specs = codex_catalog_model_specs(settings);
     if specs.is_empty() {
         return Ok(None);
     }
-    let mut catalog = codex_catalog_from_specs_for_row(&specs, config_text, profile)?;
+    let mut catalog = codex_catalog_from_specs_for_row(&specs, config_text, profile, template)?;
     if let Some(model) = codex_card_auto_review_model(settings) {
         apply_codex_auto_review_model(&mut catalog, model);
     }
     Ok(Some(catalog))
+}
+
+#[allow(dead_code)]
+fn codex_model_catalog_from_settings(
+    settings: &Value,
+    config_text: &str,
+    profile: CodexCatalogToolProfile,
+) -> Result<Option<Value>, AppError> {
+    codex_model_catalog_from_settings_with_template(
+        settings,
+        config_text,
+        profile,
+        CodexResponsesTemplate::Neutral,
+    )
 }
 
 /// 卡上选的自动审批模型（`modelCatalog.autoReviewModel`），空串当作没选。只在直连、路由
@@ -2346,6 +2399,7 @@ fn codex_catalog_from_specs_for_row(
     specs: &[CodexCatalogModelSpec],
     config_text: &str,
     profile: CodexCatalogToolProfile,
+    responses_template: CodexResponsesTemplate,
 ) -> Result<Value, AppError> {
     // Vendors that publish an OFFICIAL Codex models.json for their native
     // `/responses` gateway get it mirrored verbatim instead of the neutral
@@ -2364,12 +2418,16 @@ fn codex_catalog_from_specs_for_row(
     let default_context_window =
         extract_codex_top_level_u64(config_text, "model_context_window").unwrap_or(128_000);
 
-    // Native providers use the bundled clean template (no freeform apply_patch);
+    // Native providers use the selected template (Full = gpt-5.6-sol, Neutral = clean template);
+    // Anthropic gateways drop custom tools so they use the Neutral template;
     // ProxyChat and Copilot clone the bundled classic tool template so their
     // proxy paths retain custom<->function tool support.
     let template = match profile {
-        CodexCatalogToolProfile::NativeResponses | CodexCatalogToolProfile::Anthropic => {
-            load_codex_native_responses_template()
+        CodexCatalogToolProfile::NativeResponses => {
+            load_codex_native_responses_template(responses_template)
+        }
+        CodexCatalogToolProfile::Anthropic => {
+            load_codex_native_responses_template(CodexResponsesTemplate::Neutral)
         }
         CodexCatalogToolProfile::ProxyChat | CodexCatalogToolProfile::Copilot => {
             load_codex_classic_tool_template()
@@ -2397,6 +2455,7 @@ fn codex_catalog_from_specs_for_row(
                     index,
                     profile,
                     default_context_window,
+                    responses_template,
                 ),
             },
         )
@@ -2431,13 +2490,34 @@ pub(crate) fn codex_disables_web_search(
 
 /// 在内存里算出模型目录，不写盘。`config_text` 是归一化后的配置（选路、路由表地址、
 /// 模型名、窗口），见 `CodexProjection::catalog_input_text`。
+#[allow(dead_code)]
 pub(crate) fn plan_codex_model_catalog(
     settings: &Value,
     config_text: &str,
     profile: CodexCatalogToolProfile,
 ) -> Result<CodexCatalogPlan, AppError> {
+    plan_codex_model_catalog_with_template(
+        settings,
+        config_text,
+        profile,
+        CodexResponsesTemplate::default(),
+    )
+}
+
+/// 显式模板版本的 [`plan_codex_model_catalog`]。
+pub(crate) fn plan_codex_model_catalog_with_template(
+    settings: &Value,
+    config_text: &str,
+    profile: CodexCatalogToolProfile,
+    responses_template: CodexResponsesTemplate,
+) -> Result<CodexCatalogPlan, AppError> {
     Ok(CodexCatalogPlan {
-        catalog: codex_model_catalog_from_settings(settings, config_text, profile)?,
+        catalog: codex_model_catalog_from_settings_with_template(
+            settings,
+            config_text,
+            profile,
+            responses_template,
+        )?,
     })
 }
 
@@ -2473,6 +2553,8 @@ pub(crate) struct CodexCatalogRow<'a> {
     pub config_text: &'a str,
     /// 这一家自己的工具 profile：各家的请求走各自的转换，目录要和转换对得上。
     pub profile: CodexCatalogToolProfile,
+    /// 这一家 NativeResponses 选定的模板：Full（默认）或 Neutral。
+    pub responses_template: CodexResponsesTemplate,
 }
 
 /// 合并目录里的一家 Stack 供应商。
@@ -2606,7 +2688,12 @@ pub(crate) fn codex_stack_third_party_rows(
     if specs.is_empty() {
         return Ok(Vec::new());
     }
-    let catalog = codex_catalog_from_specs_for_row(&specs, row.config_text, row.profile)?;
+    let catalog = codex_catalog_from_specs_for_row(
+        &specs,
+        row.config_text,
+        row.profile,
+        row.responses_template,
+    )?;
     let mut entries = match catalog {
         Value::Object(mut obj) => match obj.remove("models") {
             Some(Value::Array(entries)) => entries,
@@ -4668,7 +4755,7 @@ wire_api = "responses"
 
     #[test]
     fn proxy_catalog_profiles_keep_apply_patch_and_disable_original_image_detail() {
-        let template = load_codex_native_responses_template();
+        let template = load_codex_native_responses_template(CodexResponsesTemplate::Neutral);
         let specs = vec![CodexCatalogModelSpec {
             model: "x".to_string(),
             display_name: Some("x".to_string()),
@@ -5227,6 +5314,7 @@ wire_api = "responses"
                     settings: &route,
                     config_text: "",
                     profile: CodexCatalogToolProfile::NativeResponses,
+                    responses_template: CodexResponsesTemplate::default(),
                 }),
                 &[CodexStackCatalogMember {
                     key: "relay",
@@ -5235,6 +5323,7 @@ wire_api = "responses"
                         settings: &member,
                         config_text: "",
                         profile: CodexCatalogToolProfile::ProxyChat,
+                        responses_template: CodexResponsesTemplate::default(),
                     },
                 }],
                 false,
@@ -5413,6 +5502,7 @@ wire_api = "responses"
                     settings: &stacked_settings,
                     config_text: "model = \"deepseek-v4-pro\"\n",
                     profile: CodexCatalogToolProfile::NativeResponses,
+                    responses_template: CodexResponsesTemplate::default(),
                 },
             }],
             false,
@@ -5488,6 +5578,7 @@ wire_api = "responses"
                         settings: &stacked_settings,
                         config_text: "model = \"deepseek-v4-pro\"\n",
                         profile: CodexCatalogToolProfile::NativeResponses,
+                        responses_template: CodexResponsesTemplate::default(),
                     },
                 }],
                 classic,
@@ -5546,6 +5637,7 @@ wire_api = "responses"
                 settings: &route_settings,
                 config_text: route_text,
                 profile,
+                responses_template: CodexResponsesTemplate::default(),
             }),
             &[CodexStackCatalogMember {
                 key: "ds",
@@ -5554,6 +5646,7 @@ wire_api = "responses"
                     settings: &stacked_settings,
                     config_text: route_text,
                     profile,
+                    responses_template: CodexResponsesTemplate::default(),
                 },
             }],
             false,
@@ -5577,6 +5670,7 @@ wire_api = "responses"
                 settings: &route_settings,
                 config_text: route_text,
                 profile: CodexCatalogToolProfile::NativeResponses,
+                responses_template: CodexResponsesTemplate::default(),
             }),
             &[CodexStackCatalogMember {
                 key: "anth",
@@ -5585,6 +5679,7 @@ wire_api = "responses"
                     settings: &stacked_settings,
                     config_text: stacked_text,
                     profile: CodexCatalogToolProfile::Anthropic,
+                    responses_template: CodexResponsesTemplate::default(),
                 },
             }],
             false,
@@ -6096,6 +6191,93 @@ model_catalog_json = "cc-switch-model-catalog.json"
         assert!(
             result.is_err(),
             "file larger than MAX_CODEX_CATALOG_BYTES must be rejected"
+        );
+    }
+
+    // ── codexNativeResponsesTemplate：NativeResponses 目录模板可选 ──
+
+    /// meta 取值映射：只认 `neutral`，其余（含未知值）回退 Full。
+    #[test]
+    fn codex_responses_template_from_meta_value_maps_neutral_only() {
+        assert_eq!(
+            CodexResponsesTemplate::from_meta_value(None),
+            CodexResponsesTemplate::Full
+        );
+        assert_eq!(
+            CodexResponsesTemplate::from_meta_value(Some("full")),
+            CodexResponsesTemplate::Full
+        );
+        assert_eq!(
+            CodexResponsesTemplate::from_meta_value(Some("neutral")),
+            CodexResponsesTemplate::Neutral
+        );
+        // 允许首尾空白；未知值回退 Full（拼写错误不应静默降级能力）
+        assert_eq!(
+            CodexResponsesTemplate::from_meta_value(Some(" neutral ")),
+            CodexResponsesTemplate::Neutral
+        );
+        assert_eq!(
+            CodexResponsesTemplate::from_meta_value(Some("bogus")),
+            CodexResponsesTemplate::Full
+        );
+    }
+
+    /// 两个内置模板的关键能力差异（freeform apply_patch / reasoning 档位）。
+    #[test]
+    fn neutral_template_drops_freeform_tools_and_reasoning_tiers() {
+        let neutral = load_codex_native_responses_template(CodexResponsesTemplate::Neutral);
+        assert!(
+            neutral.get("apply_patch_tool_type").is_none(),
+            "中性模板不得声明 freeform apply_patch"
+        );
+        assert_eq!(neutral["supports_search_tool"], json!(false));
+        assert_eq!(
+            neutral["supported_reasoning_levels"]
+                .as_array()
+                .map(Vec::len),
+            Some(2)
+        );
+
+        let full = load_codex_native_responses_template(CodexResponsesTemplate::Full);
+        assert_eq!(full["apply_patch_tool_type"], json!("freeform"));
+        assert_eq!(
+            full["supported_reasoning_levels"].as_array().map(Vec::len),
+            Some(6)
+        );
+    }
+
+    /// 端到端（不落盘）：NativeResponses profile 的目录条目跟随所选模板。
+    #[test]
+    fn native_catalog_uses_selected_responses_template() {
+        let settings = json!({
+            "modelCatalog": { "models": [{ "model": "m1", "displayName": "M1" }] }
+        });
+
+        let full = codex_model_catalog_from_settings_with_template(
+            &settings,
+            "",
+            CodexCatalogToolProfile::NativeResponses,
+            CodexResponsesTemplate::Full,
+        )
+        .expect("catalog generation must succeed")
+        .expect("non-empty modelCatalog must yield a catalog");
+        assert_eq!(
+            full["models"][0]["apply_patch_tool_type"],
+            json!("freeform")
+        );
+
+        let neutral = codex_model_catalog_from_settings_with_template(
+            &settings,
+            "",
+            CodexCatalogToolProfile::NativeResponses,
+            CodexResponsesTemplate::Neutral,
+        )
+        .expect("catalog generation must succeed")
+        .expect("non-empty modelCatalog must yield a catalog");
+        assert!(
+            neutral["models"][0].get("apply_patch_tool_type").is_none(),
+            "neutral 模板不得给目录条目带出 apply_patch_tool_type: {}",
+            neutral["models"][0]
         );
     }
 }

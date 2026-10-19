@@ -92,25 +92,33 @@ pub fn anthropic_to_gemini_with_shadow(
         result["generationConfig"] = generation_config;
     }
 
+    let mut surviving_tool_names: Vec<String> = Vec::new();
     if let Some(tools) = body.get("tools").and_then(|value| value.as_array()) {
-        // 仅转换可映射为 functionDeclaration 的工具：跳过 BatchTool 以及
-        // 无 name 的内置工具（如 web_search_20250305——Anthropic 内置工具
-        // 不带 name 字段）。Gemini 的 FunctionDeclaration.name 为必填，
-        // 空名会让上游直接 400 拒绝整个请求。
+        // 仅转换可映射为 functionDeclaration 的自定义工具：跳过 BatchTool、
+        // 无 name 的内置工具、以及带非 custom type 且无 input_schema 的
+        // Anthropic 服务端工具（如 web_search_20250305 / bash_20250124）。
+        // Gemini 的 FunctionDeclaration 要求合法函数定义，否则上游 400。
         let function_declarations: Vec<Value> = tools
             .iter()
             .filter(|tool| {
-                tool.get("type").and_then(|value| value.as_str()) != Some("BatchTool")
+                let tool_type = tool.get("type").and_then(|value| value.as_str());
+                let is_server_builtin =
+                    tool_type.is_some_and(|t| t != "custom" && tool.get("input_schema").is_none());
+                tool_type != Some("BatchTool")
+                    && !is_server_builtin
                     && tool
                         .get("name")
                         .and_then(|value| value.as_str())
                         .is_some_and(|name| !name.trim().is_empty())
             })
             .map(|tool| {
+                let name = tool
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                surviving_tool_names.push(name.to_string());
                 build_gemini_function_declaration(
-                    tool.get("name")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or(""),
+                    name,
                     tool.get("description").and_then(|value| value.as_str()),
                     tool.get("input_schema")
                         .cloned()
@@ -124,15 +132,17 @@ pub fn anthropic_to_gemini_with_shadow(
         }
     }
 
-    // tools 全部被过滤（BatchTool / 无 name 内置工具）时不输出 toolConfig——
-    // 具名 tool 选择（ANY + allowedFunctionNames）会指向被过滤掉的函数，
-    // 严格网关可能 400（与 transform.rs / transform_codex_chat.rs 对称）。
-    if result.get("tools").is_none() && body.get("tools").is_some_and(|t| t.is_array()) {
-        log::debug!("[Gemini] tools 全部被过滤（BatchTool / 无 name 内置工具），省略 toolConfig");
+    // 无可转换的自定义工具（未传 tools 或全部被过滤）时不输出 toolConfig——
+    // Gemini 在无 tools 时收到 toolConfig 或指向被过滤函数的 allowedFunctionNames
+    // 会直接 400（与 transform.rs / transform_codex_chat.rs 对称）。
+    if result.get("tools").is_none() {
+        if body.get("tool_choice").is_some() {
+            log::debug!("[Gemini] 请求无可转换的自定义工具，省略 toolConfig");
+        }
         return Ok(result);
     }
 
-    if let Some(tool_config) = map_tool_choice(body.get("tool_choice"))? {
+    if let Some(tool_config) = map_tool_choice(body.get("tool_choice"), &surviving_tool_names)? {
         result["toolConfig"] = tool_config;
     }
 
@@ -237,6 +247,23 @@ pub fn gemini_to_anthropic_with_shadow_and_hints(
 
     for part in &rectified_parts {
         if part.get("thought").and_then(|value| value.as_bool()) == Some(true) {
+            if let Some(thinking) = part.get("text").and_then(|value| value.as_str()) {
+                if !thinking.is_empty() {
+                    let mut block = json!({
+                        "type": "thinking",
+                        "thinking": thinking
+                    });
+                    if let Some(sig) = part
+                        .get("thoughtSignature")
+                        .or_else(|| part.get("thought_signature"))
+                        .and_then(|value| value.as_str())
+                        .filter(|s| !s.is_empty())
+                    {
+                        block["signature"] = json!(sig);
+                    }
+                    content.push(block);
+                }
+            }
             continue;
         }
 
@@ -703,24 +730,57 @@ fn convert_message_content_to_parts(
                     .and_then(|value| value.as_str())
                     .unwrap_or("");
 
-                if source_type != "base64" {
-                    let url = source
-                        .get("url")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or(source_type);
-                    log::warn!(
-                        "[Gemini] user 消息含非 base64 document 源（{source_type}），降级为文本占位"
-                    );
-                    parts.push(json!({
-                        "text": format!("[cc-switch: document omitted (unsupported source `{source_type}`: {url})]")
-                    }));
-                } else {
-                    parts.push(json!({
-                        "inlineData": {
-                            "mimeType": source.get("media_type").and_then(|value| value.as_str()).unwrap_or("application/pdf"),
-                            "data": source.get("data").and_then(|value| value.as_str()).unwrap_or("")
+                match source_type {
+                    "base64" => {
+                        parts.push(json!({
+                            "inlineData": {
+                                "mimeType": source.get("media_type").and_then(|value| value.as_str()).unwrap_or("application/pdf"),
+                                "data": source.get("data").and_then(|value| value.as_str()).unwrap_or("")
+                            }
+                        }));
+                    }
+                    "text" => {
+                        if let Some(data) = source
+                            .get("data")
+                            .and_then(|value| value.as_str())
+                            .filter(|s| !s.is_empty())
+                        {
+                            parts.push(json!({ "text": data }));
                         }
-                    }));
+                    }
+                    "content" => {
+                        if let Some(text) = source
+                            .get("content")
+                            .and_then(|value| value.as_str())
+                            .filter(|s| !s.is_empty())
+                        {
+                            parts.push(json!({ "text": text }));
+                        } else if let Some(inner_blocks) =
+                            source.get("content").and_then(|value| value.as_array())
+                        {
+                            for inner in inner_blocks {
+                                if let Some(text) = inner
+                                    .get("text")
+                                    .and_then(|value| value.as_str())
+                                    .filter(|s| !s.is_empty())
+                                {
+                                    parts.push(json!({ "text": text }));
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        let url = source
+                            .get("url")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or(source_type);
+                        log::warn!(
+                            "[Gemini] user 消息含非 base64/text/content document 源（{source_type}），降级为文本占位"
+                        );
+                        parts.push(json!({
+                            "text": format!("[cc-switch: document omitted (unsupported source `{source_type}`: {url})]")
+                        }));
+                    }
                 }
             }
             "tool_use" => {
@@ -1227,7 +1287,10 @@ fn extract_tool_call_meta(parts: &[Value]) -> Vec<GeminiToolCallMeta> {
         .collect()
 }
 
-fn map_tool_choice(tool_choice: Option<&Value>) -> Result<Option<Value>, ProxyError> {
+fn map_tool_choice(
+    tool_choice: Option<&Value>,
+    surviving_tool_names: &[String],
+) -> Result<Option<Value>, ProxyError> {
     let Some(tool_choice) = tool_choice else {
         return Ok(None);
     };
@@ -1260,10 +1323,17 @@ fn map_tool_choice(tool_choice: Option<&Value>) -> Result<Option<Value>, ProxyEr
                         .get("name")
                         .and_then(|value| value.as_str())
                         .unwrap_or("");
-                    json!({
-                        "mode": "ANY",
-                        "allowedFunctionNames": [name]
-                    })
+                    if name.trim().is_empty() || !surviving_tool_names.iter().any(|n| n == name) {
+                        log::debug!(
+                            "[Gemini] tool_choice 指向的函数 `{name}` 不在存活的 functionDeclarations 中，降级为 AUTO"
+                        );
+                        json!({ "mode": "AUTO" })
+                    } else {
+                        json!({
+                            "mode": "ANY",
+                            "allowedFunctionNames": [name]
+                        })
+                    }
                 }
                 other => {
                     return Err(ProxyError::TransformError(format!(
@@ -1293,6 +1363,10 @@ pub(crate) fn build_anthropic_usage(usage: Option<&Value>) -> Value {
         .get("promptTokenCount")
         .and_then(|value| value.as_u64())
         .unwrap_or(0);
+    let tool_use_prompt_tokens = usage
+        .get("toolUsePromptTokenCount")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
     let total_tokens = usage
         .get("totalTokenCount")
         .and_then(|value| value.as_u64())
@@ -1301,14 +1375,17 @@ pub(crate) fn build_anthropic_usage(usage: Option<&Value>) -> Value {
         .get("cachedContentTokenCount")
         .and_then(|value| value.as_u64())
         .unwrap_or(0);
-    // Gemini 的 promptTokenCount 含缓存命中（cachedContentTokenCount）；而 Anthropic
-    // 语义下 input_tokens 必须是不含 cache 的 fresh input、cache_read 单列。本路径转成
-    // Anthropic 后以 app_type=claude 记账，calculator 对 claude 设 input_includes_cache_read
-    // =false 不再从 input 扣 cache，因此这里必须先扣减，否则缓存 token 会被双重计费
-    // （一次按完整 input 价、一次按 cache_read 价）。output 仍按 total-prompt 计算
-    // （prompt 是总输入，扣减只作用于 input/cache 的拆分，不影响 output）。
-    let input_tokens = prompt_tokens.saturating_sub(cached_tokens);
-    let output_tokens = total_tokens.saturating_sub(prompt_tokens);
+    let thoughts_tokens = usage
+        .get("thoughtsTokenCount")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    // Gemini 的 promptTokenCount 含缓存命中（cachedContentTokenCount），且若存在
+    // toolUsePromptTokenCount（工具定义/工具提示输入），totalTokenCount 等于
+    // promptTokenCount + toolUsePromptTokenCount + candidatesTokenCount + thoughtsTokenCount。
+    // Anthropic 语义下 input_tokens 必须是不含 cache 的 fresh input、cache_read 单列。
+    let total_prompt_tokens = prompt_tokens.saturating_add(tool_use_prompt_tokens);
+    let input_tokens = total_prompt_tokens.saturating_sub(cached_tokens);
+    let output_tokens = total_tokens.saturating_sub(total_prompt_tokens);
 
     let mut result = json!({
         "input_tokens": input_tokens,
@@ -1317,6 +1394,11 @@ pub(crate) fn build_anthropic_usage(usage: Option<&Value>) -> Value {
 
     if cached_tokens > 0 {
         result["cache_read_input_tokens"] = json!(cached_tokens);
+    }
+    if thoughts_tokens > 0 {
+        result["output_tokens_details"] = json!({
+            "thinking_tokens": thoughts_tokens
+        });
     }
 
     result
@@ -2914,5 +2996,90 @@ mod tests {
                 .is_none(),
             "functionResponse.id must also be omitted for synthesized ids"
         );
+    }
+
+    #[test]
+    fn gemini_to_anthropic_preserves_thought_parts_and_usage_details() {
+        let input = json!({
+            "responseId": "resp_thought",
+            "modelVersion": "gemini-2.5-pro",
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {
+                    "parts": [
+                        { "thought": true, "text": "Step 1: analyze", "thoughtSignature": "sig-t1" },
+                        { "text": "Final answer" }
+                    ]
+                }
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 100,
+                "toolUsePromptTokenCount": 20,
+                "cachedContentTokenCount": 30,
+                "thoughtsTokenCount": 40,
+                "totalTokenCount": 180
+            }
+        });
+
+        let result = gemini_to_anthropic(input).unwrap();
+        assert_eq!(result["content"][0]["type"], "thinking");
+        assert_eq!(result["content"][0]["thinking"], "Step 1: analyze");
+        assert_eq!(result["content"][0]["signature"], "sig-t1");
+        assert_eq!(result["content"][1]["type"], "text");
+        assert_eq!(result["content"][1]["text"], "Final answer");
+        // total_prompt = 100 + 20 = 120; input = 120 - 30 = 90; output = 180 - 120 = 60
+        assert_eq!(result["usage"]["input_tokens"], 90);
+        assert_eq!(result["usage"]["output_tokens"], 60);
+        assert_eq!(result["usage"]["cache_read_input_tokens"], 30);
+        assert_eq!(
+            result["usage"]["output_tokens_details"]["thinking_tokens"],
+            40
+        );
+    }
+
+    #[test]
+    fn anthropic_to_gemini_supports_text_and_content_document_blocks_and_downgrades_filtered_tool_choice(
+    ) {
+        let input = json!({
+            "model": "gemini-2.5-pro",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": { "type": "text", "media_type": "text/plain", "data": "Doc text" }
+                    },
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "content",
+                            "content": [{ "type": "text", "text": "Structured doc" }]
+                        }
+                    }
+                ]
+            }],
+            "tools": [
+                { "type": "web_search_20250305", "name": "web_search" },
+                { "name": "Read", "input_schema": { "type": "object" } }
+            ],
+            "tool_choice": { "type": "tool", "name": "web_search" }
+        });
+
+        let result = anthropic_to_gemini(input).unwrap();
+        let parts = result["contents"][0]["parts"].as_array().unwrap();
+        assert_eq!(parts[0]["text"], "Doc text");
+        assert_eq!(parts[1]["text"], "Structured doc");
+        let decls = result["tools"][0]["functionDeclarations"]
+            .as_array()
+            .unwrap();
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0]["name"], "Read");
+        assert_eq!(
+            result["toolConfig"]["functionCallingConfig"]["mode"],
+            "AUTO"
+        );
+        assert!(result["toolConfig"]["functionCallingConfig"]
+            .get("allowedFunctionNames")
+            .is_none());
     }
 }
