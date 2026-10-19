@@ -978,6 +978,13 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
    - `CodexFormFields`：修复 `codexNativeResponsesTemplate` 选择器的门控逻辑（从错误的 `isChatFormat` 移到原生的 `!isChatFormat` 模式下）；将 `sessionAffinityHeader` 门控放宽至全格式可用；使 `hasAnyAdvancedValue` 正确感知 fork 字段并展开面板。
    - `ClaudeFormFields`：在 stack 视图与 classic 视图之间完整对齐本 fork 5 个高级字段的挂载与交互体验。
 
+8. **Codex 全量原生模板 `comp_hash` 剥离**（`src-tauri/src/resources/gpt5_6_sol_template.json`）：
+   - 剥离全量模板 `gpt5_6_sol_template.json` 中残留的 ChatGPT 专有哈希 `"comp_hash": "3000"`，避免第三方模型继承该哈希而在模型切换或聚合启动时触发无意义的会话重新压缩；同时使直连与 Stack 聚合目录中由通用模板生成的模型行与契约完全一致（`comp_hash` 保持 null）。
+
+9. **Google Gemini Native 前缀缓存一致性保障**（`src-tauri/src/proxy/providers/transform_gemini.rs`）：
+   - `build_system_instruction` 改为在遇到首条非 system 消息时立即 `break`（仅收集前导连续 system 消息作为系统提示词）；
+   - 对话中途注入的后续 system 指令在 `convert_messages_to_contents` 中原位转为 `contents` 中的 `user` 角色消息，保持 `systemInstruction` 跨多轮对话前缀字节 100% 恒定不变，杜绝因 mid-conversation reminder 导致 Gemini KV-Cache 全量失效（与 Claude→Chat 的 `rewrite_user` 缓存保护策略对齐）。
+
 ## 5. 本地发布序列
 
 下表按 GitHub Releases 实际发布时间排序补全（2026-09-17 核对：共 11 个 release，与 `aliveranme/cc-switch` 实况一致）。
@@ -1780,6 +1787,12 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > `pnpm vitest run --maxWorkers=8` **233 文件 / 3043 用例**全绿、`cargo fmt --check` /
 > `cargo clippy --all-targets -- -D warnings` / `pnpm typecheck` / `pnpm format:check` /
 > `pnpm build:renderer` 全绿。同步推送 `origin/main` 与 `v4.0.15` 标签触发 Release。
+
+> 2026-10-19 同步（无 release）：合入上游 `75e93281`（#7936 允许 Codex OAuth 下的 unforced Claude WebSearch 工具共存与 instructions 软上限约束）与 `adc223af`（#8450 接管模式下 5.5 上游模型回退使用目录 ID 映射）。6 文件 +337/-21。零冲突自动合并。
+> 协议与架构深度加固：
+> ① 剥离全量模板 `gpt5_6_sol_template.json` 中的 `"comp_hash": "3000"`，避免第三方模型继承 ChatGPT 专有哈希导致不必要的重新压缩，并保持合并目录中模型行与契约一致（`route["comp_hash"] == Value::Null`）。
+> ② 改进 Gemini 原生转换（`transform_gemini.rs`），首条非 system 消息后截断 `systemInstruction` 收集，将会话中途注入的 system 消息转为 `contents` 中的 `user` 角色消息，保持系统提示词前缀跨轮次 100% 恒定以最大化前缀缓存命中率。
+> 验证全绿：Rust `cargo test --lib` **3985 passed / 0 failed**（11 ignored）、`cargo clippy --lib --all-targets -- -D warnings` 全绿、`cargo fmt --check` 全绿、前端 `pnpm typecheck` / `pnpm build:renderer` / `pnpm vitest run --maxWorkers=8` 全绿。
 
 ## 6. 维护约定
 

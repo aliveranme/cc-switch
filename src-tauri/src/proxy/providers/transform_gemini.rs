@@ -350,7 +350,7 @@ fn build_system_instruction(
     if let Some(messages) = messages {
         for message in messages {
             if message.get("role").and_then(|value| value.as_str()) != Some("system") {
-                continue;
+                break;
             }
             if let Some(content) = message.get("content") {
                 collect_system_texts(content, &mut texts)?;
@@ -503,14 +503,16 @@ fn convert_messages_to_contents(
     let shadow_start_index = total_assistant_messages.saturating_sub(effective_shadow_turns.len());
     let mut assistant_seen_index = 0usize;
 
-    for message in messages {
+    let leading_system_count = messages
+        .iter()
+        .take_while(|message| message.get("role").and_then(|v| v.as_str()) == Some("system"))
+        .count();
+
+    for message in &messages[leading_system_count..] {
         let role = message
             .get("role")
             .and_then(|value| value.as_str())
             .unwrap_or("user");
-        if role == "system" {
-            continue;
-        }
 
         let gemini_role = if role == "assistant" { "model" } else { "user" };
 
@@ -1583,6 +1585,37 @@ mod tests {
         assert_eq!(result["contents"].as_array().unwrap().len(), 1);
         assert_eq!(result["contents"][0]["role"], "user");
         assert_eq!(result["contents"][0]["parts"][0]["text"], "Hello");
+    }
+
+    #[test]
+    fn anthropic_to_gemini_preserves_mid_conversation_system_in_contents() {
+        let input = json!({
+            "model": "gemini-3-pro",
+            "system": [{ "type": "text", "text": "Base system." }],
+            "messages": [
+                { "role": "user", "content": "Hello" },
+                { "role": "assistant", "content": "Hi" },
+                { "role": "system", "content": "Mid-conversation reminder." },
+                { "role": "user", "content": "Next step." }
+            ]
+        });
+
+        let result = anthropic_to_gemini(input).unwrap();
+        assert_eq!(
+            result["systemInstruction"]["parts"][0]["text"],
+            "Base system."
+        );
+        let contents = result["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 4);
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(contents[1]["role"], "model");
+        assert_eq!(contents[2]["role"], "user");
+        assert_eq!(
+            contents[2]["parts"][0]["text"],
+            "Mid-conversation reminder."
+        );
+        assert_eq!(contents[3]["role"], "user");
+        assert_eq!(contents[3]["parts"][0]["text"], "Next step.");
     }
 
     #[test]
