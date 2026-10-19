@@ -416,7 +416,19 @@ pub fn responses_request_to_anthropic(
     // unsupported hosted tools (for example web_search) must drop tool_choice too.
     if has_tools {
         if let Some(tc) = body.get("tool_choice") {
-            let mapped = map_tool_choice_to_anthropic(tc, &tool_context);
+            let mut mapped = map_tool_choice_to_anthropic(tc, &tool_context);
+            if mapped.get("type").and_then(Value::as_str) == Some("tool") {
+                let name = mapped.get("name").and_then(Value::as_str).unwrap_or("");
+                let exists = anth_tools
+                    .iter()
+                    .any(|tool| tool.get("name").and_then(Value::as_str) == Some(name));
+                if !exists {
+                    log::warn!(
+                        "[Codex/Anthropic] tool_choice references unknown tool '{name}'; downgrading to auto"
+                    );
+                    mapped = json!({ "type": "auto" });
+                }
+            }
             let forced = matches!(
                 mapped.get("type").and_then(|value| value.as_str()),
                 Some("any" | "tool")
@@ -1300,22 +1312,53 @@ fn document_block_from_input_file(part: &Value) -> Option<Value> {
             "type":"document",
             "source":{"type":"url","url":file_url}
         })
-    } else {
-        let file_data = part.get("file_data").and_then(Value::as_str)?;
-        let rest = file_data.strip_prefix("data:")?;
-        let (meta, data) = rest.split_once(',')?;
-        if data.is_empty() {
+    } else if let Some(file_data) = part.get("file_data").and_then(Value::as_str) {
+        if let Some(rest) = file_data.strip_prefix("data:") {
+            let (meta, data) = rest.split_once(',')?;
+            if data.is_empty() {
+                return None;
+            }
+            let media_type = meta.split(';').next().unwrap_or("application/pdf");
+            json!({
+                "type":"document",
+                "source":{
+                    "type":"base64",
+                    "media_type":media_type,
+                    "data":data
+                }
+            })
+        } else if !file_data.trim().is_empty() {
+            json!({
+                "type":"document",
+                "source":{
+                    "type":"base64",
+                    "media_type":"application/pdf",
+                    "data":file_data.trim()
+                }
+            })
+        } else {
             return None;
         }
-        let media_type = meta.split(';').next().unwrap_or("application/pdf");
+    } else if let Some(text) = part
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+    {
         json!({
             "type":"document",
             "source":{
-                "type":"base64",
-                "media_type":media_type,
-                "data":data
+                "type":"text",
+                "media_type":"text/plain",
+                "data":text
             }
         })
+    } else if let Some(source) = part.get("source").filter(|s| s.is_object()) {
+        json!({
+            "type":"document",
+            "source":source.clone()
+        })
+    } else {
+        return None;
     };
 
     if let Some(filename) = filename {
@@ -3237,5 +3280,54 @@ data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":
         assert_eq!(last["role"], "user");
         let last_block = last["content"].as_array().unwrap().last().unwrap();
         assert_eq!(last_block["text"], codex_compaction::COMPACT_PROMPT);
+    }
+
+    #[test]
+    fn test_responses_request_to_anthropic_missing_named_tool_choice_downgrades_to_auto() {
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "input": [{ "role": "user", "content": "hello" }],
+            "tools": [
+                { "type": "function", "name": "list_files", "parameters": { "type": "object" } }
+            ],
+            "tool_choice": { "type": "function", "name": "non_existent_tool" }
+        });
+        let result = responses_request_to_anthropic(body, 4096).unwrap();
+        assert_eq!(result["tool_choice"], json!({ "type": "auto" }));
+    }
+
+    #[test]
+    fn test_responses_request_to_anthropic_supports_raw_base64_and_text_input_file() {
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "input": [
+                {
+                    "type": "input_file",
+                    "filename": "raw_doc.pdf",
+                    "file_data": "JVBERi0xLjQKJcTl8uXr..."
+                },
+                {
+                    "type": "input_file",
+                    "filename": "notes.txt",
+                    "text": "plain text document content"
+                }
+            ]
+        });
+        let result = responses_request_to_anthropic(body, 4096).unwrap();
+        let messages = result["messages"].as_array().unwrap();
+        let blocks = messages[0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+
+        assert_eq!(blocks[0]["type"], "document");
+        assert_eq!(blocks[0]["title"], "raw_doc.pdf");
+        assert_eq!(blocks[0]["source"]["type"], "base64");
+        assert_eq!(blocks[0]["source"]["media_type"], "application/pdf");
+        assert_eq!(blocks[0]["source"]["data"], "JVBERi0xLjQKJcTl8uXr...");
+
+        assert_eq!(blocks[1]["type"], "document");
+        assert_eq!(blocks[1]["title"], "notes.txt");
+        assert_eq!(blocks[1]["source"]["type"], "text");
+        assert_eq!(blocks[1]["source"]["media_type"], "text/plain");
+        assert_eq!(blocks[1]["source"]["data"], "plain text document content");
     }
 }

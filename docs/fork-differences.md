@@ -6,30 +6,30 @@
 
 ## 1. 概览
 
-| 项目 | 值 |
-|---|---|
-| 上游基线 | 77c6dc79（2026-10-18，**8 个提交**；明细见第 5 节；上一基线 73f37c4b，2026-10-16） |
-| 本地领先 | **456** 个提交（`git rev-list --count 73f37c4b..HEAD`，统计于 `77c6dc79` 的 merge 前，2026-10-18） |
-| 本次 merge | 2026-10-18 合入上游 77c6dc79（8 个提交，**52 文件 +4 757 / −298**，2 处冲突全手工解 + 3 处 fork 侧适配，见第 5 节注记）；上一次 2026-10-17 合入 73f37c4b（92 个提交，**493 文件**） |
-| 本地版本 | `v4.0.15`（随 merge 对齐上游 v4.0.15；fork 发布序列见第 5 节） |
-| 同步方式 | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-18（见第 5 节） |
-| 测试规模 | 最近验证于 2026-10-18：Rust **3956** 单元通过（`cargo test --lib`，11 ignored；集成测试由 CI nextest 覆盖）+ 前端 vitest **3043**（233 文件）；`cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `format:check` / whats-new 结构测试全绿 |
+| 项目       | 值                                                                                                                                                                                                                                                                   |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 上游基线   | 77c6dc79（2026-10-18，**8 个提交**；明细见第 5 节；上一基线 73f37c4b，2026-10-16）                                                                                                                                                                                   |
+| 本地领先   | **456** 个提交（`git rev-list --count 73f37c4b..HEAD`，统计于 `77c6dc79` 的 merge 前，2026-10-18）                                                                                                                                                                   |
+| 本次 merge | 2026-10-18 合入上游 77c6dc79（8 个提交，**52 文件 +4 757 / −298**，2 处冲突全手工解 + 3 处 fork 侧适配，见第 5 节注记）；上一次 2026-10-17 合入 73f37c4b（92 个提交，**493 文件**）                                                                                  |
+| 本地版本   | `v4.0.15`（随 merge 对齐上游 v4.0.15；fork 发布序列见第 5 节）                                                                                                                                                                                                       |
+| 同步方式   | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-18（见第 5 节）                                                                                                                                                                                  |
+| 测试规模   | 最近验证于 2026-10-18：Rust **3956** 单元通过（`cargo test --lib`，11 ignored；集成测试由 CI nextest 覆盖）+ 前端 vitest **3043**（233 文件）；`cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `format:check` / whats-new 结构测试全绿 |
 
 ## 2. 修改总览（按主题）
 
 ### 2.1 Proxy 协议层（核心，src-tauri/src/proxy/，约 +6 200 行）
 
-| 模块 | 差异 |
-|---|---|
-| **安全分类器协议**（新增 `classifier.rs` ~2 100 行，上游无此文件） | Claude Code security classifier 完整支持：`<block>`/`</severity>` 双模式、fast 单阶段与 both/thinking 双阶段检测、severity 响应转换、裁决提取与 usage 解析、上游文本协议标签净化（2.1.296 全文一致性校验）、`<cc_automode_permissions>` 规则块回注、`max_tokens` 下限抬高（见 4.2）。协议特征逐条对照官方 cli.js（2.1.193/2.1.219）与 `claude.exe`（2.1.296）逆向确认 |
-| **四向格式转换**（transform.rs / transform_codex_chat.rs / transform_codex_anthropic.rs / transform_gemini.rs / transform_responses.rs） | reasoning 全形状提取（含 DeepSeek 内联 think 块）；Anthropic document → Chat/Responses/Gemini；`json_object` 响应格式保留；`disable_parallel_tool_use` ↔ `parallel_tool_calls` 对称传递；非图片工具媒体降级为文本而非丢弃；usage 三线守恒（fresh-input 语义 + saturating_sub）；探测级 `max_tokens` 抬升与非流式「成功信封」解包（见 4.30） |
-| **prefix-cache 稳定性**（transform 系 + forwarder） | 剥离 `x-anthropic-billing-header` 的 rotating `cch=` nonce（`strip_volatile_cch`，逐行字节级确定）；mid-conversation system 重写为 user（见 4.1）；CacheTrace 调试链路（TRACE 级门控） |
-| **缓存链路可配置**（claude.rs / forwarder.rs / classifier.rs / codex_config.rs，见 4.17–4.19） | 会话级 `prompt_cache_key` 路由从 Codex 扩展到 Claude→Chat（复用 `promptCacheRouting` 三态）；`sessionAffinityHeader`（值 = 客户端会话 ID，多实例网关缓存亲和）；`preserveCacheControl`（网关层实现断点的上游）；`midConversationSystemPolicy`（4.1 策略可选）；`classifierSeverityBlockValue`（4.7 数值可配）；`codexNativeResponsesTemplate`（4.13 模板可选） |
-| **SSE 流式协议**（streaming.rs / streaming_codex_chat.rs / streaming_gemini.rs / streaming_responses.rs） | 终态必达（EOF sentinel、[DONE] 去重、截断流补 end_turn）；**伪成功防护**（空 delta chunk 后断流/DONE 发 error 而非伪造成功）；错误状态码与 retry-after 透传；`output_text.done`/`refusal.done` 跳 delta 恢复完整文本；whole-JSON 非流式回退（Responses 方向）；转换器 1MB 缓冲上限防 OOM；[DONE] 后残留数据守卫 |
-| **路由/嗅探**（handlers.rs / forwarder.rs / content_encoding.rs） | 响应体嗅探（`<=`→`<` 边界修复保流式、未标记 JSON 识别）；content_encoding 双向全支持（gzip/br/zstd/deflate，堆叠编码，200MB 上限）；`cache_injection` 域收敛（见 4.4）；嗅探超时与故障转移联动 |
-| **响应体字节上限实现**（v3.19.2 同步） | 方法统一为上游 `bytes_with_limit`（Buffered 变体事后比较 + 流式逐块超限截停 + `ResponseBodyTooLarge` 错误），上限保留 fork 的 `MAX_BUFFERED_PROXY_BODY_BYTES = 200MB`（上游 128MB）；content_encoding 采用上游 `decompress_body_with_limit`（解码器读取侧预算、压缩炸弹在预算处截停、TooLarge 与数据损坏区分） |
-| **工具历史恢复**（新增 `codex_chat_history.rs`） | Codex Responses→Chat 桥下按会话恢复 function_call 与 reasoning_content；StoreKey 复合键会话隔离（防串话）+ 512 响应/4096 call 规模上限 |
-| **OpenCode Go 网关特化**（claude.rs `is_opencode_go_gateway`） | `opencode.ai/zen/*` 上游**保留** OpenAI 请求体的 cache_control 断点/prompt_cache_key（Go 网关认可），其他 OpenAI 兼容上游维持剥离 |
+| 模块                                                                                                                                     | 差异                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **安全分类器协议**（新增 `classifier.rs` ~2 100 行，上游无此文件）                                                                       | Claude Code security classifier 完整支持：`<block>`/`</severity>` 双模式、fast 单阶段与 both/thinking 双阶段检测、severity 响应转换、裁决提取与 usage 解析、上游文本协议标签净化（2.1.296 全文一致性校验）、`<cc_automode_permissions>` 规则块回注、`max_tokens` 下限抬高（见 4.2）。协议特征逐条对照官方 cli.js（2.1.193/2.1.219）与 `claude.exe`（2.1.296）逆向确认 |
+| **四向格式转换**（transform.rs / transform_codex_chat.rs / transform_codex_anthropic.rs / transform_gemini.rs / transform_responses.rs） | reasoning 全形状提取（含 DeepSeek 内联 think 块）；Anthropic document → Chat/Responses/Gemini；`json_object` 响应格式保留；`disable_parallel_tool_use` ↔ `parallel_tool_calls` 对称传递；非图片工具媒体降级为文本而非丢弃；usage 三线守恒（fresh-input 语义 + saturating_sub）；探测级 `max_tokens` 抬升与非流式「成功信封」解包（见 4.30）                           |
+| **prefix-cache 稳定性**（transform 系 + forwarder）                                                                                      | 剥离 `x-anthropic-billing-header` 的 rotating `cch=` nonce（`strip_volatile_cch`，逐行字节级确定）；mid-conversation system 重写为 user（见 4.1）；CacheTrace 调试链路（TRACE 级门控）                                                                                                                                                                                |
+| **缓存链路可配置**（claude.rs / forwarder.rs / classifier.rs / codex_config.rs，见 4.17–4.19）                                           | 会话级 `prompt_cache_key` 路由从 Codex 扩展到 Claude→Chat（复用 `promptCacheRouting` 三态）；`sessionAffinityHeader`（值 = 客户端会话 ID，多实例网关缓存亲和）；`preserveCacheControl`（网关层实现断点的上游）；`midConversationSystemPolicy`（4.1 策略可选）；`classifierSeverityBlockValue`（4.7 数值可配）；`codexNativeResponsesTemplate`（4.13 模板可选）        |
+| **SSE 流式协议**（streaming.rs / streaming_codex_chat.rs / streaming_gemini.rs / streaming_responses.rs）                                | 终态必达（EOF sentinel、[DONE] 去重、截断流补 end_turn）；**伪成功防护**（空 delta chunk 后断流/DONE 发 error 而非伪造成功）；错误状态码与 retry-after 透传；`output_text.done`/`refusal.done` 跳 delta 恢复完整文本；whole-JSON 非流式回退（Responses 方向）；转换器 1MB 缓冲上限防 OOM；[DONE] 后残留数据守卫                                                       |
+| **路由/嗅探**（handlers.rs / forwarder.rs / content_encoding.rs）                                                                        | 响应体嗅探（`<=`→`<` 边界修复保流式、未标记 JSON 识别）；content_encoding 双向全支持（gzip/br/zstd/deflate，堆叠编码，200MB 上限）；`cache_injection` 域收敛（见 4.4）；嗅探超时与故障转移联动                                                                                                                                                                        |
+| **响应体字节上限实现**（v3.19.2 同步）                                                                                                   | 方法统一为上游 `bytes_with_limit`（Buffered 变体事后比较 + 流式逐块超限截停 + `ResponseBodyTooLarge` 错误），上限保留 fork 的 `MAX_BUFFERED_PROXY_BODY_BYTES = 200MB`（上游 128MB）；content_encoding 采用上游 `decompress_body_with_limit`（解码器读取侧预算、压缩炸弹在预算处截停、TooLarge 与数据损坏区分）                                                        |
+| **工具历史恢复**（新增 `codex_chat_history.rs`）                                                                                         | Codex Responses→Chat 桥下按会话恢复 function_call 与 reasoning_content；StoreKey 复合键会话隔离（防串话）+ 512 响应/4096 call 规模上限                                                                                                                                                                                                                                |
+| **OpenCode Go 网关特化**（claude.rs `is_opencode_go_gateway`）                                                                           | `opencode.ai/zen/*` 上游**保留** OpenAI 请求体的 cache_control 断点/prompt_cache_key（Go 网关认可），其他 OpenAI 兼容上游维持剥离                                                                                                                                                                                                                                     |
 
 > 2026-10-03 同步：Claude→Chat 转换路径的流首 inline ` thinking`/`<thinking>` 剥离改用上游
 > `InlineThinkSplitter`（#7741）实现；fork 的终态必达（截断流补 `end_turn`）、转换器缓冲上限
@@ -39,25 +39,25 @@
 
 ### 2.2 安全强化
 
-| 项 | 差异 |
-|---|---|
+| 项           | 差异                                                                                                                                                                             |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 配置文件权限 | `atomic_write` unix 上**创建时即 0600**（消除"先 0644 后 chmod"窗口期）；既有文件不再沿用旧 0644（统一按凭据文件收紧）；覆盖 codex/claude/grok/opencode/hermes/gemini 全部写路径 |
-| 终端启动配置 | `/tmp` 临时配置改用 atomic_write（原 `fs::write` + 事后收紧有窗口期） |
-| 错误体 | 上游错误体 JSON 解析失败时截断（500/1024 字节）输出，不泄漏整段 HTML |
-| 安全分类器 | 兜底策略与官方不同（见 4.2） |
+| 终端启动配置 | `/tmp` 临时配置改用 atomic_write（原 `fs::write` + 事后收紧有窗口期）                                                                                                            |
+| 错误体       | 上游错误体 JSON 解析失败时截断（500/1024 字节）输出，不泄漏整段 HTML                                                                                                             |
+| 安全分类器   | 兜底策略与官方不同（见 4.2）                                                                                                                                                     |
 
 ### 2.3 Codex 配置协议
 
-| 项 | 差异 |
-|---|---|
-| wire_api 归一化 | `chat`/`chat_completions` → `responses` 迁移（上游 Codex 已移除 Chat wire API，遇 `"chat"` 反序列化报错）；幂等、未知值保留、语法保留式改写 |
-| TOML 编辑 | 注释节头 `[x] # comment`、array-of-tables `[[x]]`、空白填充节头 `[ x ]`；前端行扫描与后端 toml_edit 语义对齐 |
-| MCP 字段对齐 | `headers`→`http_headers`、`timeout`（秒）→`startup_timeout_ms`（毫秒）、不写 `type` 字段；Hermes SSE 显式 `transport` |
-| inline table | `model_providers = { custom = {...} }` 形态全路径支持（`as_table_like_mut`） |
-| 空 config 守卫 | 空 live config.toml 不回填擦除已存 TOML；写方向 `(None, None)` 为空操作 |
-| per-app 字段 | 代理配置写入不再覆盖各 app（claude/codex/gemini）独立的 max_retries/超时字段 |
+| 项                        | 差异                                                                                                                                                                 |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| wire_api 归一化           | `chat`/`chat_completions` → `responses` 迁移（上游 Codex 已移除 Chat wire API，遇 `"chat"` 反序列化报错）；幂等、未知值保留、语法保留式改写                          |
+| TOML 编辑                 | 注释节头 `[x] # comment`、array-of-tables `[[x]]`、空白填充节头 `[ x ]`；前端行扫描与后端 toml_edit 语义对齐                                                         |
+| MCP 字段对齐              | `headers`→`http_headers`、`timeout`（秒）→`startup_timeout_ms`（毫秒）、不写 `type` 字段；Hermes SSE 显式 `transport`                                                |
+| inline table              | `model_providers = { custom = {...} }` 形态全路径支持（`as_table_like_mut`）                                                                                         |
+| 空 config 守卫            | 空 live config.toml 不回填擦除已存 TOML；写方向 `(None, None)` 为空操作                                                                                              |
+| per-app 字段              | 代理配置写入不再覆盖各 app（claude/codex/gemini）独立的 max_retries/超时字段                                                                                         |
 | 第三方模型 reasoning 滑块 | 注入 `supported_reasoning_levels`（low…ultra，gpt-5.6-sol 兼容）；对所有走代理/直连网关的 Codex 供应商**强制 `use_responses_lite=false`**（lite 格式会截断工具执行） |
-| Gemini `.env` 解析 | 接受 `export ` 前缀（上游解析后 key 带 `export ` 前缀而失效） |
+| Gemini `.env` 解析        | 接受 `export ` 前缀（上游解析后 key 带 `export ` 前缀而失效）                                                                                                        |
 
 ### 2.4 前端 / UI
 
@@ -94,7 +94,7 @@
   `rounded-panel` 这类工具类会静默失效（不报错、只是没样式）。本轮搬迁：v7
   设计令牌（色板 / radius `control|panel|dialog` / `shadow-v7-*` / `text` 角色 /
   中日字体栈）、v3 `borderColor.DEFAULT` → base 层 `* { border-color:
-  hsl(var(--border)) }`、`tailwindcss-animate` → `tw-animate-css`（官方 v4 版，
+hsl(var(--border)) }`、`tailwindcss-animate` → `tw-animate-css`（官方 v4 版，
   `@utility` 实现才能生成 `data-[state=*]:animate-in` 变体）。详见 4.26
 - **React 19 类型适配**（2026-10-04）：上游按 React 18 写，fork 跑 React 19 +
   `@types/react` 19。同步后 typecheck 常报 `RefObject<T>` vs
@@ -142,14 +142,14 @@
 
 ### 2.6 服务层（用量统计 / 接管）
 
-| 项 | 差异 |
-|---|---|
-| Claude 会话用量冻结行上推 | 上游 `INSERT OR IGNORE` 短路 → fork `ON CONFLICT` upsert（`data_source='session_log'` 守卫 + `output_tokens` 单调推进），见 4.9 |
-| 小时桶累计 | `get_daily_trends` 小时桶越界从"覆盖"改为"累加"（`9d793c51`），修复最后 1 小时用量少算 |
-| 接管判定 | 统一收敛到 `AppType::takeover_active` 策略矩阵，见 4.10。**2026-10-03 同步后：上游新 `mode` 引擎接管该决策，该矩阵已无生产调用点（仅剩单测）** |
-| 热切换回滚 | live 写失败时回滚 DB 中 current-provider 指针（`7cebd071`，上游只回滚 backup/live）。**2026-10-03 同步后：由上游 `mode::controller` 的 settled/staged 写入与指针提交取代** |
-| stale backup | 接管/热切换中 stale live backup 不阻塞 Codex/Gemini 供应商写入（`06b57082`/`7efdc361`）。**2026-10-03 同步后：旧接管判定一并移除** |
-| v3.20.1 会话扫描重构 | 合入上游增量 byte-cursor 扫描、auto/manual 会话扫描模式、non-append rewrite 检测与 Sync Now 门控；fork 的 Claude upsert 分歧保留（见 4.9），`should_skip_session_insert` 封装继续供 gemini/codex/opencode 使用 |
+| 项                        | 差异                                                                                                                                                                                                           |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude 会话用量冻结行上推 | 上游 `INSERT OR IGNORE` 短路 → fork `ON CONFLICT` upsert（`data_source='session_log'` 守卫 + `output_tokens` 单调推进），见 4.9                                                                                |
+| 小时桶累计                | `get_daily_trends` 小时桶越界从"覆盖"改为"累加"（`9d793c51`），修复最后 1 小时用量少算                                                                                                                         |
+| 接管判定                  | 统一收敛到 `AppType::takeover_active` 策略矩阵，见 4.10。**2026-10-03 同步后：上游新 `mode` 引擎接管该决策，该矩阵已无生产调用点（仅剩单测）**                                                                 |
+| 热切换回滚                | live 写失败时回滚 DB 中 current-provider 指针（`7cebd071`，上游只回滚 backup/live）。**2026-10-03 同步后：由上游 `mode::controller` 的 settled/staged 写入与指针提交取代**                                     |
+| stale backup              | 接管/热切换中 stale live backup 不阻塞 Codex/Gemini 供应商写入（`06b57082`/`7efdc361`）。**2026-10-03 同步后：旧接管判定一并移除**                                                                             |
+| v3.20.1 会话扫描重构      | 合入上游增量 byte-cursor 扫描、auto/manual 会话扫描模式、non-append rewrite 检测与 Sync Now 门控；fork 的 Claude upsert 分歧保留（见 4.9），`should_skip_session_insert` 封装继续供 gemini/codex/opencode 使用 |
 
 ### 2.7 个人工具链（非上游内容，同步时忽略）
 
@@ -227,7 +227,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
      prompt（身份句 `You are a security monitor for autonomous AI coding agents.` +
      `<transcript>` 包裹 + `stop_sequences: ["</block>"]`，severity 模式为
      `["</severity>"]`），以独立 side query 发出。**本节及 `src-tauri/src/proxy/
-     classifier.rs` 处理的是这一层。**
+classifier.rs` 处理的是这一层。**
   - ⚠️ 两层**正交**：`=0` 不会关掉本地层，本地分类器请求照样穿过网关——那正是
     `classifier.rs` 要解决的兼容问题。上游 PR #4987/#7636/#4923 至今 OPEN。
 - **官方**（2.1.296 `bBe`）：不是"取第一个 `<block>`"，而是**全文一致性校验**——
@@ -309,9 +309,9 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 `claude.exe` 2.1.296 二进制逐窗口复核 + 本机日志实测，三条独立证据：
 
 - **源码（挂载）**：`rp` 请求体字面量里 `...DCe&&Ff!==void 0&&{safeguards:[{type:Gme,
-  classifier_context:Ff}]}`（~223090967），条件链 `DCe = Ap && Ag && !Pg &&
-  kvr(qw).includes(iR)`，而 `Ap = Y.serverClassifier===!0 && Ff!==void 0 && Uu &&
-  Kme() && !Lf(Ze,iR) && !Qse()`。第三方分支 `dM()` 默认返回
+classifier_context:Ff}]}`（~223090967），条件链 `DCe = Ap && Ag && !Pg &&
+kvr(qw).includes(iR)`，而 `Ap = Y.serverClassifier===!0 && Ff!==void 0 && Uu &&
+Kme() && !Lf(Ze,iR) && !Qse()`。第三方分支 `dM()` 默认返回
   `"arbiterWithLocalFallback"`，`IYt()` 在 `CLAUDE_CODE_AUTO_MODE_SERVER` 未设、
   `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` 未设时为 `true`。**结论：自定义 base URL
   下默认照挂**（条件是"默认"，被 `DISABLE_EXPERIMENTAL_BETAS` / `AUTO_MODE_SERVER=0`
@@ -542,10 +542,10 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   per-model reasoningLevels 背书。
 - **fork**：passthrough 下 `ultra` 钳到 `max`。
 - **原因**：严格 OpenAI 兼容上游不认 `ultra`（`400 reasoning_effort: Invalid
-  option`，M1 回归）；钳制不损失"最深思考"语义且避免被拒收。deepseek/openrouter/
+option`，M1 回归）；钳制不损失"最深思考"语义且避免被拒收。deepseek/openrouter/
   low_high 专用模式同样钳到自身最高合法档。
 - ⚠️ 上游合并时若恢复透传，M1 回归测试（`responses_request_to_chat_fallback_
-  filters_invalid_reasoning_effort`）会失败，需复核。
+filters_invalid_reasoning_effort`）会失败，需复核。
 
 ### 4.15 保留供应商（openai 等）bearer token 注入策略（已移除偏离）
 
@@ -706,7 +706,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
     `--text-<角色>--line-height` / `--text-<角色>--font-weight` 承载 v3 元组第二项）、
     `--font-sans|mono`（含中日字体回退）；
   - v3 的 `borderColor.DEFAULT` → base 层 `*, ::before, ::after, ::backdrop,
-    ::file-selector-button { border-color: hsl(var(--border)) }`。v4 默认是 `currentColor`，
+::file-selector-button { border-color: hsl(var(--border)) }`。v4 默认是 `currentColor`，
     不补这条的话上游 v7 代码里大量只写 `border`（不带颜色）的边框会跟着文字色跑；
   - `tailwindcss-animate` → **`tw-animate-css`**（官方 v4 移植版，devDependency）。
     `animate-in` / `animate-out` / `fade-*-0` / `zoom-*-95` / `slide-in-from-*` /
@@ -801,7 +801,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   `cline-pass/deepseek-v4.1-flash`）：
   `HTTP 500` + `{"error":"empty response content","success":false}`。两层成因叠加：
   1. **探测预算不可满足**：探测请求是 `{"model":"claude-haiku-4-5","max_tokens":1,
-     "messages":[{"role":"user","content":"."}]}`，非流式。上游是推理模型，reasoning
+"messages":[{"role":"user","content":"."}]}`，非流式。上游是推理模型，reasoning
      token 计入 `max_tokens`，1 个 token 连推理都放不下 → 正文为空 → 上游判
      `empty response content` 并回 500。
   2. **成功信封未解包**：该上游非流式**成功**响应是
@@ -826,17 +826,18 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   - `claude_desktop_config.rs`：`build_gateway_profile` 不再写
     `chatCodeExecutionEnabled`——Claude Desktop 已把该键移出配置键集合，每次启动都报
     `Ignoring local configuration value "chatCodeExecutionEnabled": not a recognized
-    configuration key`（同一 profile 里其余键未见告警）。
+configuration key`（同一 profile 里其余键未见告警）。
 - **本机实测**（2026-10-11，上游直连，同一凭据 / 模型 / 提示词）：
 
-  | `max_tokens` | 结果 |
-  |---|---|
-  | 1、32 | HTTP 500 `{"error":"empty response content","success":false}` |
-  | 64（经网关） | HTTP 500 |
-  | 128 / 512 / 1024 | HTTP 200，有正文 |
+  | `max_tokens`           | 结果                                                                                                                                     |
+  | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+  | 1、32                  | HTTP 500 `{"error":"empty response content","success":false}`                                                                            |
+  | 64（经网关）           | HTTP 500                                                                                                                                 |
+  | 128 / 512 / 1024       | HTTP 200，有正文                                                                                                                         |
   | 5120（修复后的出站值） | HTTP 200 `{"success":true,"data":{…,"usage":{prompt_tokens:31, completion_tokens:68, completion_tokens_details:{reasoning_tokens:60}}}}` |
 
   即修复后探针收到的是正常 Anthropic 消息体，Claude Desktop 的「连接测试」可通过。
+
 - **为什么抬到 5120 而不是 16**：Responses 路径的 `RESPONSES_MIN_MAX_OUTPUT_TOKENS = 16`
   是**协议下限**（Responses API 拒绝小于 16 的 `max_output_tokens`）；这里的下限是
   **推理预算下限**，实测 32 仍空、128 起才有正文，16 救不了。取 5120 与分类器转发的
@@ -899,11 +900,11 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
   `installationPreference` / `manifestSha256` 的同一仓库都写在同一个数组里。所以既不能
   整表替换，也不能「缺失才写」，只能**按需补齐**：
 
-  | 键的现状 | 动作 |
-  |---|---|
-  | 键不存在 | 整表写入 5 条官方市场 |
-  | 键存在但不是数组 | 原样不动（宁可少写，也不改写用户的结构） |
-  | 是数组 | 只在**末尾追加**缺的那几条；已有条目与其顺序一条不动 |
+  | 键的现状         | 动作                                                 |
+  | ---------------- | ---------------------------------------------------- |
+  | 键不存在         | 整表写入 5 条官方市场                                |
+  | 键存在但不是数组 | 原样不动（宁可少写，也不改写用户的结构）             |
+  | 是数组           | 只在**末尾追加**缺的那几条；已有条目与其顺序一条不动 |
 
 - **重复判定**：按 `owner/repo` 认人，不比整体键值。现有条目的 `repo` 字段、或 `url`
   字段抽出的 `owner/repo`（`git_repo_slug`：去掉查询串/片段、末尾斜杠与 `.git` 后归一化），
@@ -985,32 +986,43 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
    - `build_system_instruction` 改为在遇到首条非 system 消息时立即 `break`（仅收集前导连续 system 消息作为系统提示词）；
    - 对话中途注入的后续 system 指令在 `convert_messages_to_contents` 中原位转为 `contents` 中的 `user` 角色消息，保持 `systemInstruction` 跨多轮对话前缀字节 100% 恒定不变，杜绝因 mid-conversation reminder 导致 Gemini KV-Cache 全量失效（与 Claude→Chat 的 `rewrite_user` 缓存保护策略对齐）。
 
+10. **安全分类器四向协议裁决提取与用量统计闭环**（`src-tauri/src/proxy/classifier.rs`）：
+    - `extract_response_text` 增加对 Google Gemini Native（`candidates[0].content.parts`，自动排除 `thought: true` 思考块）与 OpenAI Responses（`output[].content[].text` / `output[].text`）的裁决文本解析；
+    - `parse_classifier_usage` 接入 `TokenUsage::from_gemini_response` 与 `TokenUsage::from_codex_response`，使安全分类器在对接 Gemini Native 或 Responses 上游网关时具备零损耗的裁决识别与精准 Token 计费能力。
+
+11. **Codex Responses ↔ Anthropic Messages 桥悬空 `tool_choice` 降级与文档源扩展**（`src-tauri/src/proxy/providers/transform_codex_anthropic.rs`）：
+    - 当 Codex 发出的具名 `tool_choice` 指向不存在或已被过滤的工具时，自动平滑降级为 `auto` 并打印告警日志，杜绝 Anthropic 400 拒绝；
+    - `document_block_from_input_file` 支持裸 base64（无 `data:` 前缀）、纯文本 `text` 字段以及标准 `source` 嵌套对象，解决客户端输入文档被静默丢弃导致空消息 400 的边界缺陷。
+
+12. **OpenAI Chat 强制工具选择模式鲁棒降级**（`src-tauri/src/proxy/providers/transform.rs`）：
+    - `downgrade_forced_tool_choice_to_auto` 扩展识别 `type == "tool"` 及裸 `function` 对象结构，确保各种非标准网关在 DeepSeek reasoning 模式下的具名强制工具调用均能被稳妥降级为 `"auto"`。
+
 ## 5. 本地发布序列
 
 下表按 GitHub Releases 实际发布时间排序补全（2026-09-17 核对：共 11 个 release，与 `aliveranme/cc-switch` 实况一致）。
 早于 `v3.19.1-a` 的版本随上游同步对齐版本号发布，变更内容即上游对应版本的变更日志。
 
-| 版本 | 发布时间 | 内容 |
-|---|---|---|
-| `v3.18.0` | 2026-06-28 | 合入上游 v3.18.0：Grok Build 成为第八个受管 app（独立 `/grokbuild/v1/responses` 路由命名空间与独立预设集）、xAI Grok OAuth 设备流登录、用量统计重建（schema v16）（52 提交 / 217 文件，+21452/-6285）。GitHub 上为 prerelease |
-| `v3.19.0` | 2026-07-30 | 合入上游 v3.19.0：安全加固（skill 安装 zip-slip 与路径穿越、Gemini 通用配置凭据泄漏清理、SQL 导入 SQLite authorizer、终端路径转义、deeplink 确认完整展示）、代理工具图片 token 膨胀修复、models.dev 定价自动同步（38 提交 / 132 文件，+14926/-1415）。GitHub 上为 prerelease |
-| `v3.19.1` | 2026-07-31 | 合入上游 v3.19.1：DeepSeek/火山 Ark/腾讯混元 Codex 网关改原生 Responses、Claude Desktop 用量双重计数修复（#5938）、Codex 官方 provider 回切残留第三方 key 修复、删除 3,166 行废弃代码（12 提交 / 71 文件，+2324/-3680，首个删除多于新增的版本）。GitHub 上为 prerelease |
-| `v3.19.1-a` | 2026-08-02 | CI/发布基础设施修复（tag 推送正式版、wix.version 绕过 prerelease） |
-| `v3.19.1-b` | 2026-08-02 | proxy 协议修复收尾（安全分类器、prefix-cache 稳定性、流式终态容错、工具历史恢复会话隔离）。注：GitHub 上该 release 为 prerelease（与 a 同日，应为手动重跑时 `prerelease` 未置 false，见 6.1） |
-| `v3.19.2` | 2026-08-09 | 合入上游 v3.19.2（15 提交）+ fork 全特性；字节上限统一为 `bytes_with_limit`（200MB）；content_encoding 解压 bomb 防护；atomic_write Windows 改用 `ReplaceFileW`；版本号与上游对齐（首次无后缀，wix.version 3.19.2.0）；重发补充：接管统一 `ANTHROPIC_AUTH_TOKEN` 占位符避免 Not logged in、官方原生分类器透传 + ALLOW 兜底、分类器检测加固 |
-| `v3.19.2-a` | 2026-08-17 | DeepSeek 多模态能力支持（`deepseek-v4-pro` 支持图片输入；`deepseek-v4-flash` 维持纯文本）；同步上游趋势图表点位与 Grok Build 文案修正；wix.version 递增至 3.19.2.1 |
-| `v3.20.0` | 2026-08-19 | 合入上游 v3.20.0：Pi 成为第九个受管 app（schema v16→v17）、Codex 多账号 ChatGPT 管理（#3879）、Windows+WSL2 `ReplaceFileW` 修复（#6232）、CLI 检测改用注册表 PATH（#6284）（69 提交 / 284 文件，+53108/-6678） |
-| `v3.20.1` | 2026-08-29 | 合入上游 v3.20.1：Codex CLI 0.149 改 config-only 切换（第三方 key 不再写 `auth.json`）、Team workspace 账号互相覆盖修复（#6780）、会话扫描增量 byte-cursor（schema v17→v18）（26 提交 / 66 文件，+7474/-1000） |
-| `v3.20.2` | 2026-09-09 | 合入上游 v3.20.2（`2d54e261`，26 提交）；Grok 走 xAI 原生 Responses 路由、一批 catalog/兼容性修复、预设与定价扩充 |
-| `v3.20.3` | 2026-09-13 | 合入上游 v3.20.3（`bd247a4a`）；Kimi 等 Codex 预设改原生 Responses 直连、代理正确性修复、预设与定价维护。**首次发布失败**：标签误指上游提交，Release 跑的是上游工作流（硬校验 `TAURI_SIGNING_PRIVATE_KEY`），5 个平台全部在签名步骤失败、附件为空；把标签改指 fork 提交 `b24deaa9` 后重发成功 |
-| `v3.20.4` | 2026-09-23 | 合入上游 v3.20.4（`f2537fdf`，25 提交）；Copilot 端点剥离 `stop`、`additional_tools` 抬升为工具、Codex `detail:original` 图片归一化、GPT-6/Grok 家族档位与定价批次、WSL shell 启动输出过滤；fork 侧 rquickjs 0.12 锁文件对齐（14 资产） |
-| `v4.0.1` | 2026-10-05 | 合入上游 v4.0.0 **与** v4.0.1（`4804b723`，38 提交）：v4.0 收尾（配额重置倒计时与到期列表、用量表格分页、88API/兔子 API 等预设扩编、官方图标）、代理修复（零用量 `response.incomplete` → `api_error`、Codex 状态库 WSL 路径跳过加锁）、CI 基建（rust-cache + nextest + pinned toolchain）与发布流程改造；fork 侧移除手写的 `wix.version` 覆盖。**发布一次成功**：tag `v4.0.1` 指向 fork 提交 `32e4aa39`，14 资产（Linux x86_64/arm64 各 AppImage+deb+rpm、macOS dmg+zip+tar.gz、Windows x86_64/arm64 各 MSI+Portable.zip、latest.json），正式版（Latest）；随发布一并修掉 macOS/Linux CI 的 golden 模式快照（644→600） |
-| `v4.0.7` | 2026-10-11 | 合入上游 v4.0.2–v4.0.7（`1f786dad`，123 提交）：what's-new 应用内更新摘要机制（v4.0.2 起）、GitHub Copilot 托管账号（v4.0.5）、provider 搜索 / Skills 批量更新 / 配额着色 / classic sub-agent tools / 流式收尾修复（#7986，v4.0.6）、quotaDisplay / 会话压缩 rollout / stale-client / workspace 切换修复（#8054，v4.0.7）等六个版本的完整内容；fork 侧新增 sha2 0.11 适配（4.29）。**发布一次成功**：tag `v4.0.7` 指向 fork 提交 `e091fdd6`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。发布前曾遇仓库 Actions 被禁用（用户网页端恢复，见同步注记） |
-| `v4.0.8` | 2026-10-11 | 合入上游 v4.0.8（`df40d53c`，8 提交，35 文件）：Codex 桌面版自带命令行的模型列表回退（macOS 上 ChatGPT.app 优先于改名前的 Codex.app）、官方模型列表不可用时的分类原因提示与恢复、获取模型列表带上供应商配置的请求头（#7759/#7760）、「设置 → 数据」新增「打开日志」、深色模式文字调暗；fork 侧修正分类器转发 `max_tokens` 下限（修静默失效）并为回注块加作用域限定（4.2）。**发布一次成功**：tag `v4.0.8` 指向 fork 提交 `38acc5a1`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。**同日重发**：tag 改指 fork 提交 `ae14e1a9`（并入 4.30 探针修复与 4.31 内置浏览器 / 官方插件市场），14 资产原地覆盖、仍为 Latest，版本号与安装包命名不变 |
-| `v4.0.9` | 2026-10-12 | 合入上游 v4.0.9（`99277921`，41 提交，109 文件 +7 187 / −1 456）：供应商表单整体重构（说明移入 help tips、模型选择对话框、默认模型=列表第一行、Codex 子代理模型、full URL 移入高级）、Codex 新线程/自动化 Chat 上游 400 与 xAI 422 修复、Claude OpenAI 格式上游改发 Bearer、聚合模式按成员合并兼容开关、冷启动语言校正（#8023）、本机「连接地址」（#7878）、macOS 本地网络权限、7 家新预设（SoruxGPT/IKunCode/RunToken/BotCF/YYLX/TokenFlux/OpenModel）；fork 侧 8 处适配（见同步注记）。**发布一次成功**：tag `v4.0.9` 指向 fork 提交 `707a6a15`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
-| `v4.0.12` | 2026-10-15 | 合入上游 v4.0.12（`51ac86f1`，95 提交，211 文件 +31 317 / −3 318）：Apps 页可安装/更新/**卸载**编码客户端（多安装诊断 + 手动指令 + Node 版本预检）、自定义供应商图标「My Icons」库与深链 `iconUrl`、新增 **Local 预设组**（Ollama / LM Studio / llama.cpp / vLLM，本机地址绕开代理）、14 家云平台预设、会话日志扫描改为后台 10 分钟 / 用量页按所选间隔、土耳其语界面与不支持语言回落英文、深链 `apiFormat` 与 Pi 供应商导入、Grok Build 当前布局卸载；fork 侧 11 处适配（见同步注记）。**发布一次成功**：tag `v4.0.12` 指向 fork 提交 `9c5bedf5`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2） |
-| `v4.0.14` | 2026-10-17 | 合入上游 v4.0.13–v4.0.14（`73f37c4b`，92 提交，493 文件 +26 677 / −22 422）：用量统计自定义（币种与汇率、侧栏「今日」显示项、请求日志列、视图记忆、柱状/面积趋势图切换）、Claude Desktop 聚合（stack）模式、Codex Auto Review 模型与聚合子代理模型、Codex↔Gemini thought signature 往返、终端目录记忆、GPT 窗口 272K 封顶；fork 侧 5 处适配（见同步注记）。**发布一次成功**：tag `v4.0.14` 指向 fork 提交 `63445e1f`，14 资产、正式版（Latest） |
-| `v4.0.15` | 2026-10-18 | 合入上游 v4.0.15（`77c6dc79`，8 提交，52 文件 +4 757 / −298）：托盘菜单替换为玻璃快捷面板（`tray_panel.rs` + `src/tray-panel/*`，含配置切换与用量标签页）、趋势图样式迁入用量显示设置并对齐网格布局、新增 EveryAPI 与 AllTokens 赞助商预设、土耳其语文案润色；fork 侧 3 处适配（见同步注记）。同步推送 tag `v4.0.15` 发布 |
+| 版本        | 发布时间   | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `v3.18.0`   | 2026-06-28 | 合入上游 v3.18.0：Grok Build 成为第八个受管 app（独立 `/grokbuild/v1/responses` 路由命名空间与独立预设集）、xAI Grok OAuth 设备流登录、用量统计重建（schema v16）（52 提交 / 217 文件，+21452/-6285）。GitHub 上为 prerelease                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `v3.19.0`   | 2026-07-30 | 合入上游 v3.19.0：安全加固（skill 安装 zip-slip 与路径穿越、Gemini 通用配置凭据泄漏清理、SQL 导入 SQLite authorizer、终端路径转义、deeplink 确认完整展示）、代理工具图片 token 膨胀修复、models.dev 定价自动同步（38 提交 / 132 文件，+14926/-1415）。GitHub 上为 prerelease                                                                                                                                                                                                                                                                                                                                                                                               |
+| `v3.19.1`   | 2026-07-31 | 合入上游 v3.19.1：DeepSeek/火山 Ark/腾讯混元 Codex 网关改原生 Responses、Claude Desktop 用量双重计数修复（#5938）、Codex 官方 provider 回切残留第三方 key 修复、删除 3,166 行废弃代码（12 提交 / 71 文件，+2324/-3680，首个删除多于新增的版本）。GitHub 上为 prerelease                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `v3.19.1-a` | 2026-08-02 | CI/发布基础设施修复（tag 推送正式版、wix.version 绕过 prerelease）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `v3.19.1-b` | 2026-08-02 | proxy 协议修复收尾（安全分类器、prefix-cache 稳定性、流式终态容错、工具历史恢复会话隔离）。注：GitHub 上该 release 为 prerelease（与 a 同日，应为手动重跑时 `prerelease` 未置 false，见 6.1）                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `v3.19.2`   | 2026-08-09 | 合入上游 v3.19.2（15 提交）+ fork 全特性；字节上限统一为 `bytes_with_limit`（200MB）；content_encoding 解压 bomb 防护；atomic_write Windows 改用 `ReplaceFileW`；版本号与上游对齐（首次无后缀，wix.version 3.19.2.0）；重发补充：接管统一 `ANTHROPIC_AUTH_TOKEN` 占位符避免 Not logged in、官方原生分类器透传 + ALLOW 兜底、分类器检测加固                                                                                                                                                                                                                                                                                                                                 |
+| `v3.19.2-a` | 2026-08-17 | DeepSeek 多模态能力支持（`deepseek-v4-pro` 支持图片输入；`deepseek-v4-flash` 维持纯文本）；同步上游趋势图表点位与 Grok Build 文案修正；wix.version 递增至 3.19.2.1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `v3.20.0`   | 2026-08-19 | 合入上游 v3.20.0：Pi 成为第九个受管 app（schema v16→v17）、Codex 多账号 ChatGPT 管理（#3879）、Windows+WSL2 `ReplaceFileW` 修复（#6232）、CLI 检测改用注册表 PATH（#6284）（69 提交 / 284 文件，+53108/-6678）                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `v3.20.1`   | 2026-08-29 | 合入上游 v3.20.1：Codex CLI 0.149 改 config-only 切换（第三方 key 不再写 `auth.json`）、Team workspace 账号互相覆盖修复（#6780）、会话扫描增量 byte-cursor（schema v17→v18）（26 提交 / 66 文件，+7474/-1000）                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `v3.20.2`   | 2026-09-09 | 合入上游 v3.20.2（`2d54e261`，26 提交）；Grok 走 xAI 原生 Responses 路由、一批 catalog/兼容性修复、预设与定价扩充                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `v3.20.3`   | 2026-09-13 | 合入上游 v3.20.3（`bd247a4a`）；Kimi 等 Codex 预设改原生 Responses 直连、代理正确性修复、预设与定价维护。**首次发布失败**：标签误指上游提交，Release 跑的是上游工作流（硬校验 `TAURI_SIGNING_PRIVATE_KEY`），5 个平台全部在签名步骤失败、附件为空；把标签改指 fork 提交 `b24deaa9` 后重发成功                                                                                                                                                                                                                                                                                                                                                                              |
+| `v3.20.4`   | 2026-09-23 | 合入上游 v3.20.4（`f2537fdf`，25 提交）；Copilot 端点剥离 `stop`、`additional_tools` 抬升为工具、Codex `detail:original` 图片归一化、GPT-6/Grok 家族档位与定价批次、WSL shell 启动输出过滤；fork 侧 rquickjs 0.12 锁文件对齐（14 资产）                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `v4.0.1`    | 2026-10-05 | 合入上游 v4.0.0 **与** v4.0.1（`4804b723`，38 提交）：v4.0 收尾（配额重置倒计时与到期列表、用量表格分页、88API/兔子 API 等预设扩编、官方图标）、代理修复（零用量 `response.incomplete` → `api_error`、Codex 状态库 WSL 路径跳过加锁）、CI 基建（rust-cache + nextest + pinned toolchain）与发布流程改造；fork 侧移除手写的 `wix.version` 覆盖。**发布一次成功**：tag `v4.0.1` 指向 fork 提交 `32e4aa39`，14 资产（Linux x86_64/arm64 各 AppImage+deb+rpm、macOS dmg+zip+tar.gz、Windows x86_64/arm64 各 MSI+Portable.zip、latest.json），正式版（Latest）；随发布一并修掉 macOS/Linux CI 的 golden 模式快照（644→600）                                                     |
+| `v4.0.7`    | 2026-10-11 | 合入上游 v4.0.2–v4.0.7（`1f786dad`，123 提交）：what's-new 应用内更新摘要机制（v4.0.2 起）、GitHub Copilot 托管账号（v4.0.5）、provider 搜索 / Skills 批量更新 / 配额着色 / classic sub-agent tools / 流式收尾修复（#7986，v4.0.6）、quotaDisplay / 会话压缩 rollout / stale-client / workspace 切换修复（#8054，v4.0.7）等六个版本的完整内容；fork 侧新增 sha2 0.11 适配（4.29）。**发布一次成功**：tag `v4.0.7` 指向 fork 提交 `e091fdd6`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。发布前曾遇仓库 Actions 被禁用（用户网页端恢复，见同步注记）                                                                                      |
+| `v4.0.8`    | 2026-10-11 | 合入上游 v4.0.8（`df40d53c`，8 提交，35 文件）：Codex 桌面版自带命令行的模型列表回退（macOS 上 ChatGPT.app 优先于改名前的 Codex.app）、官方模型列表不可用时的分类原因提示与恢复、获取模型列表带上供应商配置的请求头（#7759/#7760）、「设置 → 数据」新增「打开日志」、深色模式文字调暗；fork 侧修正分类器转发 `max_tokens` 下限（修静默失效）并为回注块加作用域限定（4.2）。**发布一次成功**：tag `v4.0.8` 指向 fork 提交 `38acc5a1`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。**同日重发**：tag 改指 fork 提交 `ae14e1a9`（并入 4.30 探针修复与 4.31 内置浏览器 / 官方插件市场），14 资产原地覆盖、仍为 Latest，版本号与安装包命名不变 |
+| `v4.0.9`    | 2026-10-12 | 合入上游 v4.0.9（`99277921`，41 提交，109 文件 +7 187 / −1 456）：供应商表单整体重构（说明移入 help tips、模型选择对话框、默认模型=列表第一行、Codex 子代理模型、full URL 移入高级）、Codex 新线程/自动化 Chat 上游 400 与 xAI 422 修复、Claude OpenAI 格式上游改发 Bearer、聚合模式按成员合并兼容开关、冷启动语言校正（#8023）、本机「连接地址」（#7878）、macOS 本地网络权限、7 家新预设（SoruxGPT/IKunCode/RunToken/BotCF/YYLX/TokenFlux/OpenModel）；fork 侧 8 处适配（见同步注记）。**发布一次成功**：tag `v4.0.9` 指向 fork 提交 `707a6a15`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）                                             |
+| `v4.0.12`   | 2026-10-15 | 合入上游 v4.0.12（`51ac86f1`，95 提交，211 文件 +31 317 / −3 318）：Apps 页可安装/更新/**卸载**编码客户端（多安装诊断 + 手动指令 + Node 版本预检）、自定义供应商图标「My Icons」库与深链 `iconUrl`、新增 **Local 预设组**（Ollama / LM Studio / llama.cpp / vLLM，本机地址绕开代理）、14 家云平台预设、会话日志扫描改为后台 10 分钟 / 用量页按所选间隔、土耳其语界面与不支持语言回落英文、深链 `apiFormat` 与 Pi 供应商导入、Grok Build 当前布局卸载；fork 侧 11 处适配（见同步注记）。**发布一次成功**：tag `v4.0.12` 指向 fork 提交 `9c5bedf5`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）                                              |
+| `v4.0.14`   | 2026-10-17 | 合入上游 v4.0.13–v4.0.14（`73f37c4b`，92 提交，493 文件 +26 677 / −22 422）：用量统计自定义（币种与汇率、侧栏「今日」显示项、请求日志列、视图记忆、柱状/面积趋势图切换）、Claude Desktop 聚合（stack）模式、Codex Auto Review 模型与聚合子代理模型、Codex↔Gemini thought signature 往返、终端目录记忆、GPT 窗口 272K 封顶；fork 侧 5 处适配（见同步注记）。**发布一次成功**：tag `v4.0.14` 指向 fork 提交 `63445e1f`，14 资产、正式版（Latest）                                                                                                                                                                                                                            |
+| `v4.0.15`   | 2026-10-18 | 合入上游 v4.0.15（`77c6dc79`，8 提交，52 文件 +4 757 / −298）：托盘菜单替换为玻璃快捷面板（`tray_panel.rs` + `src/tray-panel/*`，含配置切换与用量标签页）、趋势图样式迁入用量显示设置并对齐网格布局、新增 EveryAPI 与 AllTokens 赞助商预设、土耳其语文案润色；fork 侧 3 处适配（见同步注记）。同步推送 tag `v4.0.15` 发布                                                                                                                                                                                                                                                                                                                                                  |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -1048,7 +1060,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 2026-09-17 核对（本次无 merge / push / release）：上游自 `06082e18`
 > （2026-09-15 04:33 UTC）起**无新提交、无新 release/tag**（最新仍为 `v3.20.3`），
 > 上游 126 个分支中无任何 tip 晚于该提交；`git merge-base --is-ancestor
-> upstream/main main` 成立、`git rev-list --count upstream/main..main` = 398、
+upstream/main main` 成立、`git rev-list --count upstream/main..main` = 398、
 > `git log upstream/main ^main` 为空。fork `main` 与 `origin/main` 一致
 > （`aa39d944`），无待推送提交，全部发布标签均指向 fork 提交 → 无需 merge /
 > push / release。fork `main` 领先最新 release 标签 `b24deaa9`（`v3.20.3`）
@@ -1177,6 +1189,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 2026-09-28 **功能增量（无同步 / 无 release）**：落地缓存链路与行为开关（第 4.17–4.19 节）。
 >
 > **缺口补足**（上一轮协议审查发现的 4 项）：
+>
 > - Claude→Chat 会话级 `prompt_cache_key` 路由（此前只有 Codex 路径有；上游 #3193 的修复把 Claude 路径的会话 key 一并关掉了）
 > - `sessionAffinityHeader`（值 = 客户端会话 ID；CF 等多实例网关的前缀缓存亲和）
 > - `preserveCacheControl`（网关层实现断点缓存的上游，从 opencode-go 特例推广为可配）
@@ -1219,7 +1232,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > `retry_transient_io` fallback 与上游 `write_text_file_private` 并存）、`database/{tests.rs,dao/proxy.rs}`、
 > `mcp/codex.rs`（采用上游 0.160 传输字段名单 + 保留 fork 白名单，见 4.22）、`services/config.rs`、
 > `import_export_sync.rs`、`provider_service.rs`（采用上游；fork 的旧 sync-path 测试随 `ConfigService::
-> sync_current_providers_to_live` 下线一并移除）、`streaming.rs`（上游 inline-think 剥离 + fork 的
+sync_current_providers_to_live` 下线一并移除）、`streaming.rs`（上游 inline-think 剥离 + fork 的
 > 伪成功防护/截断流防护/缓冲上限/`refusal` 全部并存，两处上游测试按 4.20 改写）、
 > `transform_codex_chat.rs`（fork 的 `response_format` 注入 + 上游 compaction 语义并存）、
 > `response_processor.rs`、`handler_context.rs`（fork 的 `is_classifier_request`/`classifier_mode`
@@ -1231,6 +1244,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > common-config snippet 机制）。
 >
 > **行为分歧变更**（逐条核对结果）：
+>
 > - **由上游新引擎取代、fork 实现随之移除**（转出 4.x，待后续清理残余物）：
 >   4.6（`wire_api = "chat"` 存量迁移）——新引擎在 route 投影时统一写 `wire_api = "responses"`
 >   （上游 `live/project/codex.rs::legacy_shapes_become_the_custom_route` 已覆盖该保证）；
@@ -1259,7 +1273,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > **上游 v7/v8 界面重构 + 会话阅读器重写**：新增 sidebar shell（侧栏外壳 + 全局页面 +
 > 分组设置）、v7 设计令牌与共享原语、结构化会话阅读器
 > （`src-tauri/src/session_manager/{cache,content,model}.rs` + `providers/{blocks,codex_items,
-> opencode_blocks,pi_blocks}.rs`）、usage 全时段热力图与日瓦片、MCP `AppMatrix` 矩阵、
+opencode_blocks,pi_blocks}.rs`）、usage 全时段热力图与日瓦片、MCP `AppMatrix` 矩阵、
 > 设置页 accounts center（新 `src/components/apps/` 页 + 工具链管理）。同批修复：Claude/Codex
 > 路径的 inline `<think>` 剥离（#7741）、Codex late-argument function_call 补全、
 > `late-arguments` 整流、Codex 历史重试、Grok token 刷新状态、MCP 字段拆分（#7735/#7845）。
@@ -1319,6 +1333,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 不再被毒化缓存死锁，`config.rs` 新增 `is_wsl_path` 判定。
 >
 > **冲突 4 处，全部手工解**：
+>
 > - `usage_stats.rs`——采用上游 `type LogRow` 类型别名（取代 fork 的
 >   `#[allow(clippy::type_complexity)]`，两者同为解决 Rust 1.95 阈值收紧，上游写法更根治）；
 > - `ci.yml` / `wsl2-nightly.yml`——采纳上游 rust-cache + nextest + 从
@@ -1384,6 +1399,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 修复 **#8054**、计费修复）。
 >
 > **冲突 47 处**：
+>
 > - 32 处 UD：`docs/user-manual/assets/*.png`——上游整批删除的 Claude Desktop 手册
 >   配图；fork 侧修改来自 `16ed764c`（[ImgBot]），核查全仓库无引用后**接受删除**；
 > - 5 处 UU：`src/icons/extracted/{ClaudeApi,a6-icon,byteplus,etok,sudocode-us}.png`
@@ -1671,6 +1687,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 > 用例与 fork 的 4 个缓存开关用例并存）。
 
 > **语义采纳（fork 主动让出的旧行为）**：
+>
 > - **`[DONE]` 边界改用 `return`**（`streaming.rs` / `streaming_codex_chat.rs`）。上游 v4.0.14 新增
 >   `done_preserves_terminal_result_against_late_input`，对整段输出做逐字节比对，断言 message_stop /
 >   response.completed 之后**不得再有任何事件**（含同一 chunk 内的迟到数据、迟到 error、迟到传输错误）。
@@ -1687,8 +1704,7 @@ tests/vitest-jest-dom.d.ts                   # vitest 5 × jest-dom 类型桥接
 >   只对真正的 claude-haiku-4.x 关掉 1M。**fork 三个工厂全部对齐到上游写法**——只改两处（冲突区）会
 >   让走 `brandedRoutes` 的第三方预设（TokenFactory、Modelflare 等）的 Haiku 档静默退回 200K。
 > - **`settings.rs` 写入改走 `atomic_write_private`**。上游 `8a06838d`/`97daccb6` 把 save 重写为
->   「临时文件 + rename」并引入备份恢复（`SETTINGS_BACKUP_PENDING`）；fork 原先手写的 unix `mode(0o600)`
->   +`harden_secret_file` 已被 `config::atomic_write_private` → `atomic_write_with_unix_mode(..., Some(0o600))`
+>   「临时文件 + rename」并引入备份恢复（`SETTINGS_BACKUP_PENDING`）；fork 原先手写的 unix `mode(0o600)` +`harden_secret_file` 已被 `config::atomic_write_private` → `atomic_write_with_unix_mode(..., Some(0o600))`
 >   完全覆盖（4.5 语义不变），故取上游写法。**补一处**：`backup_settings_file` 的 `fs::copy` 会把历史上
 >   0644 的 settings.json 权限一并复制进备份（而备份里可能有同步密码），已在其后补
 >   `crate::config::harden_secret_file(&dest)`。
@@ -1906,7 +1922,7 @@ endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 for
 - **历史残留清理**（2026-10-04，已征得同意后执行）：受污染内容整体移动到
   `~/.cc-switch/test-pollution-backup-20261004/`，真实目录只留用户自己的内容：
   - `model-pricing.json`（夹具：假模型 `custom-model`、`deletedModelIds:
-    ["claude-sonnet-5"]`、`includeCommonModels: false`、`lastSyncError: "offline"`）→
+["claude-sonnet-5"]`、`includeCommonModels: false`、`lastSyncError: "offline"`）→
     已备份后重置为干净值（空 `models` / 空 `deletedModelIds` / `includeCommonModels: true`），
     并**显式保留 `autoSyncEnabled: false`**——上游同步（`d76a1cda`）把该默认值改成了 `true`，
     写 false 是为了不静默改变你当前的生效行为；想要新的上游默认就在设置页打开。
@@ -1972,9 +1988,10 @@ error: only metadata stub found for `rlib` dependency `alloc` ... / cannot resol
 `cargo clean -p cc-switch` 也不能修复。
 
 规避：日常按本文档的口径验证 —— `cargo test --lib` + `cargo clippy --all-targets -- -D warnings`
-+ `cargo fmt --check`；如需完整集成测试（`src-tauri/tests/*`）建议在 CI 或 WSL 中跑。
-根治方向（未擅自实施）：给集成测试目标单独跑 `CARGO_TARGET_DIR`，或把 `crate-type` 中的
-`staticlib`/`cdylib` 移到仅在打包时启用。
+
+- `cargo fmt --check`；如需完整集成测试（`src-tauri/tests/*`）建议在 CI 或 WSL 中跑。
+  根治方向（未擅自实施）：给集成测试目标单独跑 `CARGO_TARGET_DIR`，或把 `crate-type` 中的
+  `staticlib`/`cdylib` 移到仅在打包时启用。
 
 **2026-10-04 补充：实际根因是页面文件耗尽，不是 rlib 形态。** 当天的报错首行是
 `memory allocation of 146170702 bytes failed` + `failed to mmap file

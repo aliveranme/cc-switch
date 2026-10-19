@@ -498,12 +498,15 @@ pub fn parse_classifier_usage(body: &Value) -> crate::proxy::usage::parser::Toke
     let body = super::providers::unwrap_chat_completion_envelope(body.clone());
     crate::proxy::usage::parser::TokenUsage::from_claude_response(&body)
         .or_else(|| crate::proxy::usage::parser::TokenUsage::from_openai_response(&body))
+        .or_else(|| crate::proxy::usage::parser::TokenUsage::from_gemini_response(&body))
+        .or_else(|| crate::proxy::usage::parser::TokenUsage::from_codex_response(&body))
         .unwrap_or_default()
 }
 
 /// 从上游响应中提取分类文本
 ///
-/// 同时支持 Claude Messages API 和 OpenAI Chat Completions 两种响应格式。
+/// 支持 Claude Messages API、OpenAI Chat Completions、Google Gemini Native
+/// 与 OpenAI Responses 四种上游响应格式。
 fn extract_response_text(body: &Value) -> Option<String> {
     // Claude Messages: 遍历 content 找第一个 type=="text" 的块。只取 content[0]
     // 会把 thinking 块前置的响应（部分 Anthropic 兼容网关在 stream:false 时返回
@@ -557,6 +560,50 @@ fn extract_response_text(body: &Value) -> Option<String> {
                         }
                     }
                 }
+            }
+        }
+    }
+    // Google Gemini Native: candidates[0].content.parts (排除 thought: true 的思考部件)
+    if let Some(candidates) = body.get("candidates").and_then(|c| c.as_array()) {
+        if let Some(first) = candidates.first() {
+            if let Some(parts) = first.pointer("/content/parts").and_then(|p| p.as_array()) {
+                let texts: Vec<&str> = parts
+                    .iter()
+                    .filter(|part| {
+                        !part
+                            .get("thought")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                    })
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .filter(|text| !text.trim().is_empty())
+                    .collect();
+                if !texts.is_empty() {
+                    return Some(texts.join("\n"));
+                }
+            }
+        }
+    }
+    // OpenAI Responses: output[].content[].text / output[].text
+    if let Some(output) = body.get("output").and_then(|o| o.as_array()) {
+        for item in output {
+            if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
+                for part in content {
+                    if let Some(text) = part
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .filter(|t| !t.trim().is_empty())
+                    {
+                        return Some(text.to_string());
+                    }
+                }
+            }
+            if let Some(text) = item
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|t| !t.trim().is_empty())
+            {
+                return Some(text.to_string());
             }
         }
     }
@@ -2228,5 +2275,79 @@ mod tests {
         assert!(!sanitized.to_lowercase().contains("<block>"));
         assert!(!sanitized.to_lowercase().contains("</block>"));
         assert!(!sanitized.to_lowercase().contains("<severity>"));
+    }
+
+    #[test]
+    fn test_extract_response_text_and_usage_from_gemini_native() {
+        let upstream = json!({
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            { "text": "I will inspect the command.", "thought": true },
+                            { "text": "<block>no</block>\nRead-only directory listing." }
+                        ]
+                    }
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 120,
+                "candidatesTokenCount": 35,
+                "totalTokenCount": 155
+            }
+        });
+        let extracted = extract_response_text(&upstream);
+        assert_eq!(
+            extracted.as_deref(),
+            Some("<block>no</block>\nRead-only directory listing.")
+        );
+        let usage = parse_classifier_usage(&upstream);
+        assert_eq!(usage.input_tokens, 120);
+        assert_eq!(usage.output_tokens, 35);
+
+        let response =
+            transform_classifier_response(&upstream, "gemini-2.5-flash", ClassifierMode::Block);
+        let text = response["content"][0]["text"].as_str().unwrap();
+        let verdicts = cc_block_verdicts(text);
+        assert_eq!(verdicts.len(), 1);
+        assert!(verdicts.contains("no"));
+    }
+
+    #[test]
+    fn test_extract_response_text_and_usage_from_openai_responses() {
+        let upstream = json!({
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "<block>yes</block>\n<reason>Modifies system files</reason>"
+                        }
+                    ]
+                }
+            ],
+            "usage": {
+                "input_tokens": 200,
+                "output_tokens": 50,
+                "total_tokens": 250
+            }
+        });
+        let extracted = extract_response_text(&upstream);
+        assert_eq!(
+            extracted.as_deref(),
+            Some("<block>yes</block>\n<reason>Modifies system files</reason>")
+        );
+        let usage = parse_classifier_usage(&upstream);
+        assert_eq!(usage.input_tokens, 200);
+        assert_eq!(usage.output_tokens, 50);
+
+        let response =
+            transform_classifier_response(&upstream, "gpt-5.6-sol", ClassifierMode::Block);
+        let text = response["content"][0]["text"].as_str().unwrap();
+        let verdicts = cc_block_verdicts(text);
+        assert_eq!(verdicts.len(), 1);
+        assert!(verdicts.contains("yes"));
     }
 }

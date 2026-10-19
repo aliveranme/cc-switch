@@ -657,7 +657,12 @@ pub(crate) fn is_deepseek_reasoner_family(model: &str) -> bool {
 pub(crate) fn downgrade_forced_tool_choice_to_auto(result: &mut Value) {
     let forced = match result.get("tool_choice") {
         Some(Value::String(s)) => s == "required",
-        Some(Value::Object(obj)) => obj.get("type").and_then(Value::as_str) == Some("function"),
+        Some(Value::Object(obj)) => {
+            matches!(
+                obj.get("type").and_then(Value::as_str),
+                Some("function" | "tool")
+            ) || obj.get("function").is_some()
+        }
         _ => false,
     };
     if forced {
@@ -3147,6 +3152,14 @@ mod tests {
     fn downgrade_forced_tool_choice_to_auto_rewrites_named_function() {
         assert_eq!(
             run_downgrade(json!({"type": "function", "function": {"name": "web_search"}})),
+            json!("auto")
+        );
+        assert_eq!(
+            run_downgrade(json!({"type": "tool", "name": "web_search"})),
+            json!("auto")
+        );
+        assert_eq!(
+            run_downgrade(json!({"function": {"name": "web_search"}})),
             json!("auto")
         );
     }
