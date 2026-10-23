@@ -1290,8 +1290,11 @@ describe("AppsPage concurrent CLI upgrades", () => {
       return getVersions(tools);
     });
     const { AppsPage } = await import("@/components/apps/AppsPage");
+    const { TOOL_NAMES } = await import("@/components/apps/useToolManagement");
     const view = mountApps(AppsPage);
-    await waitFor(() => expect(mocks.getToolVersions).toHaveBeenCalledTimes(9));
+    await waitFor(() =>
+      expect(mocks.getToolVersions).toHaveBeenCalledTimes(TOOL_NAMES.length),
+    );
     view.unmount();
     const remounted = await renderApps();
     fireEvent.click(updateButton("Claude Code"));
@@ -1739,6 +1742,15 @@ describe("AppsPage concurrent CLI upgrades", () => {
       expect(
         card("Claude Code").getAllByLabelText("common.loading").length,
       ).toBeGreaterThan(0),
+    );
+    // 等原任务的版本刷新真正发出（初始探测 + 刷新共 2 次）再卸载，
+    // 否则机器慢时刷新可能落在重新挂载之后，计数就会抖
+    await waitFor(() =>
+      expect(
+        mocks.getToolVersions.mock.calls.filter(([tools]) =>
+          tools.includes("claude"),
+        ),
+      ).toHaveLength(2),
     );
     view.unmount();
     const now = vi

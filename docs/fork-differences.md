@@ -8,12 +8,12 @@
 
 | 项目       | 值                                                                                                                                                                                                                                                                   |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 上游基线   | 77c6dc79（2026-10-18，**8 个提交**；明细见第 5 节；上一基线 73f37c4b，2026-10-16）                                                                                                                                                                                   |
-| 本地领先   | **456** 个提交（`git rev-list --count 73f37c4b..HEAD`，统计于 `77c6dc79` 的 merge 前，2026-10-18）                                                                                                                                                                   |
-| 本次 merge | 2026-10-18 合入上游 77c6dc79（8 个提交，**52 文件 +4 757 / −298**，2 处冲突全手工解 + 3 处 fork 侧适配，见第 5 节注记）；上一次 2026-10-17 合入 73f37c4b（92 个提交，**493 文件**）                                                                                  |
-| 本地版本   | `v4.0.15`（随 merge 对齐上游 v4.0.15；fork 发布序列见第 5 节）                                                                                                                                                                                                       |
-| 同步方式   | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-18（见第 5 节）                                                                                                                                                                                  |
-| 测试规模   | 最近验证于 2026-10-18：Rust **3956** 单元通过（`cargo test --lib`，11 ignored；集成测试由 CI nextest 覆盖）+ 前端 vitest **3043**（233 文件）；`cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `format:check` / whats-new 结构测试全绿 |
+| 上游基线   | d8983bb1（2026-10-24，**82 个提交**，含 v4.0.17、v4.0.18、v4.0.19；明细见第 5 节；上一基线 77c6dc79，2026-10-18）                                                                                                                                                                                   |
+| 本地领先   | **462** 个提交（`git rev-list --count upstream/main..HEAD`，统计于 `d8983bb1` 的 merge 前，2026-10-24）                                                                                                                                                                   |
+| 本次 merge | 2026-10-24 合入上游 d8983bb1（82 个提交，含 v4.0.17–v4.0.19 三版本，全手工解冲突 + 8 处 fork 侧适配，见第 5 节注记）；上一次 2026-10-18 合入 77c6dc79                                                                                  |
+| 本地版本   | `v4.0.19`（随 merge 对齐上游 v4.0.19；fork 发布序列见第 5 节）                                                                                                                                                                                                       |
+| 同步方式   | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-24（见第 5 节）                                                                                                                                                                                  |
+| 测试规模   | 最近验证于 2026-10-24：Rust **4157** 单元通过（`cargo test --lib`，11 ignored；集成测试由 CI nextest 覆盖）+ 前端 vitest **3291**（256 文件）；`cargo fmt --check` / `clippy --lib --bins -D warnings` / `pnpm typecheck` / `format:check` / `build:renderer` / whats-new 结构测试全绿 |
 
 ## 2. 修改总览（按主题）
 
@@ -1023,6 +1023,7 @@ configuration key`（同一 profile 里其余键未见告警）。
 | `v4.0.12`   | 2026-10-15 | 合入上游 v4.0.12（`51ac86f1`，95 提交，211 文件 +31 317 / −3 318）：Apps 页可安装/更新/**卸载**编码客户端（多安装诊断 + 手动指令 + Node 版本预检）、自定义供应商图标「My Icons」库与深链 `iconUrl`、新增 **Local 预设组**（Ollama / LM Studio / llama.cpp / vLLM，本机地址绕开代理）、14 家云平台预设、会话日志扫描改为后台 10 分钟 / 用量页按所选间隔、土耳其语界面与不支持语言回落英文、深链 `apiFormat` 与 Pi 供应商导入、Grok Build 当前布局卸载；fork 侧 11 处适配（见同步注记）。**发布一次成功**：tag `v4.0.12` 指向 fork 提交 `9c5bedf5`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）                                              |
 | `v4.0.14`   | 2026-10-17 | 合入上游 v4.0.13–v4.0.14（`73f37c4b`，92 提交，493 文件 +26 677 / −22 422）：用量统计自定义（币种与汇率、侧栏「今日」显示项、请求日志列、视图记忆、柱状/面积趋势图切换）、Claude Desktop 聚合（stack）模式、Codex Auto Review 模型与聚合子代理模型、Codex↔Gemini thought signature 往返、终端目录记忆、GPT 窗口 272K 封顶；fork 侧 5 处适配（见同步注记）。**发布一次成功**：tag `v4.0.14` 指向 fork 提交 `63445e1f`，14 资产、正式版（Latest）                                                                                                                                                                                                                            |
 | `v4.0.15`   | 2026-10-18 | 合入上游 v4.0.15（`77c6dc79`，8 提交，52 文件 +4 757 / −298）：托盘菜单替换为玻璃快捷面板（`tray_panel.rs` + `src/tray-panel/*`，含配置切换与用量标签页）、趋势图样式迁入用量显示设置并对齐网格布局、新增 EveryAPI 与 AllTokens 赞助商预设、土耳其语文案润色；fork 侧 3 处适配（见同步注记）。同步推送 tag `v4.0.15` 发布                                                                                                                                                                                                                                                                                                                                                  |
+| `v4.0.19`   | 2026-10-24 | 合入上游 v4.0.17–v4.0.19（`d8983bb1`，82 提交，含 v4.0.17、v4.0.18、v4.0.19 三版本）：新增 Antigravity CLI 集成与 Auth Center 官方账户管理/配额直查（#8268/#8601 等）、新增 Kimi Code 支持与 OAuth 官方登录/多账户切换（#8687/#8710/#8726）、用量页布局深度重构（#8711）、托盘快捷面板 DPI 缩放与 cross-monitor 优化、Claude Keychain 凭据多账号隔离（#8764）、Codex 会话头别名兼容（#8718）等；fork 侧 8 处适配（见同步注记）。同步推送 tag `v4.0.19` 发布 |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -1809,6 +1810,25 @@ opencode_blocks,pi_blocks}.rs`）、usage 全时段热力图与日瓦片、MCP `
 > ① 剥离全量模板 `gpt5_6_sol_template.json` 中的 `"comp_hash": "3000"`，避免第三方模型继承 ChatGPT 专有哈希导致不必要的重新压缩，并保持合并目录中模型行与契约一致（`route["comp_hash"] == Value::Null`）。
 > ② 改进 Gemini 原生转换（`transform_gemini.rs`），首条非 system 消息后截断 `systemInstruction` 收集，将会话中途注入的 system 消息转为 `contents` 中的 `user` 角色消息，保持系统提示词前缀跨轮次 100% 恒定以最大化前缀缓存命中率。
 > 验证全绿：Rust `cargo test --lib` **3985 passed / 0 failed**（11 ignored）、`cargo clippy --lib --all-targets -- -D warnings` 全绿、`cargo fmt --check` 全绿、前端 `pnpm typecheck` / `pnpm build:renderer` / `pnpm vitest run --maxWorkers=8` 全绿。
+
+> 2026-10-24 同步（v4.0.19）：合入上游 `d8983bb1`（82 提交，含 v4.0.17、v4.0.18、v4.0.19 三版本）：
+> - Antigravity CLI 集成（#8268）、Auth Center 官方账户管理与配额查询、卡片绑定与终端唤起；
+> - Kimi Code 支持（#8687）、Auth Center 多官方账号支持（#8726）与 OAuth 登录切换（#8710）；
+> - 用量页面布局重构（#8711，数据视图与设置抽屉分离、指标与趋势图联动）；
+> - 托盘快捷面板多 DPI 坐标刷新与 scaled 窗口边距修正（#8595/#8572）；
+> - Claude Desktop 插件市场按需补齐与深链导入参数兼容。
+>
+> 冲突手工解与 fork 侧适配：
+> ① `src-tauri/Cargo.toml` 与 `Cargo.lock`：保留 fork 的依赖升级（brotli 9 / zstd 0.14 / miniz_oxide 0.9.1 / mio 1.2.2），采纳上游 tokio `process` feature；
+> ② `src/types/usage.ts` / `src/lib/api/auth.ts`：合并 upstream 的 `agy` / `kimi` 新应用类型与 `AuthCenterTarget`；
+> ③ `src-tauri/src/deeplink/parser.rs`：对齐 `agy`、保留 fork 的 `claude-desktop` 与 `mcode` 白名单放行；
+> ④ `sha2 0.11` 适配：上游新引入的 `kimi_oauth` 与 `session_usage_kimi` 中 `Sha256::digest` 统一按 4.29 改用 `hex::encode`；
+> ⑤ `codex_config.rs` & `gpt5_6_sol_template.json`：`CodexCatalogRow` 补齐 `responses_template` 字段；`gpt5_6_sol_template.json` 移除残余 `tool_mode: "code_mode_only"`，避免第三方直接模型错误继承代码模式导致 comp_hash 与 tool_mode 分歧；
+> ⑥ React 19 / Vitest 5 适配：`UsageHero.tsx` 的 `inert` 改为 boolean；`KimiProviderForm.test.tsx` / `PiProviderForm.test.tsx` / `TrayPanel.test.tsx` 按钮名称正则修正；
+> ⑦ `src/index.css` Tailwind v4 适配：补入上游新增的主题变量 `--color-chart-usage`；
+> ⑧ 移除已下线的 ZetaAPI 赞助商横幅。
+>
+> 验证全绿：Rust `cargo test --lib` **4157 passed / 0 failed**（11 ignored）、`cargo clippy --manifest-path src-tauri/Cargo.toml --lib --bins -- -D warnings` 全绿、`cargo fmt --check` 全绿、前端 `pnpm typecheck` / `pnpm format:check` / `pnpm build:renderer` / `pnpm vitest run --maxWorkers=8` **256 文件 / 3291 用例全绿**。同步推送 `origin/main` 与 `v4.0.19` 标签触发 Release。
 
 ## 6. 维护约定
 

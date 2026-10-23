@@ -96,7 +96,8 @@ fn parse_provider_deeplink(
     // 解析阶段就被拒绝，那段分支因此永远不可达。
     if !matches!(
         app.as_str(),
-        "claude"
+        "agy"
+            | "claude"
             | "claude-desktop"
             | "codex"
             | "gemini"
@@ -106,9 +107,10 @@ fn parse_provider_deeplink(
             | "hermes"
             | "pi"
             | "mcode"
+            | "kimi"
     ) {
         return Err(AppError::InvalidInput(format!(
-            "Invalid app type: must be 'claude', 'claude-desktop', 'codex', 'gemini', 'grokbuild', 'opencode', 'openclaw', 'hermes', 'pi', or 'mcode', got '{app}'"
+            "Invalid provider app type: '{app}'"
         )));
     }
 
@@ -255,15 +257,17 @@ fn parse_prompt_deeplink(
         "claude"
             | "codex"
             | "gemini"
+            | "agy"
             | "grokbuild"
             | "opencode"
             | "openclaw"
             | "hermes"
             | "pi"
             | "mcode"
+            | "kimi"
     ) {
         return Err(AppError::InvalidInput(format!(
-            "Invalid app type: must be 'claude', 'codex', 'gemini', 'grokbuild', 'opencode', 'openclaw', 'hermes', 'pi', or 'mcode', got '{app}'"
+            "Invalid app type: must be 'claude', 'codex', 'gemini', 'agy', 'grokbuild', 'opencode', 'openclaw', 'hermes', 'pi', or 'mcode', got '{app}'"
         )));
     }
 
@@ -337,6 +341,7 @@ fn parse_mcp_deeplink(
             "claude"
                 | "codex"
                 | "gemini"
+                | "agy"
                 | "grokbuild"
                 | "grok"
                 | "opencode"
@@ -344,9 +349,10 @@ fn parse_mcp_deeplink(
                 | "hermes"
                 | "pi"
                 | "mcode"
+                | "kimi"
         ) {
             return Err(AppError::InvalidInput(format!(
-                "Invalid app in 'apps': must be 'claude', 'codex', 'gemini', 'grokbuild', 'opencode', 'hermes', 'pi', or 'mcode', got '{trimmed}'"
+                "Invalid app in 'apps': must be 'claude', 'codex', 'gemini', 'agy', 'grokbuild', 'opencode', 'hermes', 'pi', 'kimi', or 'mcode', got '{trimmed}'"
             )));
         }
     }
@@ -422,7 +428,7 @@ fn parse_skill_deeplink(
         directory,
         branch,
         icon: None,
-        app: Some("claude".to_string()), // Skills are Claude-only
+        app: None, // Skill links add a shared repository; app installation is a separate action.
         name: None,
         enabled: None,
         homepage: None,

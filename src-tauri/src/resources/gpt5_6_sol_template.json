@@ -63,7 +63,6 @@
     "text",
     "image"
   ],
-  "tool_mode": "code_mode_only",
   "supports_search_tool": true,
   "web_search_tool_type": "text_and_image",
   "supports_image_detail_original": true,
