@@ -94,6 +94,17 @@ fn parse_provider_deeplink(
     // ClaudeDesktop 写了专门的分支（复用 Claude 的 settings 形态，并补上
     // claude_desktop_mode = Direct），但这里漏掉 "claude-desktop" 会让请求在
     // 解析阶段就被拒绝，那段分支因此永远不可达。
+    // Validate app type.
+    //
+    // Oh My Pi is refused with the same guidance as the import path
+    // (`deeplink/provider.rs`): a models.yml entry needs its models listed, which
+    // the Oh My Pi provider form composes. Accepting the link here would only
+    // fail later with a generic "invalid app" error.
+    if matches!(app.as_str(), "omp" | "ohmypi" | "oh-my-pi" | "oh_my_pi") {
+        return Err(AppError::InvalidInput(
+            "Oh My Pi providers must be added from the Oh My Pi provider page".to_string(),
+        ));
+    }
     if !matches!(
         app.as_str(),
         "agy"
@@ -333,7 +344,9 @@ fn parse_mcp_deeplink(
         .ok_or_else(|| AppError::InvalidInput("Missing 'apps' parameter for MCP".to_string()))?
         .clone();
 
-    // Validate apps format
+    // Validate apps format. Keep this list in step with `parse_mcp_apps`
+    // (`deeplink/mcp.rs`), which is what actually maps the names onto `McpApps`:
+    // rejecting a name here makes the importer's arm for it unreachable.
     for app in apps.split(',') {
         let trimmed = app.trim();
         if !matches!(
@@ -350,9 +363,10 @@ fn parse_mcp_deeplink(
                 | "pi"
                 | "mcode"
                 | "kimi"
+                | "omp"
         ) {
             return Err(AppError::InvalidInput(format!(
-                "Invalid app in 'apps': must be 'claude', 'codex', 'gemini', 'agy', 'grokbuild', 'opencode', 'hermes', 'pi', 'kimi', or 'mcode', got '{trimmed}'"
+                "Invalid app in 'apps': must be 'claude', 'codex', 'gemini', 'agy', 'grokbuild', 'opencode', 'hermes', 'pi', 'kimi', 'mcode', or 'omp', got '{trimmed}'"
             )));
         }
     }

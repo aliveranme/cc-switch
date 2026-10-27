@@ -216,7 +216,9 @@ impl ProviderType {
             }
             AppType::GrokBuild => ProviderType::Codex,
             AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => ProviderType::Codex,
-            AppType::Pi | AppType::Mcode | AppType::Kimi | AppType::Agy => return None,
+            AppType::Pi | AppType::Mcode | AppType::Kimi | AppType::Agy | AppType::Omp => {
+                return None
+            }
         };
         Some(provider_type)
     }
@@ -272,7 +274,7 @@ pub fn get_adapter(app_type: &AppType) -> Option<Box<dyn ProviderAdapter>> {
         AppType::Gemini => Box::new(GeminiAdapter::new()),
         AppType::GrokBuild => Box::new(CodexAdapter::new()),
         AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => Box::new(CodexAdapter::new()),
-        AppType::Pi | AppType::Mcode | AppType::Kimi | AppType::Agy => return None,
+        AppType::Pi | AppType::Mcode | AppType::Kimi | AppType::Agy | AppType::Omp => return None,
     })
 }
 
@@ -300,20 +302,9 @@ pub fn get_adapter_for_provider_type(provider_type: &ProviderType) -> Box<dyn Pr
 /// 文本而 fail-open 放行——即"分类器静默失效"。流式 SSE 帧不带信封，所以只有非流式
 /// 请求会撞上。
 ///
-/// 判定刻意收紧：仅当顶层没有 `choices`、而 `data.choices` 确实是数组时才解包。裸补全体、
-/// Anthropic 消息体、Responses、Gemini 响应都原样返回，避免误伤。
-pub(crate) fn unwrap_chat_completion_envelope(mut body: serde_json::Value) -> serde_json::Value {
-    let wrapped = !body.get("choices").is_some_and(serde_json::Value::is_array)
-        && body
-            .get("data")
-            .and_then(|data| data.get("choices"))
-            .map(|choices| choices.is_array())
-            .unwrap_or(false);
-    if wrapped {
-        return body["data"].take();
-    }
-    body
-}
+/// 只在顶层没有 `choices` 数组且 `data.choices` 是数组时解包，保留外层非空元数据。
+/// 所有调用方共用转换模块的实现，确保分类、转换与用量统计看到相同的响应。
+pub(crate) use transform::unwrap_chat_completion_envelope;
 
 #[cfg(test)]
 mod tests {
