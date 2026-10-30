@@ -67,7 +67,7 @@ regex = "1.10"
 rquickjs = { version = "0.13", features = ["array-buffer", "classes"] }
 thiserror = "2.0"
 anyhow = "1.0"
-zip = "8.6"
+zip = "9.0"
 serde_yaml = "0.9"
 tempfile = "3"
 url = "2.5"
