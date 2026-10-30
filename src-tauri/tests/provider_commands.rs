@@ -553,6 +553,7 @@ command = "say"
                 hermes: false,
                 mcode: false,
                 kimi: false,
+                dsh: false,
                 pi: false,
                 omp: false,
             },

@@ -375,6 +375,12 @@ fn build_forward_client(proxy_url: Option<&str>) -> Result<Client, String> {
     build_client_with_redirects(proxy_url, false)
 }
 
+/// 不跟随重定向的客户端，代理设置与全局客户端一致。带自定义凭据请求头（如 `x-dsh-auth-token`）
+/// 的请求用它：reqwest 跨主机重定向时只剥掉标准认证头，自定义头会被带到新主机。
+pub fn no_redirect() -> Result<Client, String> {
+    build_client_with_redirects(get_current_proxy_url().as_deref(), false)
+}
+
 fn build_client_with_redirects(
     proxy_url: Option<&str>,
     follow_redirects: bool,
@@ -384,7 +390,6 @@ fn build_client_with_redirects(
     if !follow_redirects {
         builder = builder.redirect(reqwest::redirect::Policy::none());
     }
-
     // 有代理地址则使用代理，否则跟随系统代理
     if let Some(url) = proxy_url {
         // 先验证 URL 格式和 scheme

@@ -260,6 +260,7 @@ pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, AppError>
                             hermes: false,
                             mcode: false,
                             kimi: false,
+                            dsh: false,
                             pi: false,
                             omp: false,
                         },
@@ -1120,10 +1121,18 @@ mod tests {
             Some("echo")
         );
 
-        // 通用转换（Grok Build 复用）不变
+        // 通用转换（Grok Build 复用）在本 fork 同样走 `extended_fields` 白名单（4.22）：
+        // `autoApprove` 不在名单内被丢弃，Claude 风格 `timeout`（秒）转成
+        // `startup_timeout_ms`（毫秒）而不是原样透传。上游「原样保留」的断言不适用。
         let shared = json_server_to_toml_table(&spec).unwrap();
-        assert!(shared.get("timeout").is_some());
-        assert!(shared.get("autoApprove").is_some());
+        assert!(shared.get("timeout").is_none());
+        assert_eq!(
+            shared
+                .get("startup_timeout_ms")
+                .and_then(|item| item.as_integer()),
+            Some(900_000_000)
+        );
+        assert!(shared.get("autoApprove").is_none());
     }
 
     #[test]

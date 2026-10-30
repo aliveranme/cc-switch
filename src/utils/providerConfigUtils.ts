@@ -263,19 +263,18 @@ export const setApiKeyInConfig = (
 
 // ========== Codex base_url utils ==========
 
-// 表头：匹配 `[table]`，接受合法 TOML 的尾随注释 `[table] # comment` 与
-// 括号内空白 `[ table ]`（TOML 1.0 ABNF 允许 `[ ws table-key ws ]`）。
-// 捕获组惰性匹配 + 尾随 \s*，使用方再 .trim() 消除首尾空白。
-const TOML_SECTION_HEADER_PATTERN = /^\s*\[([^[\]\r\n]+?)\s*\]\s*(?:#.*)?$/;
-// 段边界：除 `[table]` 外还识别 array-of-tables `[[array]]`。凡是判断
-// “下一个段从这里开始” 都用它，否则 `[[x]]` 不被视为边界，它的 body 会被
-// 错误地算进上一个 table，round-trip 时产生重复段。
+// 表头：匹配 `[table]` 与 array-of-tables `[[array]]`，接受合法 TOML 的
+// 尾随注释 `[table] # comment` 与括号内空白 `[ table ]`（TOML 1.0 ABNF 允许
+// `[ ws table-key ws ]`）。捕获组惰性匹配 + 尾随 \s*，使用方再 .trim()。
 // 同时排除数组元素误判：`[` 后（允许空白）必须是字母/下划线/引号开头的
 // 节名形状——`[1, 2]`、`[1]` 这类多行数组的嵌套数组元素行不是节头，
 // 否则段内位于其后的 base_url 等赋值会被错误切断归属（recoverable 兜底
 // 也救不回多 base_url 的配置）。
-const TOML_SECTION_BOUNDARY_PATTERN =
-  /^\s*\[\[?\s*[A-Za-z_'"][^[\]\r\n,=]*\s*\]\]?\s*(?:#.*)?$/;
+const TOML_SECTION_HEADER_PATTERN =
+  /^\s*\[\[?\s*([A-Za-z_'"][^[\]\r\n,=]*?)\s*\]\]?\s*(?:#.*)?$/;
+// 段边界与表头是同一集合（`[[x]]` 也必须切断上一段，否则它的 body 会被算进
+// 上一个 table，round-trip 时产生重复段）；保留别名让调用点意图更清楚。
+const TOML_SECTION_BOUNDARY_PATTERN = TOML_SECTION_HEADER_PATTERN;
 // 上游 v4.0.14（#8271）新增：表名规范化用。裸键判定与点分键分段解析。
 const TOML_BARE_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
 // 点分键的一段（基本字符串、字面字符串或裸键）及其后的 "." 或结尾
@@ -426,21 +425,20 @@ const getTomlSectionRange = (
   for (let index = 0; index < lines.length; index += 1) {
     // 多行字符串内部的 `[model_providers."custom"]` 是说明文字，不是真表头（上游）。
     if (stringLines[index]) continue;
-    const match = lines[index].match(TOML_SECTION_HEADER_PATTERN);
-    if (!match) {
-      continue;
-    }
 
-    // 定位目标段用 header 正则（捕获名字）并按上游 #8271 规范化后比较
-    //（`[model_providers."custom"]` 与 `[model_providers.custom]` 是同一张表）；
-    // 段 body 的终止仍用 boundary，这样目标段后面若跟着 `[[array]]` 也能正确收尾。
+    // 先定位目标段：表头正则捕获名字，并按上游 #8271 规范化后比较
+    //（`[model_providers."custom"]` 与 `[model_providers.custom]` 是同一张表）。
     if (headerLineIndex === -1) {
-      if (normalizeTomlTableName(match[1]) === targetName) {
+      const match = lines[index].match(TOML_SECTION_HEADER_PATTERN);
+      if (match && normalizeTomlTableName(match[1]) === targetName) {
         headerLineIndex = index;
       }
       continue;
     }
 
+    // 目标段之后的下一段（含 `[[array]]`）就是 body 终点；边界必须在
+    // 「目标段已定位」分支之外判断，否则 `[[x]]` 不匹配表头正则会提前 continue，
+    // body 会一路延伸到下一个 `[table]` 或 EOF。
     if (TOML_SECTION_BOUNDARY_PATTERN.test(lines[index])) {
       return {
         bodyStartIndex: headerLineIndex + 1,

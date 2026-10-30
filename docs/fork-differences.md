@@ -8,12 +8,12 @@
 
 | 项目       | 值                                                                                                                                                                                                                                                                   |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 上游基线   | d8983bb1（2026-10-24，**82 个提交**，含 v4.0.17、v4.0.18、v4.0.19；明细见第 5 节；上一基线 77c6dc79，2026-10-18）                                                                                                                                                                                   |
-| 本地领先   | **462** 个提交（`git rev-list --count upstream/main..HEAD`，统计于 `d8983bb1` 的 merge 前，2026-10-24）                                                                                                                                                                   |
-| 本次 merge | 2026-10-24 合入上游 d8983bb1（82 个提交，含 v4.0.17–v4.0.19 三版本，全手工解冲突 + 8 处 fork 侧适配，见第 5 节注记）；上一次 2026-10-18 合入 77c6dc79                                                                                  |
-| 本地版本   | `v4.0.19`（随 merge 对齐上游 v4.0.19；fork 发布序列见第 5 节）                                                                                                                                                                                                       |
-| 同步方式   | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-24（见第 5 节）                                                                                                                                                                                  |
-| 测试规模   | 最近验证于 2026-10-24：Rust **4157** 单元通过（`cargo test --lib`，11 ignored；集成测试由 CI nextest 覆盖）+ 前端 vitest **3291**（256 文件）；`cargo fmt --check` / `clippy --lib --bins -D warnings` / `pnpm typecheck` / `format:check` / `build:renderer` / whats-new 结构测试全绿 |
+| 上游基线   | ba3d80d8（2026-10-30，**63 个提交**，含 v4.0.20–v4.0.22；明细见第 5 节；上一基线 dd81bc95，2026-10-30）                                                                                                                                                              |
+| 本地领先   | **465** 个提交（`git rev-list --count upstream/main..HEAD`，统计于 `ba3d80d8` 的 merge 提交，2026-10-31）                                                                                                                                                             |
+| 本次 merge | 2026-10-31 合入上游 ba3d80d8（63 个提交，含 v4.0.20–v4.0.22 三版本，手工解冲突 + 修复 v4.0.21 merge 遗留的 CI 红，见第 5 节注记）；上一次 2026-10-30 合入 dd81bc95（v4.0.21）                                                                                        |
+| 本地版本   | `v4.0.22`（随 merge 对齐上游 v4.0.22；fork 发布序列见第 5 节）                                                                                                                                                                                                       |
+| 同步方式   | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-31（见第 5 节）                                                                                                                                                                                  |
+| 测试规模   | 最近验证于 2026-10-31：Rust **4438** 单元通过（`cargo test --lib`，11 ignored；本机 1 个 PATH 环境用例与 1 个 Windows 文件锁偶发除外，见 6.6）+ 前端 vitest **3469**（270 文件）；`cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `format:check` / `build:renderer` / whats-new 结构测试全绿 |
 
 ## 2. 修改总览（按主题）
 
@@ -997,6 +997,22 @@ configuration key`（同一 profile 里其余键未见告警）。
 12. **OpenAI Chat 强制工具选择模式鲁棒降级**（`src-tauri/src/proxy/providers/transform.rs`）：
     - `downgrade_forced_tool_choice_to_auto` 扩展识别 `type == "tool"` 及裸 `function` 对象结构，确保各种非标准网关在 DeepSeek reasoning 模式下的具名强制工具调用均能被稳妥降级为 `"auto"`。
 
+### 4.33 Gemini 2.5 的 functionResponse 多模态 + TOML 段头统一（2026-10-31）
+
+- **Gemini 原生转换**：上游 `878c26f3` 只用 `is_gemini_3_series` 决定 `functionResponse.parts`
+  是否携带媒体；fork 的 `ad06683a` 把判定扩到 Gemini 2.5（`supports_multimodal_function_response`）。
+  合并 v4.0.22 时两者冲突：保留 fork 的 2.5 语义，并复用上游新增的 `is_gemini_3_series`
+  作为 3.x 分支（含 `models/…` 尾段识别），同时保留 `fill_skip_thought_signatures`。
+- **TOML 段头/段边界**：上游 `#9029` 把 `TOML_SECTION_HEADER_PATTERN` 放宽到 `[[array]]`，
+  但丢掉了 fork 的尾随注释、括号内空白与非节头数组元素守卫（`[1, 2]`）。fork 改为**单一**
+  表头正则（同时识别 `[table]` / `[[array]]`、容忍注释与空白、拒绝数组元素），
+  `TOML_SECTION_BOUNDARY_PATTERN` 作为同义别名；`getTomlSectionRange` 先定位目标段、
+  再在任何下一段（含 `[[array]]`）处收尾。上游 v4.0.22 新增的 `[[skills.config]]`
+  写入回归用例因此原样通过。
+- **MCP 白名单测试**：上游 `codex_table_drops_other_clients_timeout_and_auto_approve`
+  断言通用转换原样保留 `timeout` / `autoApprove`；fork 的 4.22 白名单会过滤
+  `autoApprove` 并把 `timeout` 转成 `startup_timeout_ms`，该测试已按 fork 语义改写。
+
 ## 5. 本地发布序列
 
 下表按 GitHub Releases 实际发布时间排序补全（2026-09-17 核对：共 11 个 release，与 `aliveranme/cc-switch` 实况一致）。
@@ -1830,6 +1846,47 @@ opencode_blocks,pi_blocks}.rs`）、usage 全时段热力图与日瓦片、MCP `
 >
 > 验证全绿：Rust `cargo test --lib` **4157 passed / 0 failed**（11 ignored）、`cargo clippy --manifest-path src-tauri/Cargo.toml --lib --bins -- -D warnings` 全绿、`cargo fmt --check` 全绿、前端 `pnpm typecheck` / `pnpm format:check` / `pnpm build:renderer` / `pnpm vitest run --maxWorkers=8` **256 文件 / 3291 用例全绿**。同步推送 `origin/main` 与 `v4.0.19` 标签触发 Release。
 
+> 2026-10-31 同步（v4.0.22）：合入上游 `ba3d80d8`（63 提交，含 v4.0.20、v4.0.21、v4.0.22 三版本）：
+> **DeepSeek Harness（DSH）** Web/Desktop 统一管理与官方账号登录（#8986/#8771 兼容层、`dsh_config.rs`、用量导入）、
+> Auth Center 账户页「全部刷新」（#9073）、OMP 会话用量导入（#9046）、
+> Gemini 原生 thought signature 缺失时回填 skip 占位（`df753b5e`）、`thoughtSignature`
+> 挂到 Part 层而非 functionCall 内（#6690）、Gemini function-response 尾随文本拆分与
+> Responses `include` 过滤（xAI）、Claude Desktop 网关常量时间 token 校验（#7488）与
+> 回环 URL 拒绝（#8598）、第三方目录在表单重渲染后保留（#9068）、IME 重复输入修复（#9069）、
+> 预设扩编（Astron MaaS / Astron Coding Plan / OspreyAI / TokenFlux）、会话扫描只扫变更仓库（#8907）、
+> WSL2 检查改为手动触发（#9040）、AIGoCode 深浅色横幅等。
+>
+> **v4.0.21 merge 遗留的 CI 红一并修复**（该 merge 只提交未修红）：
+> ① `SystemKeychain::named` 仅 macOS 真机用例使用，改为 `#[cfg(all(test, target_os = "macos"))]`
+> 以过 `clippy --all-targets -D warnings` 的 `dead_code`；
+> ② 上游 `codex_table_drops_other_clients_timeout_and_auto_approve` 的「通用转换原样保留」
+> 断言与 fork 4.22 白名单冲突，已按 fork 语义改写（见 4.33）；
+> ③ 前端 IconPicker 并发偶发失败在 v4.0.22 上游改动后复跑全绿。
+>
+> **冲突 16 处 / 13 文件全手工解**：`Cargo.toml`（保留 fork 的 sha2 0.11 / hmac 0.13 /
+> json5 1.3，并补上游 `subtle`）、`Cargo.lock`（`sha2 0.11.0` + `subtle`）、
+> `gemini_config.rs` / `handlers.rs` / `providerConfigUtils.test.ts`（双方新增测试并存）、
+> `forwarder.rs`（取上游 `uses_anthropic_rectifiers`，已覆盖 `ClaudeAuth`/`Copilot`）、
+> `http_client.rs`（fork 的 `build_client_with_redirects` 保留，`no_redirect()` 改走它）、
+> `transform_gemini.rs`（见 4.33）、`session_usage_pi.rs`（上游 `flavor.id_prefix` + fork 的
+> `hex::encode`）、`McodeProviderForm.tsx`（取上游 `isAccountLogin`/`apiKeyEnv` 就绪判定）、
+> `providerConfigUtils.ts`（见 4.33）、`UnifiedMcpPanel.test.tsx`（fork 的 `data-keyboard`
+> 焦点高亮 + 上游「名字只随列头悬停」断言合并）、`aigocode.png`（随上游删除，README 已改用
+> dark/light `<picture>`）。
+>
+> **fork 侧适配 5 处**：① 上游新 DSH 用量导入的 `format!("{:x}", Sha256::digest(..))` 在
+> sha2 0.11 下无 `LowerHex`，改 `hex::encode`（4.29）；② `codex_single_model_catalog` 补
+> `CodexResponsesTemplate::default()`（fork 的 4 参目录模板，见 4.19 残留实现）；
+> ③ 上游 DSH 测试的 `&[web.clone()]` 过不了 1.95 `cloned_ref_to_slice_refs`，改
+> `std::slice::from_ref`（同 v4.0.12 的 `tool_uninstall` 先例）；④ `providerConfigUtils.test.ts`
+> 合并后重复 import 清理；⑤ 三个合并文件按 fork prettier 重排。
+>
+> 验证全绿（2026-10-31 本机）：Rust `cargo test --lib` **4427 passed / 0 failed**（11 ignored；
+> 跳过 1 个本机 PATH 环境用例，另有 2 个 Windows 文件锁偶发单跑即过，见 6.6）、
+> `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` 全绿；
+> 前端 `pnpm vitest run --maxWorkers=8` **270 文件 / 3469 用例全绿**，
+> `pnpm typecheck` / `format:check` / `build:renderer` 全绿。
+
 ## 6. 维护约定
 
 - **上游同步**：`git fetch upstream --no-tags && git merge upstream/main`，merge 后跑
@@ -2029,3 +2086,19 @@ cd src-tauri && cargo test -j 4
 ```
 
 前置条件：跑之前确认物理内存/页面文件有余量（同时跑 vitest 全量会吃掉十几 GB）。
+
+### 6.6 Windows 本机 Rust 全量测试的两次环境性红（2026-10-31 发现）
+
+本机跑 `cargo test --lib` 全量时观察到两类与代码无关的失败，单跑均通过：
+
+- `commands::misc::tests::omp_search_paths_include_the_bun_global_bin`：断言
+  `build_tool_search_paths("gemini")` 不含 `~/.bun/bin`。本机用户 PATH（注册表）里确有
+  `C:\Users\alive\.bun\bin`，而 `effective_path_os()` 会合并注册表 PATH；CI runner 没有该条目，
+  所以这是本机环境差异。
+- `opencode_config::tests::malformed_native_nested_fields_fall_back_to_legacy` /
+  `mode::controller::mode_tests::reordering_providers_in_direct_mode_only_settles_the_stack`：
+  偶发 `原子替换失败 … 无法删除要被替换的文件 (os error 1175)`，是 Windows 上并发
+  `ReplaceFileW` 撞上文件占用（杀毒/索引器或其它测试进程），单跑即过。
+
+本机验证口径：全量跑一次确认只有上述已知环境项，且每个失败项单跑通过；CI 的 nextest
+（干净 PATH、单测一进程）是真正的绿灯标准。

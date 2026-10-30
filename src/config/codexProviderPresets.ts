@@ -877,6 +877,23 @@ wire_api = "responses"
     icon: "subrouter",
   },
   {
+    name: "OspreyAI",
+    websiteUrl: "https://open.ospreyai.cn",
+    apiKeyUrl: "https://open.ospreyai.cn",
+    category: "aggregator",
+    auth: generateThirdPartyAuth(""),
+    // 目录（open.ospreyai.cn/api/pricing，2026-10-30）有 gpt-6.1-sol，令牌选 GPT 分组；
+    // /v1/responses 假 Key 探测 401，未用真 Key 验证
+    config: generateThirdPartyConfig(
+      "ospreyai",
+      "https://open.ospreyai.cn/v1",
+      "gpt-6.1-sol",
+    ),
+    isPartner: true,
+    partnerPromotionKey: "ospreyai",
+    icon: "ospreyai",
+  },
+  {
     name: "Shengsuanyun",
     nameKey: "providerForm.presets.shengsuanyun",
     websiteUrl: "https://www.shengsuanyun.com/?from=CH_4HHXMRYF",
@@ -3013,7 +3030,8 @@ wire_api = "responses"
     family: "streamlake",
     regionKey: "cn",
     websiteUrl: "https://www.streamlake.com",
-    apiKeyUrl: "https://console.streamlake.com/console/wanqing/api-key",
+    apiKeyUrl:
+      "https://console.streamlake.com/console/wanqing/api-key?channel=ccswitch",
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig(
       "streamlake",
@@ -3045,7 +3063,7 @@ wire_api = "responses"
     family: "streamlake",
     regionKey: "intl",
     websiteUrl: "https://console.streamlake.ai",
-    apiKeyUrl: "https://console.streamlake.ai/console/api-key",
+    apiKeyUrl: "https://console.streamlake.ai/console/api-key?channel=ccswitch",
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig(
       "streamlake_en",
@@ -5007,15 +5025,19 @@ base_url = "https://cc-api.pipellm.ai/v1"`,
   },
   {
     name: "TokenFlux",
-    websiteUrl: "https://tokenflux.dev",
-    apiKeyUrl: "https://tokenflux.dev/keys",
+    websiteUrl: "https://tokenflux.com",
+    apiKeyUrl: "https://tokenflux.com/keys",
     category: "aggregator",
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig(
       "tokenflux",
-      "https://tokenflux.dev/v1",
+      "https://tokenflux.com/v1",
       "gpt-6.1-sol",
     ),
+    endpointCandidates: [
+      "https://tokenflux.com/v1",
+      "https://tokenflux.dev/v1",
+    ],
     icon: "tokenflux",
   },
   {
