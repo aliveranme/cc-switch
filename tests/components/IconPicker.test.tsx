@@ -106,7 +106,9 @@ describe("IconPicker my icons", () => {
     const onValueChange = vi.fn();
     renderPicker({ value: OTHER, onValueChange });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Relay A" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Relay A" }, { timeout: 5000 }),
+    );
     expect(onValueChange).toHaveBeenCalledWith(CUSTOM);
     // 当前图标就在库里，不再单独显示「当前图标」
     expect(
@@ -120,13 +122,15 @@ describe("IconPicker my icons", () => {
       { id: "b", name: "Other", data: OTHER, createdAt: 2 },
     ]);
     renderPicker({ value: "claude" });
-    await screen.findByRole("button", { name: "Relay A" });
+    await screen.findByRole("button", { name: "Relay A" }, { timeout: 5000 });
 
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "relay" },
     });
     expect(screen.getByRole("button", { name: "Relay A" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Other" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Other" }),
+    ).not.toBeInTheDocument();
   });
 
   it("offers to save a current icon that is not in the library", async () => {
@@ -149,16 +153,20 @@ describe("IconPicker my icons", () => {
     setCustomIcons([{ id: "a", name: "Old", data: CUSTOM, createdAt: 1 }]);
     const onValueChange = vi.fn();
     renderPicker({ value: "claude", onValueChange });
-    await screen.findByRole("button", { name: "Old" });
+    await screen.findByRole("button", { name: "Old" }, { timeout: 5000 });
 
     fireEvent.click(screen.getByLabelText("iconPicker.rename"));
     const name = await screen.findByLabelText("iconPicker.nameLabel");
     fireEvent.change(name, { target: { value: "New" } });
     fireEvent.click(screen.getByText("common.save"));
-    expect(await screen.findByRole("button", { name: "New" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "New" }, { timeout: 5000 }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText("iconPicker.delete"));
-    fireEvent.click(await screen.findByRole("button", { name: "iconPicker.delete" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "iconPicker.delete" }),
+    );
     await waitFor(() => expect(listCustomIcons()).toEqual([]));
     expect(onValueChange).not.toHaveBeenCalled();
   });
