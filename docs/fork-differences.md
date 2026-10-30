@@ -1040,6 +1040,7 @@ configuration key`（同一 profile 里其余键未见告警）。
 | `v4.0.14`   | 2026-10-17 | 合入上游 v4.0.13–v4.0.14（`73f37c4b`，92 提交，493 文件 +26 677 / −22 422）：用量统计自定义（币种与汇率、侧栏「今日」显示项、请求日志列、视图记忆、柱状/面积趋势图切换）、Claude Desktop 聚合（stack）模式、Codex Auto Review 模型与聚合子代理模型、Codex↔Gemini thought signature 往返、终端目录记忆、GPT 窗口 272K 封顶；fork 侧 5 处适配（见同步注记）。**发布一次成功**：tag `v4.0.14` 指向 fork 提交 `63445e1f`，14 资产、正式版（Latest）                                                                                                                                                                                                                            |
 | `v4.0.15`   | 2026-10-18 | 合入上游 v4.0.15（`77c6dc79`，8 提交，52 文件 +4 757 / −298）：托盘菜单替换为玻璃快捷面板（`tray_panel.rs` + `src/tray-panel/*`，含配置切换与用量标签页）、趋势图样式迁入用量显示设置并对齐网格布局、新增 EveryAPI 与 AllTokens 赞助商预设、土耳其语文案润色；fork 侧 3 处适配（见同步注记）。同步推送 tag `v4.0.15` 发布                                                                                                                                                                                                                                                                                                                                                  |
 | `v4.0.19`   | 2026-10-24 | 合入上游 v4.0.17–v4.0.19（`d8983bb1`，82 提交，含 v4.0.17、v4.0.18、v4.0.19 三版本）：新增 Antigravity CLI 集成与 Auth Center 官方账户管理/配额直查（#8268/#8601 等）、新增 Kimi Code 支持与 OAuth 官方登录/多账户切换（#8687/#8710/#8726）、用量页布局深度重构（#8711）、托盘快捷面板 DPI 缩放与 cross-monitor 优化、Claude Keychain 凭据多账号隔离（#8764）、Codex 会话头别名兼容（#8718）等；fork 侧 8 处适配（见同步注记）。同步推送 tag `v4.0.19` 发布 |
+| `v4.0.22`   | 2026-10-31 | 合入上游 v4.0.20–v4.0.22（`ba3d80d8`，63 提交）：DeepSeek Harness（DSH）Web/Desktop 统一管理与官方账号登录、OMP 会话用量导入（#9046）、Auth Center 账户页「全部刷新」（#9073）、Gemini thought signature skip 回填与 Part 级挂载（#6690）、Claude Desktop 网关常量时间校验（#7488）/回环 URL 拒绝（#8598）、预设扩编（Astron / OspreyAI / TokenFlux）、WSL2 检查改手动（#9040）等；同轮修掉 v4.0.21 merge 遗留的 CI 红（见同步注记）。**发布一次成功**：tag `v4.0.22` 指向 fork 提交 `30b6b7dd`，14 资产、正式版（Latest）；latest.json `platforms` 仍为空（无签名，见 6.2）。CI run `41100500194` 全绿 |
 
 > 2026-08-16 同步：合入上游 v3.19.2 之后 42 个提交（Pi 原生 coding agent、
 > per-model reasoning levels、DeepSeek 官方 catalog mirror、web_search reject
@@ -1861,7 +1862,8 @@ opencode_blocks,pi_blocks}.rs`）、usage 全时段热力图与日瓦片、MCP `
 > 以过 `clippy --all-targets -D warnings` 的 `dead_code`；
 > ② 上游 `codex_table_drops_other_clients_timeout_and_auto_approve` 的「通用转换原样保留」
 > 断言与 fork 4.22 白名单冲突，已按 fork 语义改写（见 4.33）；
-> ③ 前端 IconPicker 并发偶发失败在 v4.0.22 上游改动后复跑全绿。
+> ③ 前端 IconPicker 三个自定义图标库用例在 CI 上偶发超时（同一轮里失败的子集每次不同、
+> 本机全绿），按 6.4 约定给 `findByRole` 等图标库断言显式 5 s 预算。
 >
 > **冲突 16 处 / 13 文件全手工解**：`Cargo.toml`（保留 fork 的 sha2 0.11 / hmac 0.13 /
 > json5 1.3，并补上游 `subtle`）、`Cargo.lock`（`sha2 0.11.0` + `subtle`）、
@@ -1886,6 +1888,15 @@ opencode_blocks,pi_blocks}.rs`）、usage 全时段热力图与日瓦片、MCP `
 > `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` 全绿；
 > 前端 `pnpm vitest run --maxWorkers=8` **270 文件 / 3469 用例全绿**，
 > `pnpm typecheck` / `format:check` / `build:renderer` 全绿。
+>
+> **发布（2026-10-31）**：tag `v4.0.22` → fork 提交 `30b6b7dd`（显式 `git tag -f` 并复核
+> `git log -1 v4.0.22`，符合 6.1；本地此前的上游同名 tag 未推送）。Release run
+> `41098099627` 全绿：whats-new-check 与 Resolve Version 先行通过，五平台构建
+> （ubuntu x64/arm64、windows x64/arm64、macos-14）与 Publish / Assemble latest.json 全部成功，
+> **14 个资产**、正式版（Latest，发布于 `2026-10-30T17:48:24Z`）。同轮 CI run `41100500194`
+> 全绿（后端 Linux/Windows/macOS 一次通过；前端 IconPicker 超时按 6.4 补 5 s 预算后通过，
+> 该修复作为 `68b9dcf5` 追加在 merge 提交之后，不影响 tag 内容）。`latest.json` 仍为
+> `{"version":"4.0.22",...,"platforms":{}}`（无签名，见 6.2）。
 
 ## 6. 维护约定
 
@@ -1944,7 +1955,7 @@ endpoints 指向本 fork 的 `releases/latest/download/latest.json`），但 for
 ```
 
 `platforms` 为空 → 更新器找不到任何平台的更新，**自动更新静默失效**。
-已确认 v3.20.2、v3.20.3 与 v4.0.1 / v4.0.7 / v4.0.8（含同日重发）/ v4.0.9 / v4.0.12 均为空，属既有问题
+已确认 v3.20.2、v3.20.3 与 v4.0.1 / v4.0.7 / v4.0.8（含同日重发）/ v4.0.9 / v4.0.12 / v4.0.14 / v4.0.15 / v4.0.19 / v4.0.22 均为空，属既有问题
 （非本次回归）。**推论**：重发同一版本号不会给已安装的用户任何更新提示，修正只能靠重新
 下载安装包覆盖安装。
 
@@ -2047,6 +2058,10 @@ pnpm vitest run --maxWorkers=8
    mock 的 ProviderForm 不注册预设选择器，需要等自动进第二步（改 `findByRole`）。
 
 验证方式：连跑 2 次全量（183 文件 / 2117 用例）均全绿。
+
+**2026-10-31 补充**：`IconPicker.test.tsx` 的「my icons」用例在 CI 上偶发超时
+（同一轮里失败的子集每次不同、本机全绿），三个自定义图标库断言
+（`findByRole` 找 `Relay A` / `Old` / `New`）已统一带 `{ timeout: 5000 }`。
 
 ### 6.5 本机 `cargo test --tests` 无法链接（环境问题，已有可用绕法）
 
