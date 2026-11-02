@@ -1,6 +1,6 @@
 {
   "name": "cc-switch",
-  "version": "4.0.22",
+  "version": "4.0.24",
   "description": "All-in-One Assistant for Claude Code, Codex & Gemini CLI",
   "type": "module",
   "scripts": {
@@ -92,9 +92,10 @@
     "react-hook-form": "^7.88.0",
     "react-i18next": "^17.0.14",
     "recharts": "^3.10.1",
-    "smol-toml": "^1.8.0",
+    "smol-toml": "^1.9.1",
     "sonner": "^2.0.8",
     "tailwind-merge": "^3.7.0",
+    "yaml": "^2.8.1",
     "zod": "^4.6.4"
   }
 }

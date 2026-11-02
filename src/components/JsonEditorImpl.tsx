@@ -3,13 +3,16 @@ import { EditorView, basicSetup } from "codemirror";
 import { json } from "@codemirror/lang-json";
 import { javascript } from "@codemirror/lang-javascript";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { Annotation, EditorSelection, EditorState } from "@codemirror/state";
 import { placeholder } from "@codemirror/view";
 import { linter, Diagnostic } from "@codemirror/lint";
 import { useTranslation } from "react-i18next";
 import { Wand2 } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { formatJSON } from "@/utils/formatters";
+
+/** Distinguishes external value updates from user edits. */
+const ExternalSync = Annotation.define<boolean>();
 
 export interface JsonEditorProps {
   id?: string;
@@ -210,8 +213,11 @@ const JsonEditor: React.FC<JsonEditorProps> = ({
       ),
       EditorView.updateListener.of((update) => {
         if (!readOnly && update.docChanged) {
-          const newValue = update.state.doc.toString();
-          onChangeRef.current(newValue);
+          // External updates must not echo through onChange. Keep mixed transactions visible.
+          if (update.transactions.every((tr) => tr.annotation(ExternalSync))) {
+            return;
+          }
+          onChangeRef.current(update.state.doc.toString());
         }
       }),
     ];
@@ -316,6 +322,7 @@ const JsonEditor: React.FC<JsonEditorProps> = ({
           contextualRanges,
           viewRef.current.state.selection.mainIndex,
         ),
+        annotations: ExternalSync.of(true),
       });
       viewRef.current.dispatch(transaction);
     }

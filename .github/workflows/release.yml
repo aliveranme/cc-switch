@@ -143,7 +143,7 @@ jobs:
           - os: ubuntu-22.04
           - os: ubuntu-22.04-arm
             arch: arm64
-          - os: macos-14
+          - os: macos-15
 
     steps:
       - name: Checkout
@@ -581,6 +581,7 @@ jobs:
         run: |
           echo "Listing bundles in src-tauri/target..."
           find src-tauri/target -maxdepth 4 -type f -name "*.*" 2>/dev/null || true
+
 
   publish-release:
     name: Publish GitHub Release
