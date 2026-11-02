@@ -7894,6 +7894,8 @@ mod tests {
                 "ANTHROPIC_AUTH_TOKEN".to_string(),
                 "sk-test-secret".to_string(),
             )],
+            "DeepSeek",
+            &Default::default(),
         )
         .expect("config should be written");
 
