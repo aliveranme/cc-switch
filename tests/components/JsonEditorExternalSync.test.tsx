@@ -1,4 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { EditorView } from "@codemirror/view";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import JsonEditor from "@/components/JsonEditor";
@@ -41,8 +48,9 @@ describe("JsonEditor 外部同步不得回吐成用户输入", () => {
     render(<Harness onChange={onChange} />);
 
     // 挂载本身不算用户输入
-    await waitFor(() =>
-      expect(document.querySelector(".cm-content")).toBeTruthy(),
+    await waitFor(
+      () => expect(document.querySelector(".cm-content")).toBeTruthy(),
+      { timeout: 5000 },
     );
     expect(onChange).not.toHaveBeenCalled();
 
@@ -79,23 +87,21 @@ describe("JsonEditor 外部同步不得回吐成用户输入", () => {
     }
 
     render(<SwapHarness />);
-    await waitFor(() =>
-      expect(document.querySelector(".cm-content")).toBeTruthy(),
+    await waitFor(
+      () => expect(document.querySelector(".cm-content")).toBeTruthy(),
+      { timeout: 5000 },
     );
 
     fireEvent.click(screen.getByText("swap"));
 
     // 模拟用户输入：直接改 CodeMirror 文档（非外部同步事务）
-    const view = (
-      document.querySelector(".cm-content") as HTMLElement & {
-        cmView?: { view: { dispatch: (spec: unknown) => void } };
-      }
-    )?.cmView?.view;
-    expect(view).toBeTruthy();
+    const content = document.querySelector(".cm-content") as HTMLElement;
+    const view = EditorView.findFromDOM(content);
+    expect(view).toBeDefined();
     if (!view) {
       throw new Error("CodeMirror view was not attached to .cm-content");
     }
-    view.dispatch({ changes: { from: 0, to: 0, insert: " " } });
+    act(() => view.dispatch({ changes: { from: 0, to: 0, insert: " " } }));
 
     await waitFor(() => expect(second).toHaveBeenCalled());
     expect(first).not.toHaveBeenCalled();

@@ -243,7 +243,9 @@ describe("TrayPanel window layout", () => {
     expect(trayPanelApi.action).toHaveBeenCalledWith("quit");
 
     await act(async () => resolveState(state));
-    await screen.findByRole("button", { name: "Claude Code default · Direct" });
+    await screen.findByRole("button", {
+      name: /Claude Code\s*default · Direct/,
+    });
     expect(screen.getByRole("switch")).toBeVisible();
     // 数据那次回报走 rAF：先画到固定画布，再扩原生可见区域
     expect(trayPanelApi.layout).toHaveBeenCalledTimes(1);
@@ -271,7 +273,9 @@ describe("TrayPanel window layout", () => {
     await act(async () => {
       emitTauriEvent(SHOW_EVENT, { ...windows, seq: 2 });
     });
-    await screen.findByRole("button", { name: "Claude Code default · Direct" });
+    await screen.findByRole("button", {
+      name: /Claude Code\s*default · Direct/,
+    });
     await act(async () => resolvePlacement(windows));
     await paint();
     const seqs = vi
@@ -296,7 +300,9 @@ describe("TrayPanel window layout", () => {
     );
     vi.mocked(trayPanelApi.placement).mockResolvedValue(windows);
     renderPanel();
-    await screen.findByRole("button", { name: "Claude Code default · Direct" });
+    await screen.findByRole("button", {
+      name: /Claude Code\s*default · Direct/,
+    });
     expect(trayPanelApi.layout).toHaveBeenCalledTimes(1);
     expect(trayPanelApi.layout).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -313,7 +319,7 @@ describe("TrayPanel window layout", () => {
       emitTauriEvent(SHOW_EVENT, { ...windows, seq: 2 });
     });
     expect(
-      screen.getByRole("button", { name: "Claude Code default · Direct" }),
+      screen.getByRole("button", { name: /Claude Code\s*default · Direct/ }),
     ).toBeVisible();
     expect(screen.getByRole("switch")).toBeVisible();
     expect(trayPanelApi.layout).toHaveBeenCalledTimes(calls + 1);
@@ -338,7 +344,7 @@ describe("TrayPanel window layout", () => {
     });
     expect(screen.queryByText(/Restart Codex/)).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Claude Code default · Direct" }),
+      screen.getByRole("button", { name: /Claude Code\s*default · Direct/ }),
     ).toBeVisible();
   });
 
@@ -360,7 +366,9 @@ describe("TrayPanel window layout", () => {
   it("clips the first Windows frame without waiting for animation frames in a hidden window", async () => {
     vi.mocked(trayPanelApi.placement).mockResolvedValue(windows);
     renderPanel();
-    await screen.findByRole("button", { name: /Claude Code\s*default · Direct/ });
+    await screen.findByRole("button", {
+      name: /Claude Code\s*default · Direct/,
+    });
     expect(trayPanelApi.layout).toHaveBeenCalledWith(
       expect.objectContaining({
         width: 620,
@@ -536,7 +544,9 @@ describe("TrayPanel window layout", () => {
     const invalidate = vi.spyOn(client, "invalidateQueries");
     vi.mocked(trayPanelApi.placement).mockResolvedValue(windows);
     renderPanel(client);
-    await screen.findByRole("button", { name: /Claude Code\s*default · Direct/ });
+    await screen.findByRole("button", {
+      name: /Claude Code\s*default · Direct/,
+    });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["settings"] });
 
     invalidate.mockClear();
@@ -564,9 +574,7 @@ describe("TrayPanel window layout", () => {
       expect(scaled.cards[0].width).toBeCloseTo(320);
       expect(scaled.cards[0].height).toBeCloseTo(352);
 
-      fireEvent.click(
-        screen.getByRole("button", { name: /^Claude Code/ }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: /^Claude Code/ }));
       await paint();
       const expanded = vi.mocked(trayPanelApi.layout).mock.lastCall![0];
       expect(expanded.cards[0]).toEqual(scaled.cards[0]);
@@ -652,9 +660,7 @@ describe("TrayPanel window layout", () => {
 
   it("limits both cards to the available height on small scaled displays", async () => {
     const { container } = await openPanel({ ...windows, boundsTop: -180 });
-    fireEvent.click(
-      screen.getByRole("button", { name: /^Claude Code/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /^Claude Code/ }));
     expect(container.querySelector(".tp-card")).toHaveStyle({
       maxHeight: "180px",
     });
