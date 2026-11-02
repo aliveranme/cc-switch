@@ -4,10 +4,7 @@ import { mcpApi } from "@/lib/api/mcp";
 import type { McpServer, McpServersMap } from "@/types";
 
 export type McpConnectionState =
-  | "unchecked"
-  | "checking"
-  | "connected"
-  | "disconnected";
+  "unchecked" | "checking" | "connected" | "disconnected";
 
 type CheckResult = {
   /** The connection config the result was produced for. */

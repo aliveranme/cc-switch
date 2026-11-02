@@ -29,9 +29,7 @@ export function kimiConfigToToml(
 }
 
 export type KimiTomlError =
-  | { kind: "syntax"; detail: string }
-  | { kind: "scope" }
-  | { kind: "schema" };
+  { kind: "syntax"; detail: string } | { kind: "scope" } | { kind: "schema" };
 
 /**
  * 把编辑器里的 TOML 读回 `{ provider, models }`。只接受这一家的表：

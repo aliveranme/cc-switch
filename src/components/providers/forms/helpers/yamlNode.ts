@@ -19,8 +19,7 @@ export function yamlNodeToText(
 }
 
 export type YamlNodeError =
-  | { kind: "syntax"; detail: string }
-  | { kind: "scope" };
+  { kind: "syntax"; detail: string } | { kind: "scope" };
 
 /**
  * 读回编辑器里的节点：文档只能有 `<section>.<key>` 这一个节点，供应商键要和

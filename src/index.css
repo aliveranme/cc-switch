@@ -211,15 +211,30 @@
   --animate-row-fade: rowFade 3s ease-out forwards;
 
   @keyframes rowFlash {
-    0% { opacity: 0; }
-    15%, 50%, 75% { opacity: 1; }
-    32% { opacity: 0.15; }
-    100% { opacity: 0; }
+    0% {
+      opacity: 0;
+    }
+    15%,
+    50%,
+    75% {
+      opacity: 1;
+    }
+    32% {
+      opacity: 0.15;
+    }
+    100% {
+      opacity: 0;
+    }
   }
 
   @keyframes rowFade {
-    0%, 60% { opacity: 1; }
-    100% { opacity: 0; }
+    0%,
+    60% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
   }
 
   @keyframes fadeIn {
