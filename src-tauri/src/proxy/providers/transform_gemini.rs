@@ -435,32 +435,6 @@ fn build_generation_config(body: &Value) -> Option<Value> {
         config.insert("thinkingConfig".to_string(), thinking_config);
     }
 
-    // Anthropic thinking -> Gemini generationConfig.thinkingConfig。此前完全未
-    // 映射：一个开了 extended thinking 的 Claude Code 请求经 Gemini 原生路径转发
-    // 时，thinking 预算被丢弃，Gemini 端按默认（通常关闭或自动）处理。
-    //
-    // 取值约束（对齐官方 ThinkingConfig 语义）：
-    // - thinkingBudget 是 int32 非负字段，-1 非法（上游 400 INVALID_ARGUMENT）。
-    // - disabled 时不显式写 thinkingBudget=0：Gemini 2.5 系列常开思考，
-    //   显式 0 会静默关闭它；省略字段交给模型默认，行为与未发 thinking
-    //   的客户端一致。
-    // - enabled 无预算时省略 thinkingConfig 整体（模型默认预算），
-    //   而不是发非法 -1。
-    if let Some(thinking) = body.get("thinking").and_then(|v| v.as_object()) {
-        let mut tc = Map::new();
-        // disabled / adaptive / 未知：省略 thinkingConfig，交给模型默认
-        if thinking.get("type").and_then(|v| v.as_str()) == Some("enabled") {
-            // 有预算就透传，没有就省略 thinkingConfig（模型默认预算）
-            if let Some(budget) = thinking.get("budget_tokens").and_then(|v| v.as_i64()) {
-                tc.insert("thinkingBudget".to_string(), json!(budget));
-            }
-            tc.insert("includeThoughts".to_string(), json!(true));
-        }
-        if !tc.is_empty() {
-            config.insert("thinkingConfig".to_string(), Value::Object(tc));
-        }
-    }
-
     if config.is_empty() {
         None
     } else {
@@ -2062,8 +2036,7 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_to_gemini_maps_thinking_and_top_k_into_generation_config() {
-        // extended thinking 预算和 top_k 此前完全未映射到 Gemini。
+    fn anthropic_to_gemini_maps_top_k_and_model_aware_thinking() {
         let enabled = anthropic_to_gemini(json!({
             "model": "gemini-3-pro",
             "max_tokens": 64,
@@ -2074,12 +2047,8 @@ mod tests {
         .unwrap();
         assert_eq!(enabled["generationConfig"]["topK"], 40);
         assert_eq!(
-            enabled["generationConfig"]["thinkingConfig"]["thinkingBudget"],
-            2048
-        );
-        assert_eq!(
-            enabled["generationConfig"]["thinkingConfig"]["includeThoughts"],
-            true
+            enabled["generationConfig"]["thinkingConfig"],
+            json!({ "thinkingLevel": "low" })
         );
 
         let disabled = anthropic_to_gemini(json!({
@@ -2088,14 +2057,12 @@ mod tests {
             "messages": [{ "role": "user", "content": "Hi" }]
         }))
         .unwrap();
-        // disabled 不再写 thinkingBudget=0（会静默关闭 Gemini 2.5 常开思考）；
-        // 省略 thinkingConfig 交给模型默认，与未发 thinking 的客户端一致。
-        assert!(
-            disabled["generationConfig"].get("thinkingConfig").is_none(),
-            "disabled 应省略 thinkingConfig，而非显式 0"
+        // Gemini 3 Pro does not accept `minimal`; disabled thinking maps to its lowest level.
+        assert_eq!(
+            disabled["generationConfig"]["thinkingConfig"],
+            json!({ "thinkingLevel": "low" })
         );
 
-        // enabled 无 budget_tokens：省略 thinkingBudget（-1 非法），仅声明 includeThoughts
         let no_budget = anthropic_to_gemini(json!({
             "model": "gemini-3-pro",
             "thinking": { "type": "enabled" },
@@ -2103,26 +2070,19 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            no_budget["generationConfig"]["thinkingConfig"]["includeThoughts"],
-            true
-        );
-        assert!(
-            no_budget["generationConfig"]["thinkingConfig"]
-                .get("thinkingBudget")
-                .is_none(),
-            "无预算时应省略 thinkingBudget，而非非法 -1"
+            no_budget["generationConfig"]["thinkingConfig"],
+            json!({ "thinkingLevel": "high" })
         );
 
-        // adaptive / 未知类型：省略 thinkingConfig
         let adaptive = anthropic_to_gemini(json!({
             "model": "gemini-3-pro",
             "thinking": { "type": "adaptive" },
             "messages": [{ "role": "user", "content": "Hi" }]
         }))
         .unwrap();
-        assert!(
-            adaptive["generationConfig"].get("thinkingConfig").is_none(),
-            "adaptive 应省略 thinkingConfig"
+        assert_eq!(
+            adaptive["generationConfig"]["thinkingConfig"],
+            json!({ "thinkingLevel": "high" })
         );
     }
 

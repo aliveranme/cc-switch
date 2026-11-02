@@ -559,7 +559,7 @@ pub(crate) fn map_reasoning_effort<'a>(
         // （api-docs.deepseek.com/guides/thinking_mode：minimal→low、medium/xhigh→high、ultra→max）。
         "deepseek" => match effort.as_str() {
             "minimal" | "low" => Some("low"),
-            "ultra" | "max" | "xhigh" => Some("max"),
+            "ultra" | "max" => Some("max"),
             _ => Some("high"),
         },
         "low_high" => match effort.as_str() {

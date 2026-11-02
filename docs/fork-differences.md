@@ -8,11 +8,11 @@
 
 | 项目       | 值                                                                                                                                                                                                                                                                   |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 上游基线   | ba3d80d8（2026-10-30，**63 个提交**，含 v4.0.20–v4.0.22；明细见第 5 节；上一基线 dd81bc95，2026-10-30）                                                                                                                                                              |
-| 本地领先   | **465** 个提交（`git rev-list --count upstream/main..HEAD`，统计于 `ba3d80d8` 的 merge 提交，2026-10-31）                                                                                                                                                             |
-| 本次 merge | 2026-10-31 合入上游 ba3d80d8（63 个提交，含 v4.0.20–v4.0.22 三版本，手工解冲突 + 修复 v4.0.21 merge 遗留的 CI 红，见第 5 节注记）；上一次 2026-10-30 合入 dd81bc95（v4.0.21）                                                                                        |
-| 本地版本   | `v4.0.22`（随 merge 对齐上游 v4.0.22；fork 发布序列见第 5 节）                                                                                                                                                                                                       |
-| 同步方式   | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-10-31（见第 5 节）                                                                                                                                                                                  |
+| 上游基线   | ef7b77de（2026-11-02，**61 个提交**，含 v4.0.23–v4.0.24；明细见第 5 节；上一基线 ba3d80d8，2026-10-30）                                                                                                                                                              |
+| 本地领先   | **470** 个提交（`git rev-list --count upstream/main..HEAD`，统计于 2026-11-02 同步开始前）                                                                                                                                                                      |
+| 本次 merge | 2026-11-02 合入上游 ef7b77de（61 个提交，含 v4.0.23、v4.0.24；16 处冲突 / 13 个文件，见第 5 节）；上一次 2026-10-31 合入 ba3d80d8（v4.0.22）                                                                                                                    |
+| 本地版本   | `v4.0.24`（随 merge 对齐上游 v4.0.24；fork 发布序列见第 5 节）                                                                                                                                                                                                    |
+| 同步方式   | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-11-02（见第 5 节）                                                                                                                                                                                |
 | 测试规模   | 最近验证于 2026-10-31：Rust **4438** 单元通过（`cargo test --lib`，11 ignored；本机 1 个 PATH 环境用例与 1 个 Windows 文件锁偶发除外，见 6.6）+ 前端 vitest **3469**（270 文件）；`cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `format:check` / `build:renderer` / whats-new 结构测试全绿 |
 
 ## 2. 修改总览（按主题）
@@ -1897,6 +1897,12 @@ opencode_blocks,pi_blocks}.rs`）、usage 全时段热力图与日瓦片、MCP `
 > 全绿（后端 Linux/Windows/macOS 一次通过；前端 IconPicker 超时按 6.4 补 5 s 预算后通过，
 > 该修复作为 `68b9dcf5` 追加在 merge 提交之后，不影响 tag 内容）。`latest.json` 仍为
 > `{"version":"4.0.22",...,"platforms":{}}`（无签名，见 6.2）。
+
+> 2026-11-02 同步（v4.0.24）：合入上游 `ef7b77de`（61 个提交，包含 v4.0.23 / v4.0.24；196 个文件，+14260 / -1746）。新增 Anthropic thinking 到 Gemini 的按模型映射、Auth Center 登录链接复制模式、Codex / Gemini CLI 预设与多项用量及会话改进。
+>
+> **冲突 16 处 / 13 个文件**：手工合并 fork 发布工作流、Cargo / package 版本、README 与赞助商横幅、DSH 与 provider 表单测试；保留 fork 的 `dependabot.yml` 配置和 `tailwind.config.cjs` 删除状态。Gemini thinking 冲突保留上游模型感知转换并移除 fork 旧 `thinkingBudget` 覆盖；DeepSeek 将 `xhigh` 规范化为官方 `high`。
+>
+> 定向验证：DeepSeek Rust 52 项、`transform_gemini::tests` 51 项通过。主分支首次 CI 暴露 DeepSeek `xhigh` 映射断言失败（Linux / Windows / macOS 同一项），本次修正后等待 CI 复跑。`v4.0.24` Release 工作流 run `41459947716` 在平台构建期间被取消；GitHub Release 尚未创建，待最终提交后重跑。
 
 ## 6. 维护约定
 

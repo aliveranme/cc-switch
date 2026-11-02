@@ -5,9 +5,9 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.24] - 2026-11-01
+## [4.0.24] - 2026-11-02
 
-This release adds an Auth Center switch that makes sign-in copy the login link instead of opening the default browser, for people who keep each account in its own browser profile. Fixes cover Claude routes downgrading `max` effort to `xhigh` for GPT 6.1 Sol / Terra, DeepSeek Harness showing no third-party providers after a model with PDF input was picked, CC Switch exiting on WSL when the tray could not write its icons, Codex Chat cards losing the reasoning effort after "Supports Reasoning Effort" was turned off and on again, and the DeepSeek official sign-in card saying it signs in with a Claude account.
+This release adds an Auth Center switch that makes sign-in copy the login link instead of opening the default browser, for people who keep each account in its own browser profile. Fixes cover Claude routes downgrading `max` effort to `xhigh` for GPT 6.1 Sol / Terra, DeepSeek Harness showing no third-party providers after a model with PDF input was picked, CC Switch exiting on WSL when the tray could not write its icons, Codex Chat cards losing the reasoning effort after "Supports Reasoning Effort" was turned off and on again, the DeepSeek official sign-in card saying it signs in with a Claude account, DeepSeek routes sending `xhigh` as `max`, and Gemini 3 receiving a legacy thinking-budget field.
 
 **Stats**: 8 commits | 44 files changed | +774 insertions | -115 deletions
 
@@ -26,6 +26,8 @@ This release adds an Auth Center switch that makes sign-in copy the login link i
 - **CC Switch Exited on WSL When the Tray Could Not Write Its Icons** (#9021, fixes #9020): With `XDG_RUNTIME_DIR` pointing to a directory that cannot be created, tray setup failed with `Permission denied`. Linux tray icons are written under the app cache directory (`tray-icon`).
 - **Codex Chat Cards Dropped the Reasoning Effort After Re-enabling "Supports Reasoning Effort"** (#8998, fixes #8954): `effortParam` stayed `"none"`, so upstreams such as GitHub Copilot never received `reasoning_effort`. Re-enabling restores `"reasoning_effort"`, saving repairs stored values while keeping a valid `"reasoning.effort"`, and the backend normalizes rows saved earlier.
 - **DeepSeek Official Sign-In Card Said It Signs In with a Claude Account** (#9058): The DeepSeek Harness official card's subtitle now reads "Sign in with a DeepSeek account" instead of falling back to the Claude text.
+- **DeepSeek Routes Sent xhigh as max** (fork sync fix): DeepSeek supports `low`, `high` and `max`; `xhigh` now maps to `high`, while explicit `max` stays `max`.
+- **Gemini 3 Received a Legacy Thinking Budget** (fork sync fix): A fork-specific Anthropic-to-Gemini override replaced upstream's model-aware thinking config. Gemini 3 now uses `thinkingLevel`; Gemini 2.5 continues to use `thinkingBudget`.
 - **Flaky Codex OAuth Keep-Alive Test on macOS CI** (832fbe65a, refs #9111): The replacement test retries a request that hit a connection the old callback server had already closed; production behavior is unchanged.
 
 ## [4.0.23] - 2026-10-31
