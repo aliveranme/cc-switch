@@ -1900,7 +1900,7 @@ opencode_blocks,pi_blocks}.rs`）、usage 全时段热力图与日瓦片、MCP `
 
 > 2026-11-02 同步（v4.0.24）：合入上游 `ef7b77de`（61 个提交，包含 v4.0.23 / v4.0.24；196 个文件，+14260 / -1746）。新增 Anthropic thinking 到 Gemini 的按模型映射、Auth Center 登录链接复制模式、Codex / Gemini CLI 预设与多项用量及会话改进。
 >
-> **冲突 16 处 / 13 个文件**：手工合并 fork 发布工作流、Cargo / package 版本、README 与赞助商横幅、DSH 与 provider 表单测试；保留 fork 的 `dependabot.yml` 配置和 `tailwind.config.cjs` 删除状态。Gemini thinking 冲突保留上游模型感知转换并移除 fork 旧 `thinkingBudget` 覆盖；DeepSeek 将 `xhigh` 规范化为官方 `high`。
+> **冲突 16 处 / 13 个文件**：手工合并 fork 发布工作流、Cargo / package 版本、README 与赞助商横幅、DSH 与 provider 表单测试；保留 fork 的 `dependabot.yml` 配置，并采纳上游更新后的 `tailwind.config.cjs`。Gemini thinking 冲突保留上游模型感知转换并移除 fork 旧 `thinkingBudget` 覆盖；DeepSeek 将 `xhigh` 规范化为官方 `high`。
 >
 > 定向验证：DeepSeek Rust 52 项、`transform_gemini::tests` 51 项通过。主分支首次 CI 暴露 DeepSeek `xhigh` 映射断言失败（Linux / Windows / macOS 同一项），本次修正后等待 CI 复跑。`v4.0.24` Release 工作流 run `41459947716` 在平台构建期间被取消；GitHub Release 尚未创建，待最终提交后重跑。
 
