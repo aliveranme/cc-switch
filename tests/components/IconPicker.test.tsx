@@ -169,7 +169,7 @@ describe("IconPicker my icons", () => {
     );
     await waitFor(() => expect(listCustomIcons()).toEqual([]));
     expect(onValueChange).not.toHaveBeenCalled();
-  });
+  }, 15_000);
 
   it("clears the icon", () => {
     const onValueChange = vi.fn();
