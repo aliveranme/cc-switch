@@ -8,12 +8,12 @@
 
 | 项目       | 值                                                                                                                                                                                                                                                                   |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 上游基线   | ef7b77de（2026-11-02，**61 个提交**，含 v4.0.23–v4.0.24；明细见第 5 节；上一基线 ba3d80d8，2026-10-30）                                                                                                                                                              |
-| 本地领先   | **470** 个提交（`git rev-list --count upstream/main..HEAD`，统计于 2026-11-02 同步开始前）                                                                                                                                                                      |
-| 本次 merge | 2026-11-02 合入上游 ef7b77de（61 个提交，含 v4.0.23、v4.0.24；16 处冲突 / 13 个文件，见第 5 节）；上一次 2026-10-31 合入 ba3d80d8（v4.0.22）                                                                                                                    |
-| 本地版本   | `v4.0.24`（随 merge 对齐上游 v4.0.24；fork 发布序列见第 5 节）                                                                                                                                                                                                    |
-| 同步方式   | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-11-02（见第 5 节）                                                                                                                                                                                |
-| 测试规模   | 最近验证于 2026-10-31：Rust **4438** 单元通过（`cargo test --lib`，11 ignored；本机 1 个 PATH 环境用例与 1 个 Windows 文件锁偶发除外，见 6.6）+ 前端 vitest **3469**（270 文件）；`cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `format:check` / `build:renderer` / whats-new 结构测试全绿 |
+| 上游基线   | 7afceec1（2026-11-02，**6 个提交**，含 v4.0.25；明细见第 5 节；上一基线 ef7b77de，2026-11-02）                                                                                                                                                              |
+| 本地领先   | **475** 个提交（`git rev-list --count upstream/main..HEAD`，统计于 2026-11-03 同步后）                                                                                                                                                                      |
+| 本次 merge | 2026-11-03 合入上游 7afceec1（6 个提交，含 v4.0.25；2 处冲突 / 2 个文件，见第 5 节）；上一次 2026-11-02 合入 ef7b77de（v4.0.24）                                                                                                                    |
+| 本地版本   | `v4.0.25`（随 merge 对齐上游 v4.0.25；fork 发布序列见第 5 节）                                                                                                                                                                                                    |
+| 同步方式   | 定期 Merge upstream/main (…, N commits) into fork，最近一次 2026-11-03（见第 5 节）                                                                                                                                                                                |
+| 测试规模   | 最近验证于 2026-11-03：Rust **4553** 单元通过（`cargo test --lib`，11 ignored；本机 1 个 PATH 环境用例失败、1 个 Windows 文件锁偶发单跑通过，见 6.6）+ 前端 vitest **3560**（276 文件）；`cargo fmt --check` / `clippy --all-targets -D warnings` / `pnpm typecheck` / `format:check` / `build:renderer` / whats-new 结构测试全绿 |
 
 ## 2. 修改总览（按主题）
 
@@ -1903,6 +1903,16 @@ opencode_blocks,pi_blocks}.rs`）、usage 全时段热力图与日瓦片、MCP `
 > **冲突 16 处 / 13 个文件**：手工合并 fork 发布工作流、Cargo / package 版本、README 与赞助商横幅、DSH 与 provider 表单测试；保留 fork 的 `dependabot.yml` 配置，并采纳上游更新后的 `tailwind.config.cjs`。Gemini thinking 冲突保留上游模型感知转换并移除 fork 旧 `thinkingBudget` 覆盖；DeepSeek 将 `xhigh` 规范化为官方 `high`。
 >
 > 定向验证：DeepSeek Rust 52 项、`transform_gemini::tests` 51 项通过。主分支首次 CI 暴露 DeepSeek `xhigh` 映射断言失败（Linux / Windows / macOS 同一项），本次修正后等待 CI 复跑。`v4.0.24` Release 工作流 run `41459947716` 在平台构建期间被取消；GitHub Release 尚未创建，待最终提交后重跑。
+
+> 2026-11-03 同步（v4.0.25）：合入上游 `7afceec1`（6 个提交，含 v4.0.25；17 个文件，+714 / −25）。新增按需 MCP 连通性检查、Codex 官方额度保护、用量页自动汇率、Codex 子代理并发上限、Claude Code / Claude Desktop 模型描述（`<供应商> · <上游模型> · <窗口>`）、Kimi Code 会话删除与 GPT-6.1 Terra 定价；本地路由拒绝网页来源请求；修复「Open terminal」继承代理/聚合设置、路由模式占位符落入 `ANTHROPIC_API_KEY`、纯文本上游附件导致后续轮次失败、provider 表单闪烁、Pi MCP 导入与子代理用量、models.dev 代理环境同步、xAI 强制 web search、启动期托盘面板与 Codex 映射请求重复计数。
+>
+> **冲突 2 处 / 2 个文件**：① `.github/workflows/release.yml` 按 4.28 策略整体取 fork 侧——上游本轮仍只在既有 macOS 签名/公证流水线上迭代（新增 `stapler_retry`），fork 的无签名单机矩阵不适用；② `CHANGELOG.md` 保留上游 v4.0.25 段，并接回 fork 修订过的 v4.0.24 标题（日期 2026-11-02）。其余 15 个文件自动合并，含上游 Codex `request_model` 去重（`session_proxy_model_match_sql` + 3 个新测试）与 session dedup key 新增 `data_source` 字段。
+>
+> **行为分歧点核对**：上游本轮未改写 §4 任何分歧实现；4.9 会话用量的 dedup 守卫与单调推进保留，上游仅在去重匹配中追加 Codex 请求模型别名分支；4.28 发布工作流继续保持 fork 结构。
+>
+> 验证（2026-11-03 本机）：Rust `cargo test --lib` **4553 passed**（11 ignored）；唯一失败为本机 PATH 环境用例 `commands::misc::tests::omp_search_paths_include_the_bun_global_bin`（注册表 PATH 含 `~/.bun/bin`，见 6.6），排除后复跑 4552 passed，另有 1 个 Windows 文件锁偶发（`mode::controller::mode_tests::codex_the_login_comes_from_where_codex_keeps_it`）单跑通过；`cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` 全绿。前端 `pnpm vitest run --maxWorkers=8` **276 文件 / 3560 用例全绿**，`pnpm typecheck` / `format:check` / `build:renderer` 全绿。
+>
+> **v4.0.24 发布更正**：上一条注记的「Release 被取消、尚未创建」已过时——该版本最终发布成功（14 资产、正式版 Latest，发布于 `2026-11-02T17:04:39Z`；Release run `41482839485`、CI run `41481429844` 均全绿）。
 
 ## 6. 维护约定
 
